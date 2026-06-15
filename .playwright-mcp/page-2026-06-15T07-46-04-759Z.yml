@@ -1,0 +1,224 @@
+- main [ref=e2]:
+  - generic [ref=e3]:
+    - generic [ref=e4]: AIBridge system design
+    - heading "Remote Opencode Agent Bridge → Multi-Agent Mesh" [level=1] [ref=e5]
+    - generic [ref=e6]:
+      - paragraph [ref=e7]: AIBridge lets opencode agents running on different machines call each other over a private Tailscale network. The POC starts with a development machine triggering a testing VPS agent; the architecture keeps registry, routing, job lifecycle, and auth boundaries ready for a future N-machine mesh.
+      - generic [ref=e8]:
+        - generic [ref=e9]: "POC: 2 machines"
+        - generic [ref=e10]: "Future: N-machine mesh"
+        - generic [ref=e11]: Node.js / TypeScript
+        - generic [ref=e12]: HTTP webhooks
+        - generic [ref=e13]: Tailscale-only
+        - generic [ref=e14]: tmux + opencode serve
+        - generic [ref=e15]: Plan Annotator approval
+  - generic [ref=e16]:
+    - heading "POC Architecture" [level=2] [ref=e17]
+    - generic [ref=e19]:
+      - generic [ref=e20]:
+        - generic [ref=e21]:
+          - 'heading "Machine A: dev-main" [level=3] [ref=e22]'
+          - generic [ref=e23]: development
+        - generic [ref=e24]:
+          - generic [ref=e25]:
+            - strong [ref=e26]: Development opencode agent
+            - text: Finishes code/deploy, then requests testing.
+          - generic [ref=e27]:
+            - strong [ref=e28]: Plan Annotator
+            - text: Reviews and approves generated plans before dispatch.
+          - generic [ref=e29]:
+            - strong [ref=e30]: AIBridge local node
+            - text: Sends approved trigger and receives report callback.
+          - generic [ref=e31]:
+            - strong [ref=e32]: Report receiver
+            - text: Stores result for the development agent to continue.
+      - generic [ref=e33]:
+        - text: Approved POST /trigger
+        - text: Tailscale HTTP
+        - text: callback report
+      - generic [ref=e35]:
+        - generic [ref=e36]:
+          - 'heading "Machine B: test-vps" [level=3] [ref=e37]'
+          - generic [ref=e38]: testing
+        - generic [ref=e39]:
+          - generic [ref=e40]:
+            - strong [ref=e41]: AIBridge agent node
+            - text: Validates trigger, creates job, manages lifecycle.
+          - generic [ref=e42]:
+            - strong [ref=e43]: opencode serve :4096
+            - text: Persistent API server running inside tmux.
+          - generic [ref=e44]:
+            - strong [ref=e45]: New opencode session
+            - text: One fresh remote agent session per trigger.
+  - generic [ref=e46]:
+    - heading "Job Flow" [level=2] [ref=e47]
+    - generic [ref=e48]:
+      - generic [ref=e50]:
+        - strong [ref=e51]: Development completes deploy
+        - paragraph [ref=e52]: dev-main decides that testing/QA is needed on the VPS.
+      - generic [ref=e54]:
+        - strong [ref=e55]: Review plan when needed
+        - paragraph [ref=e56]: Plan Annotator presents generated implementation plans for approval before remote dispatch.
+      - generic [ref=e58]:
+        - strong [ref=e59]: Trigger remote agent
+        - paragraph [ref=e60]:
+          - text: dev-main sends approved
+          - code [ref=e61]: POST /trigger
+          - text: to test-vps over Tailscale.
+      - generic [ref=e63]:
+        - strong [ref=e64]: Validate and accept job
+        - paragraph [ref=e65]: test-vps checks auth, schema, plan metadata, capability, project directory allowlist, and opencode health.
+      - generic [ref=e67]:
+        - strong [ref=e68]: Create opencode session
+        - paragraph [ref=e69]: AIBridge uses the opencode SDK/API to create a new session and send the prompt asynchronously.
+      - generic [ref=e71]:
+        - strong [ref=e72]: Monitor execution
+        - paragraph [ref=e73]: The bridge watches SSE/session status, with polling fallback if the event stream disconnects.
+      - generic [ref=e75]:
+        - strong [ref=e76]: Send report callback
+        - paragraph [ref=e77]: test-vps posts a structured report to dev-main with findings, artifacts, and status.
+  - generic [ref=e78]:
+    - heading "Core Components" [level=2] [ref=e79]
+    - generic [ref=e80]:
+      - generic [ref=e81]:
+        - strong [ref=e82]: Bridge HTTP Server
+        - generic [ref=e83]: Owns /trigger, /report, /health, /jobs/:id endpoints.
+      - generic [ref=e84]:
+        - strong [ref=e85]: Opencode Adapter
+        - generic [ref=e86]: Creates sessions, sends prompts, monitors status through SDK/API.
+      - generic [ref=e87]:
+        - strong [ref=e88]: Job Lifecycle Manager
+        - generic [ref=e89]: Tracks received → running → reporting → completed/failed.
+      - generic [ref=e90]:
+        - strong [ref=e91]: Agent Registry
+        - generic [ref=e92]: Static config in POC; dynamic discovery later.
+      - generic [ref=e93]:
+        - strong [ref=e94]: Callback Reporter
+        - generic [ref=e95]: Retries report delivery and persists failed callbacks.
+      - generic [ref=e96]:
+        - strong [ref=e97]: Security Layer
+        - generic [ref=e98]: Tailscale ACLs, bearer/HMAC auth, project-dir allowlists.
+      - generic [ref=e99]:
+        - strong [ref=e100]: Plan Annotator
+        - generic [ref=e101]: Approval gate for generated plans before dispatching sensitive or multi-agent work.
+  - generic [ref=e102]:
+    - heading "Future N-Machine Mesh" [level=2] [ref=e103]
+    - generic [ref=e105]:
+      - generic [ref=e106]:
+        - text: Agent A
+        - text: development
+      - generic [ref=e107]: ⇄
+      - generic [ref=e108]:
+        - text: Agent B
+        - text: testing
+      - generic [ref=e109]: ⇄
+      - generic [ref=e110]:
+        - text: Agent C
+        - text: security
+      - generic [ref=e111]: ↘
+      - generic [ref=e112]:
+        - text: Agent Registry + Capability Router
+        - text: static config now, registry/gossip/service later
+      - generic [ref=e113]: ↙
+      - generic [ref=e114]:
+        - text: Agent D
+        - text: deployment
+      - generic [ref=e115]: ⇄
+      - generic [ref=e116]:
+        - text: Agent E
+        - text: visual QA
+      - generic [ref=e117]: ⇄
+      - generic [ref=e118]:
+        - text: Agent F
+        - text: review
+    - generic [ref=e119]:
+      - text: The POC should still define interfaces for
+      - code [ref=e120]: AgentRegistry
+      - text: ","
+      - code [ref=e121]: CapabilityRouter
+      - text: ","
+      - code [ref=e122]: JobStore
+      - text: ","
+      - code [ref=e123]: Transport
+      - text: ","
+      - code [ref=e124]: AuthProvider
+      - text: ", and"
+      - code [ref=e125]: PlanReviewProvider
+      - text: . Their first implementations can be simple, but the boundaries prevent a rewrite later.
+  - generic [ref=e126]:
+    - heading "Message Contracts" [level=2] [ref=e127]
+    - generic [ref=e128]:
+      - generic [ref=e129]:
+        - strong [ref=e130]: Trigger request
+        - generic [ref=e131]:
+          - code [ref=e132]: source_agent_id
+          - text: ","
+          - code [ref=e133]: target_agent_id
+          - text: ","
+          - code [ref=e134]: capability
+          - text: ","
+          - code [ref=e135]: project_dir
+          - text: ","
+          - code [ref=e136]: prompt
+          - text: ","
+          - code [ref=e137]: callback_url
+          - text: ","
+          - code [ref=e138]: timeout_seconds
+          - text: ", metadata including"
+          - code [ref=e139]: plan_status
+          - text: and
+          - code [ref=e140]: plan_reference
+          - text: .
+      - generic [ref=e141]:
+        - strong [ref=e142]: Report callback
+        - generic [ref=e143]:
+          - code [ref=e144]: job_id
+          - text: ","
+          - code [ref=e145]: opencode_session_id
+          - text: ","
+          - code [ref=e146]: status
+          - text: ", summary, findings, artifacts, timestamps."
+  - generic [ref=e147]:
+    - heading "Security and Failure Guardrails" [level=2] [ref=e148]
+    - table [ref=e149]:
+      - rowgroup [ref=e150]:
+        - row "Area Design rule" [ref=e151]:
+          - columnheader "Area" [ref=e152]
+          - columnheader "Design rule" [ref=e153]
+      - rowgroup [ref=e154]:
+        - row "Network Tailscale-only access; no public internet exposure for POC." [ref=e155]:
+          - cell "Network" [ref=e156]
+          - cell "Tailscale-only access; no public internet exposure for POC." [ref=e157]
+        - row "Auth Webhook bearer token first, HMAC/mTLS-ready interface later; opencode uses OPENCODE_SERVER_PASSWORD." [ref=e158]:
+          - cell "Auth" [ref=e159]
+          - cell "Webhook bearer token first, HMAC/mTLS-ready interface later; opencode uses OPENCODE_SERVER_PASSWORD." [ref=e160]:
+            - text: Webhook bearer token first, HMAC/mTLS-ready interface later; opencode uses
+            - code [ref=e161]: OPENCODE_SERVER_PASSWORD
+            - text: .
+        - row "Filesystem Remote project_dir must be allowlisted on the target machine." [ref=e162]:
+          - cell "Filesystem" [ref=e163]
+          - cell "Remote project_dir must be allowlisted on the target machine." [ref=e164]:
+            - text: Remote
+            - code [ref=e165]: project_dir
+            - text: must be allowlisted on the target machine.
+        - row "Plan approval Sensitive jobs require approved Plan Annotator metadata before remote dispatch." [ref=e166]:
+          - cell "Plan approval" [ref=e167]
+          - cell "Sensitive jobs require approved Plan Annotator metadata before remote dispatch." [ref=e168]
+        - row "Timeouts Every job has max duration; timeout aborts or marks session failed." [ref=e169]:
+          - cell "Timeouts" [ref=e170]
+          - cell "Every job has max duration; timeout aborts or marks session failed." [ref=e171]
+        - row "SSE instability Reconnect with backoff; fallback to polling session status." [ref=e172]:
+          - cell "SSE instability" [ref=e173]
+          - cell "Reconnect with backoff; fallback to polling session status." [ref=e174]
+        - row "Callback failure Retry, then persist report locally for later inspection." [ref=e175]:
+          - cell "Callback failure" [ref=e176]
+          - cell "Retry, then persist report locally for later inspection." [ref=e177]
+  - generic [ref=e178]:
+    - heading "POC Scope" [level=2] [ref=e179]
+    - generic [ref=e180]:
+      - generic [ref=e181]:
+        - strong [ref=e182]: Include
+        - generic [ref=e183]: TypeScript bridge, two-machine config, /trigger, /report, Plan Annotator approval step, opencode SDK/API, new session per trigger, monitoring, callbacks, tmux run docs, tests, structured logs.
+      - generic [ref=e184]:
+        - strong [ref=e185]: Exclude
+        - generic [ref=e186]: Public internet exposure, full dynamic discovery, dashboard, non-opencode providers, Kubernetes, queue infrastructure, browser UI.

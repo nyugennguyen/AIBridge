@@ -1,0 +1,411 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AIBridge — Remote Opencode Agent Mesh Architecture</title>
+  <style>
+    :root {
+      --bg: #0b1020;
+      --panel: #111936;
+      --panel-2: #17214a;
+      --text: #e9eefc;
+      --muted: #9fb0d0;
+      --line: #33406f;
+      --blue: #6ea8fe;
+      --cyan: #4dd6e8;
+      --green: #64d987;
+      --yellow: #ffd166;
+      --red: #ff6b6b;
+      --purple: #b084ff;
+      --shadow: 0 20px 60px rgba(0, 0, 0, .35);
+      --radius: 18px;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: radial-gradient(circle at top left, #1a2b66 0, transparent 35%), var(--bg);
+      color: var(--text);
+      line-height: 1.55;
+    }
+
+    .page {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 40px 20px 80px;
+    }
+
+    header {
+      display: grid;
+      gap: 16px;
+      margin-bottom: 32px;
+    }
+
+    .eyebrow {
+      color: var(--cyan);
+      font-weight: 700;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+      font-size: 12px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(36px, 6vw, 68px);
+      line-height: .95;
+      letter-spacing: -0.06em;
+    }
+
+    h2 { margin: 0 0 18px; font-size: 28px; letter-spacing: -0.03em; }
+    h3 { margin: 0 0 12px; color: var(--cyan); }
+    p { color: var(--muted); margin: 0; }
+
+    .hero-card, .section {
+      background: linear-gradient(145deg, rgba(17,25,54,.96), rgba(23,33,74,.82));
+      border: 1px solid rgba(255,255,255,.08);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 24px;
+      margin: 20px 0;
+    }
+
+    .badges { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px; }
+    .badge {
+      border: 1px solid rgba(255,255,255,.12);
+      background: rgba(255,255,255,.06);
+      color: var(--text);
+      border-radius: 999px;
+      padding: 8px 12px;
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .grid { display: grid; gap: 18px; }
+    .cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    @media (max-width: 860px) { .cols-2, .cols-3 { grid-template-columns: 1fr; } }
+
+    .node {
+      border: 1px solid rgba(255,255,255,.12);
+      background: rgba(255,255,255,.045);
+      border-radius: 16px;
+      padding: 18px;
+      min-height: 120px;
+    }
+
+    .node strong { display: block; font-size: 18px; margin-bottom: 8px; }
+    .node small { color: var(--muted); display: block; }
+    .accent-blue { border-color: rgba(110,168,254,.5); }
+    .accent-green { border-color: rgba(100,217,135,.5); }
+    .accent-purple { border-color: rgba(176,132,255,.5); }
+    .accent-yellow { border-color: rgba(255,209,102,.5); }
+    .accent-red { border-color: rgba(255,107,107,.5); }
+
+    .diagram {
+      overflow-x: auto;
+      padding: 12px 0 4px;
+    }
+
+    .machine-row {
+      display: grid;
+      grid-template-columns: 1fr 140px 1fr;
+      gap: 18px;
+      align-items: center;
+      min-width: 860px;
+    }
+
+    .machine {
+      background: rgba(255,255,255,.05);
+      border: 1px solid rgba(255,255,255,.12);
+      border-radius: 20px;
+      padding: 20px;
+    }
+
+    .machine-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+
+    .pill {
+      border-radius: 999px;
+      padding: 5px 9px;
+      font-size: 12px;
+      background: rgba(77,214,232,.12);
+      color: var(--cyan);
+      border: 1px solid rgba(77,214,232,.3);
+      white-space: nowrap;
+    }
+
+    .stack { display: grid; gap: 12px; }
+    .box {
+      border-radius: 14px;
+      border: 1px solid var(--line);
+      background: rgba(0,0,0,.18);
+      padding: 14px;
+    }
+
+    .arrow {
+      text-align: center;
+      color: var(--cyan);
+      font-weight: 900;
+    }
+
+    .arrow .line {
+      height: 2px;
+      background: linear-gradient(90deg, transparent, var(--cyan), transparent);
+      margin: 10px 0;
+    }
+
+    .flow {
+      counter-reset: step;
+      display: grid;
+      gap: 12px;
+    }
+
+    .step {
+      display: grid;
+      grid-template-columns: 44px 1fr;
+      gap: 12px;
+      align-items: start;
+      padding: 14px;
+      border-radius: 14px;
+      background: rgba(255,255,255,.045);
+      border: 1px solid rgba(255,255,255,.09);
+    }
+
+    .step::before {
+      counter-increment: step;
+      content: counter(step);
+      width: 34px;
+      height: 34px;
+      display: grid;
+      place-items: center;
+      border-radius: 50%;
+      background: var(--blue);
+      color: #061027;
+      font-weight: 900;
+    }
+
+    .mesh {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 10px;
+      align-items: center;
+      min-width: 860px;
+      text-align: center;
+    }
+
+    .mesh-agent, .registry {
+      border-radius: 18px;
+      padding: 18px 12px;
+      border: 1px solid rgba(255,255,255,.14);
+      background: rgba(255,255,255,.05);
+    }
+
+    .registry {
+      grid-column: 2 / span 3;
+      background: rgba(176,132,255,.12);
+      border-color: rgba(176,132,255,.4);
+    }
+
+    .connector { color: var(--cyan); font-size: 28px; font-weight: 900; }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      overflow: hidden;
+      border-radius: 14px;
+      border: 1px solid rgba(255,255,255,.1);
+    }
+
+    th, td {
+      padding: 12px 14px;
+      text-align: left;
+      border-bottom: 1px solid rgba(255,255,255,.08);
+      vertical-align: top;
+    }
+
+    th { color: var(--text); background: rgba(255,255,255,.06); }
+    td { color: var(--muted); }
+    tr:last-child td { border-bottom: 0; }
+
+    code {
+      color: var(--yellow);
+      background: rgba(255,255,255,.07);
+      padding: 2px 6px;
+      border-radius: 6px;
+    }
+
+    .callout {
+      border-left: 4px solid var(--yellow);
+      background: rgba(255,209,102,.08);
+      border-radius: 12px;
+      padding: 14px 16px;
+      color: var(--muted);
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header>
+      <div class="eyebrow">AIBridge system design</div>
+      <h1>Remote Opencode Agent Bridge → Multi-Agent Mesh</h1>
+      <div class="hero-card">
+        <p>
+          AIBridge lets opencode agents running on different machines call each other over a private Tailscale network.
+          The POC starts with a development machine triggering a testing VPS agent; the architecture keeps registry,
+          routing, job lifecycle, and auth boundaries ready for a future N-machine mesh.
+        </p>
+        <div class="badges">
+          <span class="badge">POC: 2 machines</span>
+          <span class="badge">Future: N-machine mesh</span>
+          <span class="badge">Node.js / TypeScript</span>
+          <span class="badge">HTTP webhooks</span>
+          <span class="badge">Tailscale-only</span>
+          <span class="badge">tmux + opencode serve</span>
+          <span class="badge">Plan Annotator approval</span>
+        </div>
+      </div>
+    </header>
+
+    <section class="section">
+      <h2>POC Architecture</h2>
+      <div class="diagram">
+        <div class="machine-row">
+          <div class="machine">
+            <div class="machine-title">
+              <h3>Machine A: dev-main</h3>
+              <span class="pill">development</span>
+            </div>
+            <div class="stack">
+              <div class="box"><strong>Development opencode agent</strong><br /><small>Finishes code/deploy, then requests testing.</small></div>
+              <div class="box"><strong>Plan Annotator</strong><br /><small>Reviews and approves generated plans before dispatch.</small></div>
+              <div class="box"><strong>AIBridge local node</strong><br /><small>Sends approved trigger and receives report callback.</small></div>
+              <div class="box"><strong>Report receiver</strong><br /><small>Stores result for the development agent to continue.</small></div>
+            </div>
+          </div>
+
+          <div class="arrow">
+            Approved POST /trigger
+            <div class="line"></div>
+            Tailscale HTTP<br />callback report
+          </div>
+
+          <div class="machine">
+            <div class="machine-title">
+              <h3>Machine B: test-vps</h3>
+              <span class="pill">testing</span>
+            </div>
+            <div class="stack">
+              <div class="box"><strong>AIBridge agent node</strong><br /><small>Validates trigger, creates job, manages lifecycle.</small></div>
+              <div class="box"><strong>opencode serve :4096</strong><br /><small>Persistent API server running inside tmux.</small></div>
+              <div class="box"><strong>New opencode session</strong><br /><small>One fresh remote agent session per trigger.</small></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>Job Flow</h2>
+      <div class="flow">
+        <div class="step"><div><strong>Development completes deploy</strong><p>dev-main decides that testing/QA is needed on the VPS.</p></div></div>
+        <div class="step"><div><strong>Review plan when needed</strong><p>Plan Annotator presents generated implementation plans for approval before remote dispatch.</p></div></div>
+        <div class="step"><div><strong>Trigger remote agent</strong><p>dev-main sends approved <code>POST /trigger</code> to test-vps over Tailscale.</p></div></div>
+        <div class="step"><div><strong>Validate and accept job</strong><p>test-vps checks auth, schema, plan metadata, capability, project directory allowlist, and opencode health.</p></div></div>
+        <div class="step"><div><strong>Create opencode session</strong><p>AIBridge uses the opencode SDK/API to create a new session and send the prompt asynchronously.</p></div></div>
+        <div class="step"><div><strong>Monitor execution</strong><p>The bridge watches SSE/session status, with polling fallback if the event stream disconnects.</p></div></div>
+        <div class="step"><div><strong>Send report callback</strong><p>test-vps posts a structured report to dev-main with findings, artifacts, and status.</p></div></div>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>Core Components</h2>
+      <div class="grid cols-3">
+        <div class="node accent-blue"><strong>Bridge HTTP Server</strong><small>Owns /trigger, /report, /health, /jobs/:id endpoints.</small></div>
+        <div class="node accent-green"><strong>Opencode Adapter</strong><small>Creates sessions, sends prompts, monitors status through SDK/API.</small></div>
+        <div class="node accent-purple"><strong>Job Lifecycle Manager</strong><small>Tracks received → running → reporting → completed/failed.</small></div>
+        <div class="node accent-yellow"><strong>Agent Registry</strong><small>Static config in POC; dynamic discovery later.</small></div>
+        <div class="node accent-blue"><strong>Callback Reporter</strong><small>Retries report delivery and persists failed callbacks.</small></div>
+        <div class="node accent-red"><strong>Security Layer</strong><small>Tailscale ACLs, bearer/HMAC auth, project-dir allowlists.</small></div>
+        <div class="node accent-purple"><strong>Plan Annotator</strong><small>Approval gate for generated plans before dispatching sensitive or multi-agent work.</small></div>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>Future N-Machine Mesh</h2>
+      <div class="diagram">
+        <div class="mesh">
+          <div class="mesh-agent">Agent A<br /><small>development</small></div>
+          <div class="connector">⇄</div>
+          <div class="mesh-agent">Agent B<br /><small>testing</small></div>
+          <div class="connector">⇄</div>
+          <div class="mesh-agent">Agent C<br /><small>security</small></div>
+          <div></div>
+          <div class="connector">↘</div>
+          <div class="registry">Agent Registry + Capability Router<br /><small>static config now, registry/gossip/service later</small></div>
+          <div class="connector">↙</div>
+          <div></div>
+          <div class="mesh-agent">Agent D<br /><small>deployment</small></div>
+          <div class="connector">⇄</div>
+          <div class="mesh-agent">Agent E<br /><small>visual QA</small></div>
+          <div class="connector">⇄</div>
+          <div class="mesh-agent">Agent F<br /><small>review</small></div>
+        </div>
+      </div>
+      <div class="callout">
+        The POC should still define interfaces for <code>AgentRegistry</code>, <code>CapabilityRouter</code>, <code>JobStore</code>, <code>Transport</code>, <code>AuthProvider</code>, and <code>PlanReviewProvider</code>. Their first implementations can be simple, but the boundaries prevent a rewrite later.
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>Message Contracts</h2>
+      <div class="grid cols-2">
+        <div class="node accent-blue">
+          <strong>Trigger request</strong>
+          <small><code>source_agent_id</code>, <code>target_agent_id</code>, <code>capability</code>, <code>project_dir</code>, <code>prompt</code>, <code>callback_url</code>, <code>timeout_seconds</code>, metadata including <code>plan_status</code> and <code>plan_reference</code>.</small>
+        </div>
+        <div class="node accent-green">
+          <strong>Report callback</strong>
+          <small><code>job_id</code>, <code>opencode_session_id</code>, <code>status</code>, summary, findings, artifacts, timestamps.</small>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>Security and Failure Guardrails</h2>
+      <table>
+        <thead><tr><th>Area</th><th>Design rule</th></tr></thead>
+        <tbody>
+          <tr><td>Network</td><td>Tailscale-only access; no public internet exposure for POC.</td></tr>
+          <tr><td>Auth</td><td>Webhook bearer token first, HMAC/mTLS-ready interface later; opencode uses <code>OPENCODE_SERVER_PASSWORD</code>.</td></tr>
+          <tr><td>Filesystem</td><td>Remote <code>project_dir</code> must be allowlisted on the target machine.</td></tr>
+          <tr><td>Plan approval</td><td>Sensitive jobs require approved Plan Annotator metadata before remote dispatch.</td></tr>
+          <tr><td>Timeouts</td><td>Every job has max duration; timeout aborts or marks session failed.</td></tr>
+          <tr><td>SSE instability</td><td>Reconnect with backoff; fallback to polling session status.</td></tr>
+          <tr><td>Callback failure</td><td>Retry, then persist report locally for later inspection.</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="section">
+      <h2>POC Scope</h2>
+      <div class="grid cols-2">
+        <div class="node accent-green">
+          <strong>Include</strong>
+          <small>TypeScript bridge, two-machine config, /trigger, /report, Plan Annotator approval step, opencode SDK/API, new session per trigger, monitoring, callbacks, tmux run docs, tests, structured logs.</small>
+        </div>
+        <div class="node accent-red">
+          <strong>Exclude</strong>
+          <small>Public internet exposure, full dynamic discovery, dashboard, non-opencode providers, Kubernetes, queue infrastructure, browser UI.</small>
+        </div>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

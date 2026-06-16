@@ -39,10 +39,14 @@ export class JsonFileJobStore implements JobStore {
     if (this.loaded) return
     await mkdir(this.directory, { recursive: true })
     const entries = await readdir(this.directory)
-    for (const entry of entries) {
-      if (!entry.endsWith(".json")) continue
-      const raw = await readFile(join(this.directory, entry), "utf8")
-      const job = JSON.parse(raw) as JobRecord
+    const jsonEntries = entries.filter((e) => e.endsWith(".json"))
+    const jobs = await Promise.all(
+      jsonEntries.map(async (entry) => {
+        const raw = await readFile(join(this.directory, entry), "utf8")
+        return JSON.parse(raw) as JobRecord
+      }),
+    )
+    for (const job of jobs) {
       this.jobs.set(job.id, job)
     }
     this.loaded = true

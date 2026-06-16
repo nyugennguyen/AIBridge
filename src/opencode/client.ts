@@ -14,7 +14,7 @@ export class SdkOpencodeClientAdapter implements OpencodeClient {
   constructor(private readonly options: SdkOpencodeClientOptions) {
     this.client = createOpencodeClient({
       baseUrl: options.baseUrl,
-      headers: options.password ? { Authorization: basicAuth(options.username, options.password) } : undefined,
+      headers: this.headers(),
     })
   }
 
@@ -23,8 +23,8 @@ export class SdkOpencodeClientAdapter implements OpencodeClient {
     return response.ok
   }
 
-  async createSession(_title: string, directory: string): Promise<CreateSessionResult> {
-    const response = await this.client.session.create({ directory, title: _title }, { throwOnError: true })
+  async createSession(title: string, directory: string): Promise<CreateSessionResult> {
+    const response = await this.client.session.create({ directory, title }, { throwOnError: true })
     const data = response.data as { id?: string; sessionID?: string }
     const id = data.id ?? data.sessionID
     if (!id) throw new Error("OpenCode session create response did not include an ID")

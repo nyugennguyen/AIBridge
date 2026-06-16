@@ -38,4 +38,38 @@ describe("JobManager", () => {
 
     expect((await jobs.getJob(created.id)).status).toBe("timed_out")
   })
+
+  it("marks a job as failed with error", async () => {
+    const jobs = await manager()
+    const created = await jobs.createJob(trigger({ job_id: "job_fail" }), "2026-06-15T00:00:00.000Z")
+    await jobs.markRunning(created.id, "2026-06-15T00:00:01.000Z")
+    const failed = await jobs.markFailed(created.id, "something broke", "2026-06-15T00:00:02.000Z")
+
+    expect(failed.status).toBe("failed")
+    expect(failed.error).toBe("something broke")
+  })
+
+  it("rejects transition from terminal status to different status", async () => {
+    const jobs = await manager()
+    const created = await jobs.createJob(trigger({ job_id: "job_term" }), "2026-06-15T00:00:00.000Z")
+    await jobs.markCompleted(created.id, "2026-06-15T00:00:01.000Z")
+
+    await expect(jobs.markRunning(created.id, "2026-06-15T00:00:02.000Z")).rejects.toThrow("Cannot transition terminal job")
+  })
+
+  it("skips terminal jobs in sweepExpiredJobs", async () => {
+    const jobs = await manager()
+    const created = await jobs.createJob(trigger({ job_id: "job_done", timeout_seconds: 1 }), "2026-06-15T00:00:00.000Z")
+    await jobs.markCompleted(created.id, "2026-06-15T00:00:01.000Z")
+
+    const expired = await jobs.sweepExpiredJobs("2026-06-15T00:01:00.000Z")
+
+    expect(expired).toHaveLength(0)
+    expect((await jobs.getJob(created.id)).status).toBe("completed")
+  })
+
+  it("throws on getJob for unknown ID", async () => {
+    const jobs = await manager()
+    await expect(jobs.getJob("nonexistent")).rejects.toThrow("Unknown job")
+  })
 })

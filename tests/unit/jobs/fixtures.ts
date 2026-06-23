@@ -12,3 +12,7 @@ export function trigger(overrides: Partial<TriggerRequest> = {}): TriggerRequest
     ...overrides,
   }
 }
+
+export function triggerWithDeps(deps: string[], overrides: Partial<TriggerRequest> = {}): TriggerRequest {
+  return { ...trigger(), depends_on: deps, ...overrides }
+}

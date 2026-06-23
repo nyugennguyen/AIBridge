@@ -3,6 +3,7 @@ import type { TriggerRequest } from "../config/types.js"
 export type JobStatus =
   | "received"
   | "accepted"
+  | "blocked"        // waiting for dependencies
   | "session_created"
   | "running"
   | "reporting"
@@ -17,6 +18,8 @@ export interface JobRecord {
   status: JobStatus
   opencodeSessionId?: string
   error?: string
+  depends_on?: string[]      // dependency job IDs
+  blockedAt?: string         // when entered blocked state
   createdAt: string
   updatedAt: string
 }

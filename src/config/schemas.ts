@@ -74,6 +74,8 @@ export const triggerRequestSchema = z.object({
   prompt: z.string().min(1),
   callback_url: z.url(),
   timeout_seconds: z.number().int().positive(),
+  depends_on: z.array(z.string().min(1)).default([]).optional(),
+  task_id: z.string().optional(),
   metadata: planMetadataSchema,
 })
 
@@ -81,8 +83,10 @@ export const triggerResponseSchema = z.object({
   accepted: z.boolean(),
   job_id: z.string().min(1),
   target_agent_id: z.string().min(1),
-  opencode_session_id: z.string().min(1),
+  opencode_session_id: z.string().min(1).optional(),
   status_url: z.url(),
+  status: z.enum(["accepted", "blocked", "failed"]).optional(),
+  task_id: z.string().optional(),
 })
 
 export const reportCallbackSchema = z.object({

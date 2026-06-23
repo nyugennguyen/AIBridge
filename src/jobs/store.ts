@@ -1,10 +1,11 @@
 import { mkdir, readdir, readFile, rename, writeFile } from "node:fs/promises"
 import { join } from "node:path"
-import type { JobRecord } from "./types.js"
+import type { JobRecord, JobStatus } from "./types.js"
 
 export interface JobStore {
   get(id: string): Promise<JobRecord | undefined>
   list(): Promise<JobRecord[]>
+  listByStatus(status: JobStatus): Promise<JobRecord[]>
   save(job: JobRecord): Promise<void>
 }
 
@@ -22,6 +23,11 @@ export class JsonFileJobStore implements JobStore {
   async list(): Promise<JobRecord[]> {
     await this.ensureLoaded()
     return [...this.jobs.values()]
+  }
+
+  async listByStatus(status: JobStatus): Promise<JobRecord[]> {
+    await this.ensureLoaded()
+    return [...this.jobs.values()].filter((j) => j.status === status)
   }
 
   async save(job: JobRecord): Promise<void> {

@@ -5,10 +5,32 @@ import type { BridgeConfig } from "../../src/config/types.js"
 import type { ReportCallback } from "../../src/callback/types.js"
 import type { OpencodeClient, OpencodeEvent, PermissionDecision, SessionStatus } from "../../src/opencode/types.js"
 import type { TaskEntry, TaskGraphSyncer } from "../../src/tasks/types.js"
+import type { JobRecord, JobStatus } from "../../src/jobs/types.js"
+import type { JobStore } from "../../src/jobs/store.js"
 import { CallbackReporter } from "../../src/callback/reporter.js"
 import { JobManager } from "../../src/jobs/manager.js"
 import { JsonFileJobStore } from "../../src/jobs/store.js"
 import { createApp } from "../../src/server/app.js"
+
+export class InMemoryJobStore implements JobStore {
+  private readonly jobs = new Map<string, JobRecord>()
+
+  async get(id: string): Promise<JobRecord | undefined> {
+    return this.jobs.get(id)
+  }
+
+  async list(): Promise<JobRecord[]> {
+    return [...this.jobs.values()]
+  }
+
+  async listByStatus(status: JobStatus): Promise<JobRecord[]> {
+    return [...this.jobs.values()].filter((j) => j.status === status)
+  }
+
+  async save(job: JobRecord): Promise<void> {
+    this.jobs.set(job.id, job)
+  }
+}
 
 export function testConfig(): BridgeConfig {
   return {
@@ -76,22 +98,28 @@ export class FakeTaskGraphSyncer implements TaskGraphSyncer {
   stopWatching(): void {}
 }
 
-export async function buildTestApp() {
+export interface BuildTestAppOverrides {
+  jobManager?: JobManager
+  opencodeClient?: FakeOpencodeClient
+  taskGraphSyncer?: TaskGraphSyncer
+}
+
+export async function buildTestApp(overrides: BuildTestAppOverrides = {}) {
   const config = testConfig()
-  const opencode = new FakeOpencodeClient()
+  const opencode = overrides.opencodeClient ?? new FakeOpencodeClient()
   const reports: ReportCallback[] = []
-  const taskGraphSyncer = new FakeTaskGraphSyncer()
-  const jobDir = await mkdtemp(join(tmpdir(), "aibridge-integration-"))
+  const taskGraphSyncer = overrides.taskGraphSyncer ?? new FakeTaskGraphSyncer()
+  const jobManager = overrides.jobManager ?? new JobManager(new JsonFileJobStore(await mkdtemp(join(tmpdir(), "aibridge-integration-"))))
   const app = createApp({
     config,
-    jobManager: new JobManager(new JsonFileJobStore(jobDir)),
+    jobManager,
     opencodeClient: opencode,
     callbackReporter: new CallbackReporter({ attempts: 1, baseDelayMs: 1, fetcher: async () => new Response(null, { status: 200 }) }),
     monitorSession: async () => undefined,
     reports,
     taskGraphSyncer,
   })
-  return { app, config, opencode, reports, taskGraphSyncer }
+  return { app, config, opencode, reports, taskGraphSyncer, jobManager }
 }
 
 export function validTrigger(overrides: Record<string, unknown> = {}) {

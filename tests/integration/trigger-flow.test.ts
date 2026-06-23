@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
-import { buildTestApp, validTrigger } from "./fixtures.js"
+import { buildTestApp, InMemoryJobStore, validTrigger } from "./fixtures.js"
+import { JobManager } from "../../src/jobs/manager.js"
 
 describe("trigger flow", () => {
   it("returns bridge and opencode health", async () => {
@@ -66,5 +67,68 @@ describe("trigger flow", () => {
 
     expect(response.statusCode).toBe(200)
     expect(response.json()).toMatchObject({ id: "job_1", status: "running" })
+  })
+})
+
+describe("dependency resolution", () => {
+  it("returns blocked status when dependencies not met", async () => {
+    const jobManager = new JobManager(new InMemoryJobStore())
+    const dep = await jobManager.createJob(validTrigger({ job_id: "dep_1" }))
+
+    const { app } = await buildTestApp({ jobManager })
+    const response = await app.inject({
+      method: "POST",
+      url: "/trigger",
+      headers: { authorization: "Bearer secret" },
+      payload: {
+        ...validTrigger({ job_id: "job_2" }),
+        depends_on: [dep.id],
+      },
+    })
+
+    expect(response.statusCode).toBe(202)
+    const body = response.json()
+    expect(body.status).toBe("blocked")
+    expect(body.opencode_session_id).toBeUndefined()
+  })
+
+  it("executes immediately when all dependencies completed", async () => {
+    const jobManager = new JobManager(new InMemoryJobStore())
+    const dep = await jobManager.createJob(validTrigger({ job_id: "dep_1" }))
+    await jobManager.markCompleted(dep.id)
+
+    const { app, opencode } = await buildTestApp({ jobManager })
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/trigger",
+      headers: { authorization: "Bearer secret" },
+      payload: {
+        ...validTrigger({ job_id: "job_2" }),
+        depends_on: [dep.id],
+      },
+    })
+
+    expect(response.statusCode).toBe(202)
+    const body = response.json()
+    expect(body.status).toBe("accepted")
+    expect(body.opencode_session_id).toBeDefined()
+    expect(opencode.createdSessions).toBe(1)
+  })
+
+  it("returns 400 when dependency job not found", async () => {
+    const { app } = await buildTestApp()
+    const response = await app.inject({
+      method: "POST",
+      url: "/trigger",
+      headers: { authorization: "Bearer secret" },
+      payload: {
+        ...validTrigger({ job_id: "job_1" }),
+        depends_on: ["nonexistent-job"],
+      },
+    })
+
+    expect(response.statusCode).toBe(400)
+    expect(response.json().error).toContain("Dependency job not found")
   })
 })

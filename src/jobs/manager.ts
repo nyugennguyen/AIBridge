@@ -36,6 +36,50 @@ export class JobManager {
     return this.transition(id, "timed_out", now, { error: "Job timed out" })
   }
 
+  async markBlocked(id: string, depends_on: string[], now = new Date().toISOString()): Promise<JobRecord> {
+    return this.transition(id, "blocked", now, { depends_on, blockedAt: now })
+  }
+
+  async unblockDependents(completedJobId: string, now = new Date().toISOString()): Promise<JobRecord[]> {
+    const allJobs = await this.store.list()
+    const unblocked: JobRecord[] = []
+
+    // Find all blocked jobs that depend on the completed job
+    const dependents = allJobs.filter(
+      (j) => j.status === "blocked" && j.depends_on?.includes(completedJobId),
+    )
+
+    for (const job of dependents) {
+      const deps = job.depends_on ?? []
+
+      // Check all dependencies
+      const depStatuses = await Promise.all(
+        deps.map(async (depId) => {
+          const dep = await this.store.get(depId)
+          return { id: depId, status: dep?.status ?? "missing" }
+        }),
+      )
+
+      // Any dependency failed/timed out → cascade failure
+      const failedDep = depStatuses.find(
+        (d) => d.status === "failed" || d.status === "timed_out",
+      )
+      if (failedDep) {
+        await this.markFailed(job.id, `Dependency ${failedDep.id} ${failedDep.status}`, now)
+        continue
+      }
+
+      // All dependencies completed → unblock
+      const allCompleted = depStatuses.every((d) => d.status === "completed")
+      if (allCompleted) {
+        await this.transition(job.id, "accepted", now)
+        unblocked.push(await this.getJob(job.id))
+      }
+    }
+
+    return unblocked
+  }
+
   async getJob(id: string): Promise<JobRecord> {
     const job = await this.store.get(id)
     if (!job) throw new Error(`Unknown job: ${id}`)

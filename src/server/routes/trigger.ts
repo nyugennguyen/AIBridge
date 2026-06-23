@@ -30,11 +30,58 @@ export function registerTriggerRoute(app: FastifyInstance, dependencies: AppDepe
     if (!(await dependencies.opencodeClient.health())) return reply.code(503).send({ error: "OpenCode server unhealthy" })
 
     try {
-      const job = await dependencies.jobManager.createJob(trigger)
-      const session = await dependencies.opencodeClient.createSession(`AIBridge ${job.id}`, trigger.project_dir)
+      const { depends_on, task_id, ...triggerData } = trigger
+      const hasDeps = depends_on && depends_on.length > 0
+
+      if (hasDeps) {
+        for (const depId of depends_on!) {
+          try {
+            await dependencies.jobManager.getJob(depId)
+          } catch {
+            return reply.code(400).send({ error: `Dependency job not found: ${depId}` })
+          }
+        }
+      }
+
+      const job = await dependencies.jobManager.createJob(triggerData)
+
+      if (hasDeps) {
+        const allCompleted = await Promise.all(
+          depends_on!.map(async (depId) => {
+            const dep = await dependencies.jobManager.getJob(depId)
+            return dep.status === "completed"
+          }),
+        )
+
+        if (!allCompleted.every(Boolean)) {
+          await dependencies.jobManager.markBlocked(job.id, depends_on!)
+          await dependencies.taskGraphSyncer.syncJobToTask(task_id ?? `#${job.id}`, "blocked", {
+            Job: job.id,
+          })
+
+          return reply.code(202).send(
+            triggerResponseSchema.parse({
+              accepted: true,
+              job_id: job.id,
+              target_agent_id: dependencies.config.agent_id,
+              status_url: `${dependencies.config.bridge.public_url}/jobs/${job.id}`,
+              status: "blocked",
+              task_id: task_id,
+            }),
+          )
+        }
+      }
+
+      const session = await dependencies.opencodeClient.createSession(`AIBridge ${job.id}`, triggerData.project_dir)
       await dependencies.jobManager.attachSession(job.id, session.id)
-      await dependencies.opencodeClient.sendPromptAsync(session.id, trigger.prompt, trigger.project_dir)
+      await dependencies.opencodeClient.sendPromptAsync(session.id, triggerData.prompt, triggerData.project_dir)
       const running = await dependencies.jobManager.markRunning(job.id)
+
+      await dependencies.taskGraphSyncer.syncJobToTask(task_id ?? `#${job.id}`, "running", {
+        Job: job.id,
+        Session: session.id,
+      })
+
       void dependencies.monitorSession(running).catch(async (error: unknown) => {
         await dependencies.jobManager.markFailed(job.id, error instanceof Error ? error.message : "Session monitor failed")
       })
@@ -46,6 +93,8 @@ export function registerTriggerRoute(app: FastifyInstance, dependencies: AppDepe
           target_agent_id: dependencies.config.agent_id,
           opencode_session_id: session.id,
           status_url: `${dependencies.config.bridge.public_url}/jobs/${job.id}`,
+          status: "accepted",
+          task_id: task_id,
         }),
       )
     } catch (error) {

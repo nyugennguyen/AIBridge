@@ -1,6 +1,5 @@
 import Fastify from "fastify"
 import type { FastifyInstance } from "fastify"
-import type { ReportCallback } from "../callback/types.js"
 import type { BridgeConfig } from "../config/types.js"
 import type { JobRecord } from "../jobs/types.js"
 import type { JobManager } from "../jobs/manager.js"
@@ -18,7 +17,6 @@ export interface AppDependencies {
   opencodeClient: OpencodeClient
   callbackReporter: CallbackReporter
   monitorSession: (job: JobRecord) => Promise<void>
-  reports: ReportCallback[]
   taskGraphSyncer: TaskGraphSyncer
 }
 

@@ -2,7 +2,6 @@ import { mkdtemp } from "node:fs/promises"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
 import type { BridgeConfig } from "../../src/config/types.js"
-import type { ReportCallback } from "../../src/callback/types.js"
 import type { OpencodeClient, OpencodeEvent, PermissionDecision, SessionStatus } from "../../src/opencode/types.js"
 import type { TaskEntry, TaskGraphSyncer } from "../../src/tasks/types.js"
 import type { JobRecord, JobStatus } from "../../src/jobs/types.js"
@@ -107,7 +106,6 @@ export interface BuildTestAppOverrides {
 export async function buildTestApp(overrides: BuildTestAppOverrides = {}) {
   const config = testConfig()
   const opencode = overrides.opencodeClient ?? new FakeOpencodeClient()
-  const reports: ReportCallback[] = []
   const taskGraphSyncer = overrides.taskGraphSyncer ?? new FakeTaskGraphSyncer()
   const jobManager = overrides.jobManager ?? new JobManager(new JsonFileJobStore(await mkdtemp(join(tmpdir(), "aibridge-integration-"))))
   const app = createApp({
@@ -116,10 +114,9 @@ export async function buildTestApp(overrides: BuildTestAppOverrides = {}) {
     opencodeClient: opencode,
     callbackReporter: new CallbackReporter({ attempts: 1, baseDelayMs: 1, fetcher: async () => new Response(null, { status: 200 }) }),
     monitorSession: async () => undefined,
-    reports,
     taskGraphSyncer,
   })
-  return { app, config, opencode, reports, taskGraphSyncer, jobManager }
+  return { app, config, opencode, taskGraphSyncer, jobManager }
 }
 
 export function validTrigger(overrides: Record<string, unknown> = {}) {

@@ -65,6 +65,13 @@ export const planMetadataSchema = z
   })
   .optional()
 
+export const remoteDependencySchema = z.object({
+  agent_id: z.string().min(1),
+  job_id: z.string().min(1),
+})
+
+export const dependencyReferenceSchema = z.union([z.string().min(1), remoteDependencySchema])
+
 export const triggerRequestSchema = z.object({
   job_id: z.string().min(1).optional(),
   source_agent_id: z.string().min(1),
@@ -74,7 +81,7 @@ export const triggerRequestSchema = z.object({
   prompt: z.string().min(1),
   callback_url: z.url(),
   timeout_seconds: z.number().int().positive(),
-  depends_on: z.array(z.string().min(1)).default([]).optional(),
+  depends_on: z.array(dependencyReferenceSchema).default([]).optional(),
   task_id: z.string().optional(),
   metadata: planMetadataSchema,
 })

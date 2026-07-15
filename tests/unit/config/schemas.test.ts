@@ -65,6 +65,21 @@ describe("AIBridge schemas", () => {
       expect(parsed.depends_on).toEqual(["job_1", "job_2"])
     })
 
+    it("accepts typed remote dependencies alongside legacy local IDs", () => {
+      const parsed = triggerRequestSchema.parse({
+        source_agent_id: "dev-main",
+        target_agent_id: "test-vps",
+        capability: "testing",
+        project_dir: "/srv/apps/app",
+        prompt: "Run tests.",
+        callback_url: "http://dev-main.tailnet:8787/report",
+        timeout_seconds: 1800,
+        depends_on: ["job_1", { agent_id: "test-vps", job_id: "job_remote" }],
+      })
+
+      expect(parsed.depends_on).toEqual(["job_1", { agent_id: "test-vps", job_id: "job_remote" }])
+    })
+
     it("defaults depends_on to empty array when omitted", () => {
       const parsed = triggerRequestSchema.parse({
         source_agent_id: "dev-main",

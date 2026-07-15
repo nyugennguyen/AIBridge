@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto"
-import type { TriggerRequest } from "../config/types.js"
-import type { JobRecord, JobStatus } from "./types.js"
+import type { RemoteDependency, TriggerRequest } from "../config/types.js"
+import type { JobRecord, JobStatus, RemoteDependencyReport } from "./types.js"
 import type { JobStore } from "./store.js"
 
 const TERMINAL_STATUSES: JobStatus[] = ["completed", "failed", "timed_out", "callback_failed"]
@@ -36,8 +36,47 @@ export class JobManager {
     return this.transition(id, "timed_out", now, { error: "Job timed out" })
   }
 
-  async markBlocked(id: string, depends_on: string[], now = new Date().toISOString()): Promise<JobRecord> {
-    return this.transition(id, "blocked", now, { depends_on, blockedAt: now })
+  async markCallbackDelivery(
+    id: string,
+    status: "pending" | "delivered" | "failed",
+    error?: string,
+    now = new Date().toISOString(),
+  ): Promise<JobRecord> {
+    const current = await this.getJob(id)
+    const callbackDelivery = error ? { status, attemptedAt: now, error } : { status, attemptedAt: now }
+    const next: JobRecord = { ...current, callbackDelivery, updatedAt: now }
+    await this.store.save(next)
+    return next
+  }
+
+  async markBlocked(id: string, dependencies: readonly (string | RemoteDependency)[], now = new Date().toISOString()): Promise<JobRecord> {
+    const depends_on = dependencies.filter((dependency): dependency is string => typeof dependency === "string")
+    const remoteDependencies = dependencies
+      .filter((dependency): dependency is RemoteDependency => typeof dependency !== "string")
+      .map((dependency) => ({ ...dependency }))
+    return this.transition(id, "blocked", now, { depends_on, remoteDependencies, blockedAt: now })
+  }
+
+  async recordRemoteReport(report: RemoteDependencyReport, now = new Date().toISOString()): Promise<JobRecord[]> {
+    const unblocked: JobRecord[] = []
+    for (const job of await this.store.list()) {
+      if (job.status !== "blocked") continue
+      const remoteDependencies = job.remoteDependencies ?? []
+      const matches = remoteDependencies.some(
+        (dependency) => dependency.agent_id === report.source_agent_id && dependency.job_id === report.job_id,
+      )
+      if (!matches) continue
+
+      const updatedDependencies = remoteDependencies.map((dependency) => {
+        if (dependency.agent_id !== report.source_agent_id || dependency.job_id !== report.job_id || dependency.status) return dependency
+        return { ...dependency, status: report.status, reportedAt: now }
+      })
+      const updated = await this.transition(job.id, "blocked", now, { remoteDependencies: updatedDependencies })
+      const outcome = await this.dependencyOutcome(updated)
+      if (outcome.kind === "failed") await this.markFailed(updated.id, outcome.error, now)
+      if (outcome.kind === "ready") unblocked.push(await this.transition(updated.id, "accepted", now))
+    }
+    return unblocked
   }
 
   async unblockDependents(completedJobId: string, now = new Date().toISOString()): Promise<JobRecord[]> {
@@ -49,28 +88,9 @@ export class JobManager {
     )
 
     for (const job of dependents) {
-      const deps = job.depends_on ?? []
-
-      const depStatuses = await Promise.all(
-        deps.map(async (depId) => {
-          const dep = await this.store.get(depId)
-          return { id: depId, status: dep?.status ?? "missing" }
-        }),
-      )
-
-      const failedDep = depStatuses.find(
-        (d) => d.status === "failed" || d.status === "timed_out",
-      )
-      if (failedDep) {
-        await this.markFailed(job.id, `Dependency ${failedDep.id} ${failedDep.status}`, now)
-        continue
-      }
-
-      const allCompleted = depStatuses.every((d) => d.status === "completed")
-      if (allCompleted) {
-        const record = await this.transition(job.id, "accepted", now)
-        unblocked.push(record)
-      }
+      const outcome = await this.dependencyOutcome(job)
+      if (outcome.kind === "failed") await this.markFailed(job.id, outcome.error, now)
+      if (outcome.kind === "ready") unblocked.push(await this.transition(job.id, "accepted", now))
     }
 
     return unblocked
@@ -80,6 +100,12 @@ export class JobManager {
     const job = await this.store.get(id)
     if (!job) throw new Error(`Unknown job: ${id}`)
     return job
+  }
+
+  async listCallbackRetries(): Promise<JobRecord[]> {
+    return (await this.store.list()).filter(
+      (job) => job.callbackDelivery?.status === "pending" || job.callbackDelivery?.status === "failed",
+    )
   }
 
   async sweepExpiredJobs(now = new Date().toISOString()): Promise<JobRecord[]> {
@@ -102,5 +128,20 @@ export class JobManager {
     const next: JobRecord = { ...current, ...patch, status, updatedAt: now }
     await this.store.save(next)
     return next
+  }
+
+  private async dependencyOutcome(job: JobRecord): Promise<{ kind: "waiting" } | { kind: "ready" } | { kind: "failed"; error: string }> {
+    const localDependencies = await Promise.all(
+      (job.depends_on ?? []).map(async (id) => ({ id, status: (await this.store.get(id))?.status ?? "missing" })),
+    )
+    const failedLocal = localDependencies.find((dependency) => dependency.status === "failed" || dependency.status === "timed_out")
+    if (failedLocal) return { kind: "failed", error: `Dependency ${failedLocal.id} ${failedLocal.status}` }
+    const failedRemote = (job.remoteDependencies ?? []).find(
+      (dependency) => dependency.status === "failed" || dependency.status === "timed_out" || dependency.status === "callback_failed",
+    )
+    if (failedRemote?.status) return { kind: "failed", error: `Remote dependency ${failedRemote.agent_id}/${failedRemote.job_id} ${failedRemote.status}` }
+    const localReady = localDependencies.every((dependency) => dependency.status === "completed")
+    const remoteReady = (job.remoteDependencies ?? []).every((dependency) => dependency.status === "completed")
+    return localReady && remoteReady ? { kind: "ready" } : { kind: "waiting" }
   }
 }

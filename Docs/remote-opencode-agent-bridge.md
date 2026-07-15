@@ -111,31 +111,42 @@ The design can therefore define the runtime, folder structure, tests, and operat
 
 ## Architecture Overview
 
-### POC Architecture: Two-Machine Bridge
+### POC Architecture: Two-Machine Bridge with Shared Context
 
 ```text
-┌────────────────────────────────────────────────────────────┐
-│ Machine A: Development Workstation                         │
-│                                                            │
-│  ┌─────────────────────┐       ┌────────────────────────┐  │
-│  │ Development Agent   │──────▶│ AIBridge Local Node    │  │
-│  │ opencode session    │       │ HTTP client/server     │  │
-│  └─────────────────────┘       └───────────┬────────────┘  │
-│                                            │               │
-└────────────────────────────────────────────┼───────────────┘
+┌─────────────────────────────────────────────────────────────────────────┐
+│ Machine A: Development Workstation                                      │
+│                                                                         │
+│  ┌─────────────────────┐       ┌────────────────────────┐               │
+│  │ Development Agent   │──────▶│ AIBridge Local Node    │               │
+│  │ opencode session    │       │ HTTP client/server     │               │
+│  └─────────────────────┘       └───────────┬────────────┘               │
+│                                            │                            │
+│  ┌─────────────────────────────────────────┴──────────────────────────┐ │
+│  │ Shared Project Context                                             │ │
+│  │  .aibridge/project.json  ← Project identity (git remote)          │ │
+│  │  .aibridge/context.md    ← Decisions, constraints, handoffs       │ │
+│  │  .aibridge/tasks.md      ← Task graph with dependencies           │ │
+│  └───────────────────────────────────────────────────────────────────┘ │
+└────────────────────────────────────────────┬────────────────────────────┘
                                              │ Tailscale HTTP
+                                             │ + Git sync
                                              ▼
-┌────────────────────────────────────────────────────────────┐
-│ Machine B: Testing VPS                                     │
-│                                                            │
-│  ┌─────────────────────┐       ┌────────────────────────┐  │
-│  │ AIBridge Agent Node │──────▶│ opencode serve         │  │
-│  │ POST /trigger       │       │ :4096 in tmux          │  │
-│  └──────────┬──────────┘       └───────────┬────────────┘  │
-│             │                              │               │
-│             │ monitors session             │ creates new   │
-│             │ via SDK/API                  │ session       │
-└─────────────┼──────────────────────────────┼───────────────┘
+┌─────────────────────────────────────────────────────────────────────────┐
+│ Machine B: Testing VPS                                                  │
+│                                                                         │
+│  ┌─────────────────────┐       ┌────────────────────────┐               │
+│  │ AIBridge Agent Node │──────▶│ opencode serve         │               │
+│  │ POST /trigger       │       │ :4096 in tmux          │               │
+│  └──────────┬──────────┘       └───────────┬────────────┘               │
+│             │                              │                            │
+│             │ monitors session             │ creates new                │
+│             │ via SDK/API                  │ session                    │
+│  ┌──────────┴──────────────────────────────┴──────────────────────────┐ │
+│  │ Shared Project Context (synced via git)                            │ │
+│  │  .aibridge/tasks.md  ← Reads dependencies, updates status         │ │
+│  └───────────────────────────────────────────────────────────────────┘ │
+└─────────────┼───────────────────────────────────────────────────────────┘
               │                              │
               └──────── report callback ◀────┘
 ```
@@ -157,6 +168,265 @@ The design can therefore define the runtime, folder structure, tests, and operat
 ```
 
 The POC should include an `AgentRegistry` abstraction even if the first implementation is only a static config file. This prevents rework when moving from two machines to N-machine mesh.
+
+## Project Identity & Shared Context
+
+### How Agents Discover They're Working on the Same Project
+
+**Problem**: Machine A's `/Users/mac/myapp` and Machine B's `/home/deploy/myapp` are the same git repo but different paths. How do agents know they're collaborating?
+
+**Solution**: Git-native project identity + shared context files in the repo.
+
+#### Project Identity (`.aibridge/project.json`)
+
+```json
+{
+  "project_id": "github.com:user/myapp",
+  "agents": {
+    "mac-dev": { "capabilities": ["implement", "test"] },
+    "vps-deploy": { "capabilities": ["deploy", "monitor"] }
+  },
+  "shared_context": {
+    "decisions": [],
+    "constraints": ["No database changes without approval"],
+    "active_branch": "feature/auth"
+  }
+}
+```
+
+**How it works**:
+1. AIBridge auto-detects project identity from `git remote get-url origin`
+2. Both machines see the same `project_id` regardless of local path
+3. Config file lives in the repo (committed, versioned)
+
+#### Shared Context File (`.aibridge/context.md`)
+
+```markdown
+# Project Context: myapp
+
+## Active Work
+- [Agent A] Implementing JWT auth (src/auth/)
+- [Agent B] Waiting for auth to deploy staging
+
+## Decisions
+- 2026-06-23: Using bcrypt for password hashing (Agent A decided)
+- 2026-06-23: Staging uses SQLite, prod uses Postgres
+
+## Constraints
+- No breaking API changes without version bump
+- All auth changes need Agent B review
+
+## Handoff
+- Agent A → Agent B: Auth middleware complete, ready for deploy test
+```
+
+#### Sync Strategy
+
+| File | Sync Method | Why |
+|------|-------------|-----|
+| `project.json` | Git (committed) | Stable config, changes rarely |
+| `context.md` | Git (committed) | Human-readable, versioned |
+| `tasks.md` | Git (committed) | Dependencies need versioning |
+| `jobs/*.json` | Local only | Machine-specific state, fast queries |
+
+---
+
+## Task Graph (Hive-Inspired Dependency Tracking)
+
+### Overview
+
+AIBridge borrows Hive's task graph pattern — a markdown file that tracks work, dependencies, and agent assignments. This enables multi-step workflows where Agent B waits for Agent A to complete before starting.
+
+### Task Graph Format (`.aibridge/tasks.md`)
+
+```markdown
+# Project Tasks
+
+## #1 Implement JWT auth [agent:mac-dev] [status:done]
+- Completed: 2026-06-23 10:00
+- Job: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+- Files: src/auth/middleware.ts, src/auth/routes.ts
+- Summary: Bearer token auth, bcrypt passwords, /login /register /me
+
+## #2 Deploy auth to staging [agent:vps-deploy] [status:running] [needs: #1]
+- Started: 2026-06-23 10:05
+- Job: f9e8d7c6-b5a4-3210-fedc-ba0987654321
+- Progress: Building docker image...
+
+## #3 Integration tests [agent:mac-dev] [status:blocked] [needs: #2]
+- Waiting for staging deploy to complete
+- Will run: bun test tests/integration/auth.test.ts
+
+## #4 Update API docs [agent:vps-deploy] [status:pending] [needs: #1]
+- Depends on auth implementation being finalized
+```
+
+**Format rules**:
+- `## #N` — Task heading with sequential ID
+- `[agent:id]` — Assigned agent
+- `[status:state]` — One of: `pending`, `blocked`, `running`, `done`, `failed`
+- `[needs: #N, #M]` — Dependencies (optional)
+- Bullet points — Metadata (timestamps, job IDs, notes)
+
+### Extended Job State Machine
+
+```text
+                         ┌─────────────┐
+                         │   pending   │
+                         └──────┬──────┘
+                                │
+                    ┌───────────┴───────────┐
+                    │   Has dependencies?   │
+                    └───────────┬───────────┘
+                           yes/ \no
+                             /   \
+                ┌───────────┐     ┌───────────┐
+                │  blocked  │     │  accepted │
+                └─────┬─────┘     └─────┬─────┘
+                      │                 │
+        [all deps     │                 │
+         completed?]  │                 │
+            ┌─────────┴─────────┐       │
+            │                   │       │
+          yes                  no       │
+            │                   │       │
+            ▼                   ▼       ▼
+      ┌──────────┐       ┌──────────┐ ┌──────────────┐
+      │ accepted │       │  failed  │ │session_created│
+      └────┬─────┘       └──────────┘ └───────┬──────┘
+           │                                   │
+           ▼                                   ▼
+      ┌──────────┐                       ┌─────────┐
+      │ running  │                       │ running │
+      └────┬─────┘                       └────┬────┘
+           │                                  │
+     ┌─────┴─────┐                      ┌─────┴─────┐
+     ▼           ▼                      ▼           ▼
+┌─────────┐ ┌─────────┐          ┌─────────┐ ┌─────────┐
+│completed│ │ failed  │          │completed│ │ failed  │
+└────┬────┘ └────┬────┘          └────┬────┘ └────┬────┘
+     │           │                    │           │
+     ▼           ▼                    ▼           ▼
+[unblock     [cascade-fail       [unblock     [cascade-fail
+ dependents]  dependents]         dependents]  dependents]
+```
+
+### Dependency Resolution Algorithm
+
+When a job completes (success or failure), `unblockDependents()` runs:
+
+```typescript
+async unblockDependents(completedJobId: string): Promise<JobRecord[]> {
+  const allJobs = await this.store.list()
+  const unblocked: JobRecord[] = []
+  
+  // Find all blocked jobs that depend on the completed job
+  const dependents = allJobs.filter(
+    j => j.status === "blocked" && j.depends_on?.includes(completedJobId)
+  )
+  
+  for (const job of dependents) {
+    const deps = job.depends_on ?? []
+    
+    // Check all dependencies
+    const depStatuses = await Promise.all(
+      deps.map(async (depId) => {
+        const dep = await this.store.get(depId)
+        return { id: depId, status: dep?.status ?? "missing" }
+      })
+    )
+    
+    // Any dependency failed/timed out → cascade failure
+    const failedDep = depStatuses.find(
+      d => d.status === "failed" || d.status === "timed_out"
+    )
+    if (failedDep) {
+      await this.markFailed(job.id, `Dependency ${failedDep.id} ${failedDep.status}`)
+      continue
+    }
+    
+    // All dependencies completed → unblock
+    const allCompleted = depStatuses.every(d => d.status === "completed")
+    if (allCompleted) {
+      await this.transition(job.id, "accepted")
+      unblocked.push(await this.store.get(job.id))
+    }
+  }
+  
+  return unblocked
+}
+```
+
+### Trigger Flow with Dependencies
+
+```typescript
+// New fields in triggerRequestSchema
+{
+  depends_on: ["job_id_1", "job_id_2"],  // Optional: dependency job IDs
+  task_id: "#3",                          // Optional: task graph correlation
+}
+
+// New fields in triggerResponseSchema
+{
+  accepted: true,
+  job_id: "...",
+  status: "blocked",                      // NEW: "accepted" | "blocked" | "failed"
+  opencode_session_id: null,              // null for blocked jobs
+  status_url: "...",
+  task_id: "#3",                          // NEW: assigned task graph ID
+}
+```
+
+### Cross-Machine Coordination Flow
+
+```text
+Machine A completes Job #1
+    │
+    ├──▶ Updates jobs/{id}.json (local)
+    ├──▶ Updates tasks.md (git-synced)
+    ├──▶ Sends callback to Machine B (HTTP)
+    │
+    ▼
+Machine B receives callback
+    │
+    ├──▶ Updates jobs/{id}.json (local)
+    ├──▶ Calls unblockDependents()
+    ├──▶ Finds blocked Job #2 (depends on #1)
+    ├──▶ Transitions #2 to "accepted"
+    ├──▶ Executes #2
+    └──▶ Updates tasks.md
+```
+
+### Circular Dependency Detection
+
+```typescript
+// Simple: reject self-loops
+if (depends_on.includes(job.id)) {
+  throw new Error("Self-referencing dependency detected")
+}
+
+// Thorough: DFS cycle detection
+function detectCycle(store: JobStore, jobId: string, deps: string[]): boolean {
+  const visited = new Set<string>()
+  const stack = [...deps]
+  
+  while (stack.length > 0) {
+    const current = stack.pop()!
+    if (current === jobId) return true  // Cycle!
+    if (visited.has(current)) continue
+    visited.add(current)
+    
+    const job = await store.get(current)
+    if (job?.depends_on) {
+      stack.push(...job.depends_on)
+    }
+  }
+  
+  return false
+}
+```
+
+---
 
 ## Core Components
 
@@ -197,15 +467,17 @@ Important opencode constraints:
 
 ### 3. Job Lifecycle Manager
 
-Tracks remote job state.
+Tracks remote job state with dependency support.
 
-Required states:
+Required states (extended):
 
 ```text
 received → accepted → session_created → running → reporting → completed
-                                      ↘ failed
-                                      ↘ timed_out
-                                      ↘ callback_failed
+              ↑                              ↘ failed
+              │                              ↘ timed_out
+           blocked                            ↘ callback_failed
+         (waiting for
+          dependencies)
 ```
 
 Responsibilities:
@@ -215,8 +487,93 @@ Responsibilities:
 - Prevent duplicate job execution where possible.
 - Persist enough local state for crash/debug recovery.
 - Clean up orphaned jobs.
+- **NEW**: Track job dependencies (`depends_on` field).
+- **NEW**: Transition blocked jobs when dependencies complete.
+- **NEW**: Cascade-fail dependents when a dependency fails.
 
 POC persistence uses a `JsonFileJobStore` writing each job transition to `.aibridge/jobs/{job_id}.json`. If the bridge restarts, it can reload jobs for debugging and mark uncertain active jobs for manual inspection or timeout recovery.
+
+#### New JobRecord Fields
+
+```typescript
+interface JobRecord {
+  id: string
+  trigger: TriggerRequest
+  status: JobStatus
+  opencodeSessionId?: string
+  error?: string
+  depends_on?: string[]      // NEW: dependency job IDs
+  blockedAt?: string         // NEW: when entered blocked state
+  createdAt: string
+  updatedAt: string
+}
+```
+
+#### New JobManager Methods
+
+```typescript
+interface JobManager {
+  // Existing
+  createJob(trigger: TriggerRequest): Promise<JobRecord>
+  markCompleted(id: string): Promise<void>
+  markFailed(id: string, error: string): Promise<void>
+  
+  // NEW: Dependency support
+  markBlocked(id: string, depends_on: string[]): Promise<void>
+  unblockDependents(completedJobId: string): Promise<JobRecord[]>
+}
+```
+
+### 3.1 Task Graph Syncer (NEW)
+
+Synchronizes job state with the human-readable task graph file.
+
+Responsibilities:
+
+- Read/write `.aibridge/tasks.md` in markdown format.
+- Sync job state changes → task status updates.
+- Parse task dependencies for dependency resolution.
+- Watch for external edits (human edits to tasks.md).
+
+```typescript
+interface TaskGraphSyncer {
+  getTasks(): Promise<TaskEntry[]>
+  syncJobToTask(job: JobRecord): Promise<void>
+  parseTaskDependencies(): Promise<Map<string, string[]>>
+  startWatching(): void
+}
+
+interface TaskEntry {
+  id: string           // #1, #2, etc.
+  title: string
+  agent?: string
+  status: string
+  depends_on: string[] // task IDs
+  job_id?: string      // correlated JobRecord ID
+  metadata: Record<string, string>
+}
+```
+
+### 3.2 Memory Store (NEW)
+
+Provides shared context access across agents.
+
+Responsibilities:
+
+- Read/write `.aibridge/context.md` for human-readable context.
+- Track project decisions, constraints, and handoffs.
+- Provide context summaries for trigger payloads.
+
+```typescript
+interface MemoryStore {
+  getProjectId(): string
+  getDecisions(): Promise<Decision[]>
+  addDecision(decision: Decision): Promise<void>
+  getConstraints(): Promise<string[]>
+  createHandoff(from: string, to: string, context: string): Promise<Handoff>
+  getPendingHandoffs(agentId: string): Promise<Handoff[]>
+}
+```
 
 ### 4. Agent Registry
 
@@ -312,7 +669,7 @@ Future mesh behavior:
 
 ## Message Contracts
 
-### Trigger Request
+### Trigger Request (Extended with Dependencies)
 
 ```json
 {
@@ -324,6 +681,8 @@ Future mesh behavior:
   "prompt": "Run the deployed app tests and report failures with reproduction steps.",
   "callback_url": "http://dev-main.tailnet:8787/report",
   "timeout_seconds": 1800,
+  "depends_on": ["job_auth_001"],
+  "task_id": "#2",
   "metadata": {
     "deployment_url": "https://test.example.internal",
     "git_sha": "abc123",
@@ -334,7 +693,7 @@ Future mesh behavior:
 }
 ```
 
-### Immediate Trigger Response
+### Immediate Trigger Response (Extended)
 
 ```json
 {
@@ -342,7 +701,23 @@ Future mesh behavior:
   "job_id": "job_20260615_001",
   "target_agent_id": "test-vps",
   "opencode_session_id": "ses_xxx",
-  "status_url": "http://test-vps.tailnet:8787/jobs/job_20260615_001"
+  "status_url": "http://test-vps.tailnet:8787/jobs/job_20260615_001",
+  "status": "accepted",
+  "task_id": "#2"
+}
+```
+
+### Blocked Trigger Response (NEW)
+
+```json
+{
+  "accepted": true,
+  "job_id": "job_20260615_002",
+  "target_agent_id": "test-vps",
+  "opencode_session_id": null,
+  "status_url": "http://test-vps.tailnet:8787/jobs/job_20260615_002",
+  "status": "blocked",
+  "task_id": "#3"
 }
 ```
 
@@ -528,6 +903,8 @@ The POC should avoid hardcoding logic directly into request handlers. Instead, u
 - `AuthProvider`: shared token now, mTLS or per-agent keys later.
 - `PlanReviewProvider`: local Plan Annotator now, policy-based mesh approval later.
 - `PermissionPolicyProvider`: static policy now, per-agent trust policy later.
+- `TaskGraphSyncer`: file-based now, distributed sync later.
+- `MemoryStore`: local context file now, shared memory service later.
 
 Future mesh features:
 
@@ -539,6 +916,8 @@ Future mesh features:
 - Agent trust policies.
 - Plan approval policies through Plan Annotator.
 - Central dashboard or distributed status view.
+- **Distributed task graph** with real-time sync across machines.
+- **Shared memory service** (e.g., EverOS integration) for cross-agent context.
 
 ## POC Scope
 
@@ -562,6 +941,13 @@ Future mesh features:
 - JSON job persistence under `.aibridge/jobs/`.
 - Opencode permission handling policy.
 - Structured logs for job lifecycle and security decisions.
+- **NEW**: Git-based project identity detection.
+- **NEW**: Task graph with dependency tracking (`.aibridge/tasks.md`).
+- **NEW**: Job dependency resolution (`depends_on` field).
+- **NEW**: Blocked/unblocked job states.
+- **NEW**: Cascade failure for failed dependencies.
+- **NEW**: Shared context file (`.aibridge/context.md`).
+- **NEW**: TaskGraphSyncer and MemoryStore interfaces.
 
 ### Exclude From POC
 
@@ -594,3 +980,6 @@ If no further preference is given:
 - Oracle architecture review found no hard NO-GO concerns.
 - Main risks are path mismatches for remote `project_dir`, opencode port collisions, orphaned sessions, SSE instability, callback failures, and securing a privileged remote execution interface.
 - The most important design guardrail is to include registry/routing interfaces in the POC even if their first implementation is static config.
+- **NEW**: Task graph design inspired by [Hive](https://github.com/tt-a1i/hive) — a browser-native orchestration workbench for CLI coding agents. Hive's `.hive/tasks.md` pattern and dependency resolution algorithm were adapted for AIBridge's remote HTTP model.
+- **NEW**: Git-native project identity solves the "same project, different paths" problem without requiring external services.
+- **NEW**: Dependency tracking enables multi-step workflows (implement → test → deploy) without manual coordination.

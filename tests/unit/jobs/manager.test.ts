@@ -73,6 +73,59 @@ describe("JobManager", () => {
     await expect(jobs.getJob("nonexistent")).rejects.toThrow("Unknown job")
   })
 
+  describe("markTimedOut", () => {
+    it("sets status to timed_out with default error message", async () => {
+      const jobs = await manager()
+      const created = await jobs.createJob(trigger({ job_id: "job_to" }), "2026-06-15T00:00:00.000Z")
+      await jobs.markRunning(created.id, "2026-06-15T00:00:01.000Z")
+      const timedOut = await jobs.markTimedOut(created.id, "2026-06-15T00:00:02.000Z")
+
+      expect(timedOut.status).toBe("timed_out")
+      expect(timedOut.error).toBe("Job timed out")
+    })
+
+    it("marks accepted jobs (not just running) as timed_out", async () => {
+      const jobs = await manager()
+      const created = await jobs.createJob(trigger({ job_id: "job_acc" }), "2026-06-15T00:00:00.000Z")
+      const timedOut = await jobs.markTimedOut(created.id, "2026-06-15T00:00:01.000Z")
+
+      expect(timedOut.status).toBe("timed_out")
+    })
+  })
+
+  describe("sweepExpiredJobs", () => {
+    it("marks accepted (non-running) jobs as timed_out when past deadline", async () => {
+      const jobs = await manager()
+      await jobs.createJob(trigger({ job_id: "job_acc", timeout_seconds: 5 }), "2026-06-15T00:00:00.000Z")
+
+      const expired = await jobs.sweepExpiredJobs("2026-06-15T00:00:06.000Z")
+
+      expect(expired).toHaveLength(1)
+      expect(expired[0].status).toBe("timed_out")
+    })
+
+    it("marks session_created jobs as timed_out when past deadline", async () => {
+      const jobs = await manager()
+      const created = await jobs.createJob(trigger({ job_id: "job_sc", timeout_seconds: 10 }), "2026-06-15T00:00:00.000Z")
+      await jobs.attachSession(created.id, "ses_1", "2026-06-15T00:00:01.000Z")
+
+      const expired = await jobs.sweepExpiredJobs("2026-06-15T00:00:12.000Z")
+
+      expect(expired).toHaveLength(1)
+      expect(expired[0].status).toBe("timed_out")
+    })
+
+    it("does not sweep jobs within their timeout window", async () => {
+      const jobs = await manager()
+      await jobs.createJob(trigger({ job_id: "job_ok", timeout_seconds: 60 }), "2026-06-15T00:00:00.000Z")
+
+      const expired = await jobs.sweepExpiredJobs("2026-06-15T00:00:30.000Z")
+
+      expect(expired).toHaveLength(0)
+      expect((await jobs.getJob("job_ok")).status).toBe("accepted")
+    })
+  })
+
   describe("markBlocked", () => {
     it("transitions job to blocked status with depends_on", async () => {
       const jobs = await manager()
@@ -135,6 +188,45 @@ describe("JobManager", () => {
       const job = await jobs.getJob(blocked.id)
       expect(job.status).toBe("failed")
       expect(job.error).toContain("failed")
+    })
+
+    it("cascade-fails job when dependency timed_out", async () => {
+      const jobs = await manager()
+      const dep1 = await jobs.createJob(trigger({ job_id: "dep_to" }), "2026-06-15T00:00:00.000Z")
+      await jobs.markRunning(dep1.id, "2026-06-15T00:00:01.000Z")
+      await jobs.markTimedOut(dep1.id, "2026-06-15T00:00:02.000Z")
+
+      const blocked = await jobs.createJob(triggerWithDeps([dep1.id], { job_id: "blocked_to" }), "2026-06-15T00:00:03.000Z")
+      await jobs.markBlocked(blocked.id, [dep1.id])
+
+      await jobs.unblockDependents(dep1.id)
+      const job = await jobs.getJob(blocked.id)
+      expect(job.status).toBe("failed")
+      expect(job.error).toContain("timed_out")
+    })
+
+    it("keeps job blocked when dependency is missing (not in store)", async () => {
+      const jobs = await manager()
+      const blocked = await jobs.createJob(
+        triggerWithDeps(["nonexistent_dep"], { job_id: "blocked_missing" }),
+        "2026-06-15T00:00:00.000Z",
+      )
+      await jobs.markBlocked(blocked.id, ["nonexistent_dep"])
+
+      const unblocked = await jobs.unblockDependents("nonexistent_dep")
+      expect(unblocked).toHaveLength(0)
+
+      const job = await jobs.getJob(blocked.id)
+      expect(job.status).toBe("blocked")
+    })
+
+    it("returns empty array when no blocked jobs depend on completed job", async () => {
+      const jobs = await manager()
+      const dep1 = await jobs.createJob(trigger({ job_id: "lonely_dep" }), "2026-06-15T00:00:00.000Z")
+      await jobs.markCompleted(dep1.id)
+
+      const unblocked = await jobs.unblockDependents(dep1.id)
+      expect(unblocked).toHaveLength(0)
     })
   })
 })

@@ -80,6 +80,21 @@ curl -X POST http://test-vps.tailnet:8787/trigger \
 
 AIBridge validates auth, source authorization, project allowlist, and Plan Annotator metadata before creating an opencode session.
 
+## Cross-Machine Dependencies
+
+A trigger can wait for work owned by another AIBridge machine without creating a local placeholder job. Keep existing local job IDs as strings and use an explicit object for a remote dependency:
+
+```json
+{
+  "depends_on": [
+    "local-job-id",
+    { "agent_id": "test-vps", "job_id": "remote-test-job" }
+  ]
+}
+```
+
+The waiting job remains blocked until every dependency completes. The remote machine sends its terminal report to the stored `callback_url` with the configured bearer token. The receiving machine accepts a report only when its `target_agent_id` matches the local agent and its `source_agent_id` is allowlisted. A completed remote dependency starts newly ready work; a failed or timed-out remote dependency fails the waiting job.
+
 ## Safety Model
 
 - Keep bridge ports Tailscale-only.

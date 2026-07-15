@@ -1,4 +1,3 @@
-// src/tasks/syncer.ts
 import { readFile, writeFile, mkdir } from "node:fs/promises"
 import { dirname } from "node:path"
 import type { TaskEntry, TaskGraphSyncer } from "./types.js"

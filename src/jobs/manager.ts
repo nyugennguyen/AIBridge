@@ -68,8 +68,8 @@ export class JobManager {
 
       const allCompleted = depStatuses.every((d) => d.status === "completed")
       if (allCompleted) {
-        await this.transition(job.id, "accepted", now)
-        unblocked.push(await this.getJob(job.id))
+        const record = await this.transition(job.id, "accepted", now)
+        unblocked.push(record)
       }
     }
 

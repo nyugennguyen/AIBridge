@@ -229,4 +229,63 @@ describe("JobManager", () => {
       expect(unblocked).toHaveLength(0)
     })
   })
+
+  describe("remote dependencies", () => {
+    it("unblocks a job after its matching remote dependency completes", async () => {
+      const jobs = await manager()
+      const blocked = await jobs.createJob(trigger({ job_id: "blocked_remote" }))
+      await jobs.markBlocked(blocked.id, [{ agent_id: "test-vps", job_id: "remote_1" }])
+
+      const unblocked = await jobs.recordRemoteReport({
+        source_agent_id: "test-vps",
+        job_id: "remote_1",
+        status: "completed",
+      })
+
+      expect(unblocked).toHaveLength(1)
+      expect(unblocked[0].status).toBe("accepted")
+      expect((await jobs.getJob(blocked.id)).remoteDependencies?.[0]?.status).toBe("completed")
+    })
+
+    it("fails a job after its matching remote dependency fails", async () => {
+      const jobs = await manager()
+      const blocked = await jobs.createJob(trigger({ job_id: "blocked_remote_failure" }))
+      await jobs.markBlocked(blocked.id, [{ agent_id: "test-vps", job_id: "remote_1" }])
+
+      const unblocked = await jobs.recordRemoteReport({
+        source_agent_id: "test-vps",
+        job_id: "remote_1",
+        status: "failed",
+      })
+
+      expect(unblocked).toHaveLength(0)
+      expect((await jobs.getJob(blocked.id)).status).toBe("failed")
+    })
+  })
+
+  describe("callback delivery", () => {
+    it("keeps a completed job completed when callback delivery fails", async () => {
+      const jobs = await manager()
+      const job = await jobs.createJob(trigger({ job_id: "callback_delivery" }))
+      await jobs.markCompleted(job.id)
+
+      await jobs.markCallbackDelivery(job.id, "failed", "Callback failed after 1 attempts")
+
+      const stored = await jobs.getJob(job.id)
+      expect(stored.status).toBe("completed")
+      expect(stored.callbackDelivery?.status).toBe("failed")
+    })
+
+    it("returns jobs with pending or failed callback delivery for retry", async () => {
+      const jobs = await manager()
+      const pending = await jobs.createJob(trigger({ job_id: "callback_pending" }))
+      const delivered = await jobs.createJob(trigger({ job_id: "callback_delivered" }))
+      await jobs.markCompleted(pending.id)
+      await jobs.markCompleted(delivered.id)
+      await jobs.markCallbackDelivery(pending.id, "pending")
+      await jobs.markCallbackDelivery(delivered.id, "delivered")
+
+      expect((await jobs.listCallbackRetries()).map((job) => job.id)).toEqual([pending.id])
+    })
+  })
 })

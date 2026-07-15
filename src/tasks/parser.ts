@@ -1,4 +1,3 @@
-// src/tasks/parser.ts
 import type { TaskEntry, TaskStatus } from "./types.js"
 
 const TASK_HEADING_RE =

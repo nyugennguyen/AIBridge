@@ -131,6 +131,24 @@ describe("dependency resolution", () => {
     expect(response.statusCode).toBe(400)
     expect(response.json().error).toContain("Dependency job not found")
   })
+
+  it("accepts typed remote dependencies without a local job record", async () => {
+    const { app, opencode } = await buildTestApp()
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/trigger",
+      headers: { authorization: "Bearer secret" },
+      payload: {
+        ...validTrigger({ job_id: "job_remote_wait" }),
+        depends_on: [{ agent_id: "test-vps", job_id: "remote_1" }],
+      },
+    })
+
+    expect(response.statusCode).toBe(202)
+    expect(response.json().status).toBe("blocked")
+    expect(opencode.createdSessions).toBe(0)
+  })
 })
 
 describe("task graph sync integration", () => {

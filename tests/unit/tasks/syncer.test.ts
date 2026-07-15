@@ -51,4 +51,52 @@ describe("FileTaskGraphSyncer", () => {
     expect(content).toContain("## #2")
     expect(content).toContain("[status:running]")
   })
+
+  describe("parseTaskDependencies", () => {
+    it("returns dependency map from tasks with depends_on", async () => {
+      await writeFile(
+        tasksPath,
+        [
+          "# Project Tasks",
+          "",
+          "## #1 Implement auth [agent:mac-dev] [status:done]",
+          "",
+          "## #2 Deploy staging [agent:vps-deploy] [status:running] [needs: #1]",
+          "",
+          "## #3 Integration tests [agent:mac-dev] [status:blocked] [needs: #1, #2]",
+          "",
+        ].join("\n"),
+        "utf8",
+      )
+      const syncer = new FileTaskGraphSyncer(tasksPath)
+      const deps = await syncer.parseTaskDependencies()
+
+      expect(deps.size).toBe(3)
+      expect(deps.get("#1")).toEqual([])
+      expect(deps.get("#2")).toEqual(["#1"])
+      expect(deps.get("#3")).toEqual(["#1", "#2"])
+    })
+
+    it("returns empty map when file does not exist", async () => {
+      const syncer = new FileTaskGraphSyncer(tasksPath)
+      const deps = await syncer.parseTaskDependencies()
+
+      expect(deps.size).toBe(0)
+    })
+
+    it("returns tasks with empty depends_on arrays when no dependencies declared", async () => {
+      await writeFile(
+        tasksPath,
+        ["# Project Tasks", "", "## #1 Task A [status:pending]", "", "## #2 Task B [status:pending]", ""].join(
+          "\n",
+        ),
+        "utf8",
+      )
+      const syncer = new FileTaskGraphSyncer(tasksPath)
+      const deps = await syncer.parseTaskDependencies()
+
+      expect(deps.get("#1")).toEqual([])
+      expect(deps.get("#2")).toEqual([])
+    })
+  })
 })

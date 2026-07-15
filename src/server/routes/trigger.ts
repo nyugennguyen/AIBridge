@@ -31,11 +31,13 @@ export function registerTriggerRoute(app: FastifyInstance, dependencies: AppDepe
 
     try {
       const { depends_on, task_id, ...triggerData } = trigger
-      const hasDeps = depends_on && depends_on.length > 0
+      const dependencyReferences = depends_on ?? []
+      const localDependencyIds = dependencyReferences.filter((dependency): dependency is string => typeof dependency === "string")
+      const hasDeps = dependencyReferences.length > 0
 
       const depJobs = []
-      if (hasDeps) {
-        for (const depId of depends_on!) {
+      if (localDependencyIds.length > 0) {
+        for (const depId of localDependencyIds) {
           try {
             depJobs.push(await dependencies.jobManager.getJob(depId))
           } catch {
@@ -47,8 +49,9 @@ export function registerTriggerRoute(app: FastifyInstance, dependencies: AppDepe
       const job = await dependencies.jobManager.createJob(trigger)
       const resolvedTaskId = task_id ?? `#${job.id}`
 
-      if (hasDeps && !depJobs.every((dep) => dep.status === "completed")) {
-        await dependencies.jobManager.markBlocked(job.id, depends_on!)
+      const hasRemoteDependencies = localDependencyIds.length !== dependencyReferences.length
+      if (hasDeps && (hasRemoteDependencies || !depJobs.every((dep) => dep.status === "completed"))) {
+        await dependencies.jobManager.markBlocked(job.id, dependencyReferences)
         await dependencies.taskGraphSyncer.syncJobToTask(resolvedTaskId, "blocked", { Job: job.id })
 
         return reply.code(202).send(

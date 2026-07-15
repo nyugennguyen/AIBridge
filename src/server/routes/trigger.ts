@@ -44,7 +44,7 @@ export function registerTriggerRoute(app: FastifyInstance, dependencies: AppDepe
         }
       }
 
-      const job = await dependencies.jobManager.createJob(triggerData)
+      const job = await dependencies.jobManager.createJob(trigger)
       const resolvedTaskId = task_id ?? `#${job.id}`
 
       if (hasDeps && !depJobs.every((dep) => dep.status === "completed")) {

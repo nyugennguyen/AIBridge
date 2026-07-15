@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { buildTestApp, InMemoryJobStore, validTrigger } from "./fixtures.js"
+import { buildTestApp, FakeTaskGraphSyncer, InMemoryJobStore, validTrigger } from "./fixtures.js"
 import { JobManager } from "../../src/jobs/manager.js"
 
 describe("trigger flow", () => {
@@ -130,5 +130,119 @@ describe("dependency resolution", () => {
 
     expect(response.statusCode).toBe(400)
     expect(response.json().error).toContain("Dependency job not found")
+  })
+})
+
+describe("task graph sync integration", () => {
+  it("calls taskGraphSyncer.syncJobToTask with running status for immediate triggers", async () => {
+    const taskGraphSyncer = new FakeTaskGraphSyncer()
+    const { app } = await buildTestApp({ taskGraphSyncer })
+
+    await app.inject({
+      method: "POST",
+      url: "/trigger",
+      headers: { authorization: "Bearer secret" },
+      payload: validTrigger(),
+    })
+
+    expect(taskGraphSyncer.synced).toHaveLength(1)
+    expect(taskGraphSyncer.synced[0]).toMatchObject({
+      status: "running",
+      metadata: expect.objectContaining({ Job: "job_1" }),
+    })
+  })
+
+  it("calls taskGraphSyncer.syncJobToTask with blocked status for blocked triggers", async () => {
+    const jobManager = new JobManager(new InMemoryJobStore())
+    const dep = await jobManager.createJob(validTrigger({ job_id: "dep_1" }))
+
+    const taskGraphSyncer = new FakeTaskGraphSyncer()
+    const { app } = await buildTestApp({ jobManager, taskGraphSyncer })
+
+    await app.inject({
+      method: "POST",
+      url: "/trigger",
+      headers: { authorization: "Bearer secret" },
+      payload: {
+        ...validTrigger({ job_id: "job_2" }),
+        depends_on: [dep.id],
+      },
+    })
+
+    expect(taskGraphSyncer.synced).toHaveLength(1)
+    expect(taskGraphSyncer.synced[0]).toMatchObject({
+      status: "blocked",
+      metadata: expect.objectContaining({ Job: "job_2" }),
+    })
+  })
+
+  it("includes task_id in response when provided in trigger", async () => {
+    const { app } = await buildTestApp()
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/trigger",
+      headers: { authorization: "Bearer secret" },
+      payload: { ...validTrigger(), task_id: "#3" },
+    })
+
+    expect(response.statusCode).toBe(202)
+    const body = response.json()
+    expect(body.task_id).toBe("#3")
+  })
+
+  it("includes status field in trigger response", async () => {
+    const { app } = await buildTestApp()
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/trigger",
+      headers: { authorization: "Bearer secret" },
+      payload: validTrigger(),
+    })
+
+    expect(response.statusCode).toBe(202)
+    const body = response.json()
+    expect(body.status).toBe("accepted")
+  })
+
+  it("includes task_id in blocked response when provided", async () => {
+    const jobManager = new JobManager(new InMemoryJobStore())
+    const dep = await jobManager.createJob(validTrigger({ job_id: "dep_1" }))
+
+    const { app } = await buildTestApp({ jobManager })
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/trigger",
+      headers: { authorization: "Bearer secret" },
+      payload: {
+        ...validTrigger({ job_id: "job_2" }),
+        depends_on: [dep.id],
+        task_id: "#5",
+      },
+    })
+
+    expect(response.statusCode).toBe(202)
+    const body = response.json()
+    expect(body.task_id).toBe("#5")
+    expect(body.status).toBe("blocked")
+  })
+})
+
+describe("task_id persistence bug", () => {
+  it("persists task_id in the job trigger after createJob", async () => {
+    const jobManager = new JobManager(new InMemoryJobStore())
+    const { app } = await buildTestApp({ jobManager })
+
+    await app.inject({
+      method: "POST",
+      url: "/trigger",
+      headers: { authorization: "Bearer secret" },
+      payload: { ...validTrigger(), task_id: "#7" },
+    })
+
+    const job = await jobManager.getJob("job_1")
+    expect(job.trigger.task_id).toBe("#7")
   })
 })

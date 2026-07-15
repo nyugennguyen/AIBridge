@@ -19,9 +19,50 @@ const opencodeClient = new SdkOpencodeClientAdapter({
 })
 const jobManager = new JobManager(new JsonFileJobStore(".aibridge/jobs"))
 const taskGraphSyncer = new FileTaskGraphSyncer(".aibridge/tasks.md")
+const callbackReporter = new CallbackReporter({ attempts: config.timeouts.callback_retry_attempts, baseDelayMs: 250 })
+
+function terminalReportStatus(status: Awaited<ReturnType<typeof jobManager.getJob>>["status"]): "completed" | "failed" | "timed_out" | "callback_failed" {
+  switch (status) {
+    case "completed":
+    case "failed":
+    case "timed_out":
+    case "callback_failed":
+      return status
+    case "received":
+    case "accepted":
+    case "blocked":
+    case "session_created":
+    case "running":
+    case "reporting":
+      throw new Error(`Cannot report non-terminal job status ${status}`)
+  }
+}
+
+async function reportTerminalJob(job: Awaited<ReturnType<typeof jobManager.getJob>>): Promise<void> {
+  try {
+    await jobManager.markCallbackDelivery(job.id, "pending")
+    const report = {
+      job_id: job.id,
+      source_agent_id: config.agent_id,
+      target_agent_id: job.trigger.source_agent_id,
+      ...(job.opencodeSessionId ? { opencode_session_id: job.opencodeSessionId } : {}),
+      status: terminalReportStatus(job.status),
+      summary: job.error ?? `Job ${job.id} ${job.status}`,
+      findings: [],
+      artifacts: [],
+      started_at: job.createdAt,
+      completed_at: job.updatedAt,
+    }
+    await callbackReporter.send(job.trigger.callback_url, report, config.security.bearer_token)
+    await jobManager.markCallbackDelivery(job.id, "delivered")
+  } catch (error) {
+    await jobManager.markCallbackDelivery(job.id, "failed", error instanceof Error ? error.message : "Callback delivery failed")
+  }
+}
 
 const monitorSession: AppDependencies["monitorSession"] = async (job) => {
   if (!job.opencodeSessionId) throw new Error(`Job ${job.id} has no opencode session`)
+  let terminalJob
   try {
     await waitForIdle(opencodeClient, job.opencodeSessionId, {
       directory: job.trigger.project_dir,
@@ -30,10 +71,10 @@ const monitorSession: AppDependencies["monitorSession"] = async (job) => {
       permissionPolicy: new StaticPermissionPolicy(config.permissions),
       planMetadata: job.trigger.metadata,
     })
-    await jobManager.markCompleted(job.id)
+    terminalJob = await jobManager.markCompleted(job.id)
     await taskGraphSyncer.syncJobToTask(job.trigger.task_id ?? `#${job.id}`, "done")
   } catch (error) {
-    await jobManager.markFailed(job.id, error instanceof Error ? error.message : "Session failed")
+    terminalJob = await jobManager.markFailed(job.id, error instanceof Error ? error.message : "Session failed")
     await taskGraphSyncer.syncJobToTask(job.trigger.task_id ?? `#${job.id}`, "failed")
   }
 
@@ -51,16 +92,19 @@ const monitorSession: AppDependencies["monitorSession"] = async (job) => {
       await jobManager.markFailed(unblocked.id, err instanceof Error ? err.message : "Execution failed")
     }
   }
+  await reportTerminalJob(terminalJob)
 }
 
 const app = createApp({
   config,
   jobManager,
   opencodeClient,
-  callbackReporter: new CallbackReporter({ attempts: config.timeouts.callback_retry_attempts, baseDelayMs: 250 }),
-  reports: [],
+  callbackReporter,
   taskGraphSyncer,
   monitorSession,
 })
+
+for (const job of await jobManager.sweepExpiredJobs()) void reportTerminalJob(job)
+for (const job of await jobManager.listCallbackRetries()) void reportTerminalJob(job)
 
 await app.listen({ host: config.bridge.host, port: config.bridge.port })

@@ -325,15 +325,82 @@
     </section>
 
     <section class="section">
+      <h2>Project Identity & Shared Context</h2>
+      <div class="grid cols-2">
+        <div class="node accent-yellow">
+          <strong>Project Identity</strong>
+          <small>Git-native detection via <code>git remote get-url origin</code>. Both machines see the same <code>project_id</code> regardless of local path. Config in <code>.aibridge/project.json</code>.</small>
+        </div>
+        <div class="node accent-green">
+          <strong>Shared Context Files</strong>
+          <small><code>context.md</code> for decisions/constraints, <code>tasks.md</code> for dependency tracking. Synced via git, human-readable, version-controlled.</small>
+        </div>
+      </div>
+      <div class="callout">
+        <strong>Key insight:</strong> Git already solves "same project" — use the remote URL as canonical identity. Both machines read the same <code>.aibridge/</code> directory from the repo.
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>Task Graph (Hive-Inspired)</h2>
+      <div class="diagram">
+        <div class="box" style="margin-bottom: 18px;">
+          <strong>Format: <code>.aibridge/tasks.md</code></strong>
+          <pre style="color: var(--muted); font-size: 13px; margin: 12px 0 0; overflow-x: auto;">
+## #1 Implement JWT auth [agent:mac-dev] [status:done]
+- Completed: 2026-06-23 10:00
+- Summary: Bearer token auth, bcrypt passwords
+
+## #2 Deploy to staging [agent:vps-deploy] [status:running] [needs: #1]
+- Started: 2026-06-23 10:05
+- Progress: Building docker image...
+
+## #3 Integration tests [agent:mac-dev] [status:blocked] [needs: #2]
+- Waiting for staging deploy to complete
+          </pre>
+        </div>
+      </div>
+      <div class="grid cols-3">
+        <div class="node accent-blue"><strong>Dependencies</strong><small><code>[needs: #1, #2]</code> — job waits for specified tasks to complete.</small></div>
+        <div class="node accent-purple"><strong>States</strong><small>pending → blocked → running → done/failed. Blocked jobs auto-unblock.</small></div>
+        <div class="node accent-green"><strong>Sync</strong><small>Tasks.md synced via git. Jobs/*.json stay local for speed.</small></div>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>Extended Job State Machine</h2>
+      <div class="diagram">
+        <div class="box" style="text-align: center; padding: 24px;">
+          <div style="display: flex; justify-content: center; align-items: center; gap: 16px; flex-wrap: wrap;">
+            <span class="pill">pending</span>
+            <span style="color: var(--cyan);">→</span>
+            <span class="pill" style="background: rgba(255,209,102,.12); border-color: rgba(255,209,102,.3);">blocked</span>
+            <span style="color: var(--cyan);">→</span>
+            <span class="pill">accepted</span>
+            <span style="color: var(--cyan);">→</span>
+            <span class="pill">running</span>
+            <span style="color: var(--cyan);">→</span>
+            <span class="pill" style="background: rgba(100,217,135,.12); border-color: rgba(100,217,135,.3);">completed</span>
+          </div>
+          <div style="margin-top: 16px; color: var(--muted); font-size: 13px;">
+            <strong>New:</strong> Blocked jobs wait for dependencies. On completion → <code>unblockDependents()</code> cascades.
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
       <h2>Core Components</h2>
       <div class="grid cols-3">
         <div class="node accent-blue"><strong>Bridge HTTP Server</strong><small>Owns /trigger, /report, /health, /jobs/:id endpoints.</small></div>
         <div class="node accent-green"><strong>Opencode Adapter</strong><small>Creates sessions, sends prompts, monitors status through SDK/API.</small></div>
-        <div class="node accent-purple"><strong>Job Lifecycle Manager</strong><small>Tracks received → running → reporting → completed/failed.</small></div>
+        <div class="node accent-purple"><strong>Job Lifecycle Manager</strong><small>Tracks dependencies, unblocks dependents, cascade-fails.</small></div>
         <div class="node accent-yellow"><strong>Agent Registry</strong><small>Static config in POC; dynamic discovery later.</small></div>
         <div class="node accent-blue"><strong>Callback Reporter</strong><small>Retries report delivery and persists failed callbacks.</small></div>
         <div class="node accent-red"><strong>Security Layer</strong><small>Tailscale ACLs, bearer/HMAC auth, project-dir allowlists.</small></div>
         <div class="node accent-purple"><strong>Plan Annotator</strong><small>Approval gate for generated plans before dispatching sensitive or multi-agent work.</small></div>
+        <div class="node accent-yellow"><strong>TaskGraphSyncer</strong><small>Reads/writes tasks.md, syncs job state to task graph.</small></div>
+        <div class="node accent-green"><strong>MemoryStore</strong><small>Shared context: decisions, constraints, handoffs.</small></div>
       </div>
     </section>
 
@@ -367,8 +434,8 @@
       <h2>Message Contracts</h2>
       <div class="grid cols-2">
         <div class="node accent-blue">
-          <strong>Trigger request</strong>
-          <small><code>source_agent_id</code>, <code>target_agent_id</code>, <code>capability</code>, <code>project_dir</code>, <code>prompt</code>, <code>callback_url</code>, <code>timeout_seconds</code>, metadata including <code>plan_status</code> and <code>plan_reference</code>.</small>
+          <strong>Trigger request (extended)</strong>
+          <small><code>source_agent_id</code>, <code>target_agent_id</code>, <code>capability</code>, <code>project_dir</code>, <code>prompt</code>, <code>callback_url</code>, <code>timeout_seconds</code>, <code>depends_on[]</code>, <code>task_id</code>, metadata including <code>plan_status</code> and <code>plan_reference</code>.</small>
         </div>
         <div class="node accent-green">
           <strong>Report callback</strong>
@@ -398,12 +465,19 @@
       <div class="grid cols-2">
         <div class="node accent-green">
           <strong>Include</strong>
-          <small>TypeScript bridge, two-machine config, /trigger, /report, Plan Annotator approval step, opencode SDK/API, new session per trigger, monitoring, callbacks, tmux run docs, tests, structured logs.</small>
+          <small>TypeScript bridge, two-machine config, /trigger, /report, Plan Annotator approval step, opencode SDK/API, new session per trigger, monitoring, callbacks, tmux run docs, tests, structured logs, <strong>task graph with dependencies</strong>, <strong>shared context files</strong>, <strong>git-based project identity</strong>.</small>
         </div>
         <div class="node accent-red">
           <strong>Exclude</strong>
-          <small>Public internet exposure, full dynamic discovery, dashboard, non-opencode providers, Kubernetes, queue infrastructure, browser UI.</small>
+          <small>Public internet exposure, full dynamic discovery, dashboard, non-opencode providers, Kubernetes, queue infrastructure, browser UI, distributed task sync (future).</small>
         </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>Inspiration: Hive</h2>
+      <div class="callout">
+        Task graph design inspired by <a href="https://github.com/tt-a1i/hive" style="color: var(--cyan);">Hive</a> — a browser-native orchestration workbench for CLI coding agents. Hive's <code>.hive/tasks.md</code> pattern and dependency resolution algorithm were adapted for AIBridge's remote HTTP model. Key differences: AIBridge operates over Tailscale (not local PTY), uses git for sync (not chokidar/WebSocket), and supports cross-machine coordination.
       </div>
     </section>
   </main>

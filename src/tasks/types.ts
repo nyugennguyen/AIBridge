@@ -1,4 +1,3 @@
-// src/tasks/types.ts
 export type TaskStatus = "pending" | "blocked" | "running" | "done" | "failed"
 
 export interface TaskEntry {

@@ -33,10 +33,11 @@ export function registerTriggerRoute(app: FastifyInstance, dependencies: AppDepe
       const { depends_on, task_id, ...triggerData } = trigger
       const hasDeps = depends_on && depends_on.length > 0
 
+      const depJobs = []
       if (hasDeps) {
         for (const depId of depends_on!) {
           try {
-            await dependencies.jobManager.getJob(depId)
+            depJobs.push(await dependencies.jobManager.getJob(depId))
           } catch {
             return reply.code(400).send({ error: `Dependency job not found: ${depId}` })
           }
@@ -44,32 +45,22 @@ export function registerTriggerRoute(app: FastifyInstance, dependencies: AppDepe
       }
 
       const job = await dependencies.jobManager.createJob(triggerData)
+      const resolvedTaskId = task_id ?? `#${job.id}`
 
-      if (hasDeps) {
-        const allCompleted = await Promise.all(
-          depends_on!.map(async (depId) => {
-            const dep = await dependencies.jobManager.getJob(depId)
-            return dep.status === "completed"
+      if (hasDeps && !depJobs.every((dep) => dep.status === "completed")) {
+        await dependencies.jobManager.markBlocked(job.id, depends_on!)
+        await dependencies.taskGraphSyncer.syncJobToTask(resolvedTaskId, "blocked", { Job: job.id })
+
+        return reply.code(202).send(
+          triggerResponseSchema.parse({
+            accepted: true,
+            job_id: job.id,
+            target_agent_id: dependencies.config.agent_id,
+            status_url: `${dependencies.config.bridge.public_url}/jobs/${job.id}`,
+            status: "blocked",
+            task_id: task_id,
           }),
         )
-
-        if (!allCompleted.every(Boolean)) {
-          await dependencies.jobManager.markBlocked(job.id, depends_on!)
-          await dependencies.taskGraphSyncer.syncJobToTask(task_id ?? `#${job.id}`, "blocked", {
-            Job: job.id,
-          })
-
-          return reply.code(202).send(
-            triggerResponseSchema.parse({
-              accepted: true,
-              job_id: job.id,
-              target_agent_id: dependencies.config.agent_id,
-              status_url: `${dependencies.config.bridge.public_url}/jobs/${job.id}`,
-              status: "blocked",
-              task_id: task_id,
-            }),
-          )
-        }
       }
 
       const session = await dependencies.opencodeClient.createSession(`AIBridge ${job.id}`, triggerData.project_dir)
@@ -77,7 +68,7 @@ export function registerTriggerRoute(app: FastifyInstance, dependencies: AppDepe
       await dependencies.opencodeClient.sendPromptAsync(session.id, triggerData.prompt, triggerData.project_dir)
       const running = await dependencies.jobManager.markRunning(job.id)
 
-      await dependencies.taskGraphSyncer.syncJobToTask(task_id ?? `#${job.id}`, "running", {
+      await dependencies.taskGraphSyncer.syncJobToTask(resolvedTaskId, "running", {
         Job: job.id,
         Session: session.id,
       })

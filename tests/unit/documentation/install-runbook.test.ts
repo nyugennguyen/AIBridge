@@ -226,6 +226,13 @@ describe("install runbook — README content", () => {
     expect(readme).toContain("release:check")
   })
 
+  it("documents released versions in CHANGELOG.md", async () => {
+    const changelog = await readFile(new URL("../../../CHANGELOG.md", import.meta.url), "utf8")
+
+    expect(changelog).toContain("## [1.0.1]")
+    expect(changelog).toContain("## [1.0.0]")
+  })
+
   // ── Safety / prohibited exposure ─────────────────────────────────────
 
   it("does NOT contain real tokens or passwords", async () => {

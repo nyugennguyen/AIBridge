@@ -11,7 +11,7 @@ const ROOT = resolve(import.meta.dirname, "..", "..")
 beforeAll(async () => {
   const result = await run("bun run build")
   if (result.exitCode !== 0) throw new Error(result.stderr)
-})
+}, 60_000)
 
 /**
  * Run a command in the project root and return stdout.

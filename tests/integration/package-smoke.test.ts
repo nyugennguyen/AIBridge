@@ -1,0 +1,228 @@
+import { exec } from "node:child_process"
+import { readFile } from "node:fs/promises"
+import { promisify } from "node:util"
+import { resolve } from "node:path"
+import { describe, expect, it } from "vitest"
+
+const execAsync = promisify(exec)
+
+const ROOT = resolve(import.meta.dirname, "..", "..")
+
+/**
+ * Run a command in the project root and return stdout.
+ */
+async function run(cmd: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  try {
+    const result = await execAsync(cmd, { cwd: ROOT, timeout: 60_000 })
+    return { stdout: result.stdout, stderr: result.stderr, exitCode: 0 }
+  } catch (err: unknown) {
+    const e = err as { stdout?: string; stderr?: string; code?: number }
+    return { stdout: e.stdout ?? "", stderr: e.stderr ?? "", exitCode: e.code ?? 1 }
+  }
+}
+
+/**
+ * Parse `bun pm pack --dry-run` output to extract the list of packed file paths.
+ * Output may come from stdout or stderr depending on bun version.
+ */
+function parsePackFiles(stdout: string, stderr: string): string[] {
+  const files: string[] = []
+  const combined = stdout + "\n" + stderr
+  for (const line of combined.split("\n")) {
+    const match = line.match(/^packed\s+\S+\s+(.+)$/)
+    if (match) {
+      files.push(match[1]!.trim())
+    }
+  }
+  return files
+}
+
+describe("package smoke — pack manifest", () => {
+  it("includes LICENSE in the tarball", async () => {
+    const { stdout, stderr } = await run("bun pm pack --dry-run")
+    const files = parsePackFiles(stdout, stderr)
+
+    expect(files).toContain("LICENSE")
+  })
+
+  it("includes README.md in the tarball", async () => {
+    const { stdout, stderr } = await run("bun pm pack --dry-run")
+    const files = parsePackFiles(stdout, stderr)
+
+    expect(files).toContain("README.md")
+  })
+
+  it("includes dist/cli.js in the tarball", async () => {
+    const { stdout, stderr } = await run("bun pm pack --dry-run")
+    const files = parsePackFiles(stdout, stderr)
+
+    expect(files).toContain("dist/cli.js")
+  })
+
+  it("includes package.json in the tarball", async () => {
+    const { stdout, stderr } = await run("bun pm pack --dry-run")
+    const files = parsePackFiles(stdout, stderr)
+
+    expect(files).toContain("package.json")
+  })
+
+  it("does NOT include source TypeScript files", async () => {
+    const { stdout, stderr } = await run("bun pm pack --dry-run")
+    const files = parsePackFiles(stdout, stderr)
+    const tsFiles = files.filter((f) => f.endsWith(".ts"))
+
+    expect(tsFiles).toEqual([])
+  })
+
+  it("does NOT include test files", async () => {
+    const { stdout, stderr } = await run("bun pm pack --dry-run")
+    const files = parsePackFiles(stdout, stderr)
+    const testFiles = files.filter((f) => f.includes("test") || f.includes("spec"))
+
+    expect(testFiles).toEqual([])
+  })
+
+  it("does NOT include config example files", async () => {
+    const { stdout, stderr } = await run("bun pm pack --dry-run")
+    const files = parsePackFiles(stdout, stderr)
+    const configFiles = files.filter((f) => f.startsWith("config/"))
+
+    expect(configFiles).toEqual([])
+  })
+
+  it("does NOT include .omo directory", async () => {
+    const { stdout, stderr } = await run("bun pm pack --dry-run")
+    const files = parsePackFiles(stdout, stderr)
+    const omoFiles = files.filter((f) => f.startsWith(".omo"))
+
+    expect(omoFiles).toEqual([])
+  })
+
+  it("does NOT include scripts directory", async () => {
+    const { stdout, stderr } = await run("bun pm pack --dry-run")
+    const files = parsePackFiles(stdout, stderr)
+    const scriptFiles = files.filter((f) => f.startsWith("scripts/"))
+
+    expect(scriptFiles).toEqual([])
+  })
+
+  it("does NOT include node_modules", async () => {
+    const { stdout, stderr } = await run("bun pm pack --dry-run")
+    const files = parsePackFiles(stdout, stderr)
+    const nodeModulesFiles = files.filter((f) => f.startsWith("node_modules"))
+
+    expect(nodeModulesFiles).toEqual([])
+  })
+
+  it("does NOT include .git directory", async () => {
+    const { stdout, stderr } = await run("bun pm pack --dry-run")
+    const files = parsePackFiles(stdout, stderr)
+    const gitFiles = files.filter((f) => f.startsWith(".git"))
+
+    expect(gitFiles).toEqual([])
+  })
+
+  it("does NOT include bun.lock", async () => {
+    const { stdout, stderr } = await run("bun pm pack --dry-run")
+    const files = parsePackFiles(stdout, stderr)
+
+    expect(files).not.toContain("bun.lock")
+  })
+
+  it("only includes dist/, README.md, LICENSE, and package.json", async () => {
+    const { stdout, stderr } = await run("bun pm pack --dry-run")
+    const files = parsePackFiles(stdout, stderr)
+
+    for (const file of files) {
+      const allowed =
+        file === "package.json" ||
+        file === "README.md" ||
+        file === "LICENSE" ||
+        file.startsWith("dist/")
+      if (!allowed) {
+        throw new Error(`Unexpected file in pack: ${file}`)
+      }
+    }
+  })
+})
+
+describe("package smoke — CLI", () => {
+  it("built cli.js --help exits 0 and shows commands", async () => {
+    const { stdout, exitCode } = await run("bun dist/cli.js --help")
+
+    expect(exitCode).toBe(0)
+    expect(stdout).toContain("setup")
+    expect(stdout).toContain("start")
+    expect(stdout).toContain("serve")
+    expect(stdout).toContain("status")
+  })
+
+  it("built cli.js --version matches manifest", async () => {
+    const manifest = JSON.parse(await readFile(resolve(ROOT, "package.json"), "utf8"))
+    const { stdout, exitCode } = await run("bun dist/cli.js --version")
+
+    expect(exitCode).toBe(0)
+    expect(stdout.trim()).toBe(manifest.version)
+  })
+
+  it("built cli.js --help does NOT show _opencode", async () => {
+    const { stdout } = await run("bun dist/cli.js --help")
+
+    expect(stdout).not.toContain("_opencode")
+  })
+
+  it("built cli.js with no args exits nonzero", async () => {
+    const { exitCode } = await run("bun dist/cli.js")
+
+    expect(exitCode).not.toBe(0)
+  })
+
+  it("built cli.js with unknown command exits nonzero", async () => {
+    const { exitCode, stdout } = await run("bun dist/cli.js bogus")
+
+    expect(exitCode).not.toBe(0)
+    expect(stdout).toContain("unknown")
+  })
+})
+
+describe("package smoke — manifest contract", () => {
+  it("manifest declares correct scoped name", async () => {
+    const manifest = JSON.parse(await readFile(resolve(ROOT, "package.json"), "utf8"))
+
+    expect(manifest.name).toBe("@nyugennguyen/aibridge")
+  })
+
+  it("manifest is not private", async () => {
+    const manifest = JSON.parse(await readFile(resolve(ROOT, "package.json"), "utf8"))
+
+    expect(manifest.private).toBeFalsy()
+  })
+
+  it("manifest declares MIT license", async () => {
+    const manifest = JSON.parse(await readFile(resolve(ROOT, "package.json"), "utf8"))
+
+    expect(manifest.license).toBe("MIT")
+  })
+
+  it("manifest declares aibr bin target", async () => {
+    const manifest = JSON.parse(await readFile(resolve(ROOT, "package.json"), "utf8"))
+
+    expect(manifest.bin?.aibr).toBe("./dist/cli.js")
+  })
+
+  it("manifest declares exact dependency versions (no ranges)", async () => {
+    const manifest = JSON.parse(await readFile(resolve(ROOT, "package.json"), "utf8"))
+    const deps = manifest.dependencies ?? {}
+
+    for (const [name, version] of Object.entries(deps)) {
+      expect(version).not.toMatch(/^\^|^\~|^>=|^>/)
+    }
+  })
+
+  it("manifest has release:check script", async () => {
+    const manifest = JSON.parse(await readFile(resolve(ROOT, "package.json"), "utf8"))
+
+    expect(manifest.scripts?.["release:check"]).toBeDefined()
+    expect(typeof manifest.scripts["release:check"]).toBe("string")
+  })
+})

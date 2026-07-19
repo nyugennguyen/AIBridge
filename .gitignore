@@ -3,4 +3,5 @@ dist/
 .env
 .DS_Store
 .aibridge/jobs/
-.omo/run-continuation/
+.omo/
+.playwright/

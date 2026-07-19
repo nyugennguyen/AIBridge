@@ -1,7 +1,7 @@
 {
   "agent_id": "test-vps",
   "bridge": {
-    "host": "0.0.0.0",
+    "host": "100.64.0.2",
     "port": 8787,
     "public_url": "http://test-vps.tailnet:8787"
   },
@@ -13,7 +13,6 @@
   },
   "security": {
     "auth_mode": "bearer-token",
-    "bearer_token": "replace-me",
     "allowed_sources": [
       {
         "source_agent_id": "dev-main",

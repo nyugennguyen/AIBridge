@@ -2,11 +2,16 @@ import { exec } from "node:child_process"
 import { readFile } from "node:fs/promises"
 import { promisify } from "node:util"
 import { resolve } from "node:path"
-import { describe, expect, it } from "vitest"
+import { beforeAll, describe, expect, it } from "vitest"
 
 const execAsync = promisify(exec)
 
 const ROOT = resolve(import.meta.dirname, "..", "..")
+
+beforeAll(async () => {
+  const result = await run("bun run build")
+  if (result.exitCode !== 0) throw new Error(result.stderr)
+})
 
 /**
  * Run a command in the project root and return stdout.

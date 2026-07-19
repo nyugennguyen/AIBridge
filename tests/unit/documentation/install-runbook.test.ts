@@ -103,6 +103,57 @@ describe("install runbook — README content", () => {
     expect(readme).toMatch(/permission|0600|0700|owner/i)
   })
 
+  it("documents a secure bearer-token generation command", async () => {
+    const readme = await readReadme()
+
+    expect(readme).toContain("openssl rand -hex 32")
+  })
+
+  it("states that both machines must use the same bearer token", async () => {
+    const readme = await readReadme()
+
+    expect(readme).toMatch(/both machines must use the same token/i)
+  })
+
+  it("explains that bearer tokens are stored outside config.json", async () => {
+    const readme = await readReadme()
+
+    expect(readme).toMatch(/not stored in `?config\.json`?/i)
+    expect(readme).toContain("secrets/bearer_token")
+  })
+
+  it("documents how to distinguish authenticated validation from a 401 response", async () => {
+    const readme = await readReadme()
+
+    expect(readme).toContain("/trigger")
+    expect(readme).toContain("An `HTTP 400` response means authentication succeeded")
+    expect(readme).toContain("An `HTTP 401` response means the token is missing or does not exactly match")
+  })
+
+  it("keeps the bearer token out of shell history during verification", async () => {
+    const readme = await readReadme()
+
+    expect(readme).toContain("read -rs AIBRIDGE_TOKEN")
+    expect(readme).toContain('Authorization: Bearer $AIBRIDGE_TOKEN')
+    expect(readme).toContain("unset AIBRIDGE_TOKEN")
+  })
+
+  it("documents bearer-token troubleshooting", async () => {
+    const readme = await readReadme()
+
+    expect(readme).toContain("Troubleshoot Bearer-Token Authentication")
+    expect(readme).toContain("`HTTP 401` from `/trigger` or `/report`")
+  })
+
+  it("documents bearer-token rotation for write-once secrets", async () => {
+    const readme = await readReadme()
+
+    expect(readme).toMatch(/write-once/i)
+    expect(readme).toMatch(/remove.*bearer_token/i)
+    expect(readme).toMatch(/both machines.*new shared token/i)
+    expect(readme).toContain("equivalent path beneath your configured XDG data directory")
+  })
+
   // ── Loopback OpenCode ───────────────────────────────────────────────
 
   it("documents loopback-only OpenCode binding (127.0.0.1)", async () => {

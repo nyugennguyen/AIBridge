@@ -20,6 +20,23 @@ describe("trigger flow", () => {
     expect(response.statusCode).toBe(401)
   })
 
+  it("rejects an incomplete authenticated trigger before creating a job", async () => {
+    const jobManager = new JobManager(new InMemoryJobStore())
+    const { app, opencode } = await buildTestApp({ jobManager })
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/trigger",
+      headers: { authorization: "Bearer secret" },
+      payload: {},
+    })
+
+    expect(response.statusCode).toBe(400)
+    expect(response.json()).toMatchObject({ error: "Invalid trigger payload" })
+    expect(opencode.createdSessions).toBe(0)
+    await expect(jobManager.getJob("job_1")).rejects.toThrow("Unknown job: job_1")
+  })
+
   it("rejects unauthorized source/capability pairs", async () => {
     const { app } = await buildTestApp()
 

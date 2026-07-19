@@ -1,6 +1,6 @@
 {
   "name": "@nyugennguyen/aibridge",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Private Tailscale bridge for OpenCode agents",
   "license": "MIT",
   "type": "module",
@@ -27,7 +27,7 @@
     "test:unit": "vitest run tests/unit",
     "test:integration": "vitest run tests/integration",
     "test:watch": "vitest",
-    "release:check": "bun install --frozen-lockfile && bun test && bun run typecheck && bun run build && bun dist/cli.js --help && bun pm pack --dry-run"
+    "release:check": "bun install --frozen-lockfile && bun run build && bun test && bun run typecheck && bun dist/cli.js --help && bun pm pack --dry-run"
   },
   "dependencies": {
     "@opencode-ai/sdk": "1.17.7",

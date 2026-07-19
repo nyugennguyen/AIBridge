@@ -4,7 +4,7 @@ import { BearerAuthProvider } from "../../security/auth-provider.js"
 import type { AppDependencies } from "../app.js"
 
 export function registerReportRoute(app: FastifyInstance, dependencies: AppDependencies): void {
-  const auth = new BearerAuthProvider(dependencies.config.security.bearer_token)
+  const auth = new BearerAuthProvider(dependencies.bearerToken)
 
   app.post("/report", async (request, reply) => {
     if (!auth.validate(request.headers.authorization)) return reply.code(401).send({ error: "Unauthorized" })

@@ -13,6 +13,7 @@ import { registerTriggerRoute } from "./routes/trigger.js"
 
 export interface AppDependencies {
   config: BridgeConfig
+  bearerToken: string
   jobManager: JobManager
   opencodeClient: OpencodeClient
   callbackReporter: CallbackReporter

@@ -36,7 +36,6 @@ export const bridgeConfigSchema = z.object({
   }),
   security: z.object({
     auth_mode: z.literal("bearer-token"),
-    bearer_token: z.string().min(1),
     allowed_sources: z.array(allowedSourceSchema),
   }),
   permissions: z.object({

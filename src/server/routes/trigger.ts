@@ -7,7 +7,7 @@ import { ConfigPlanReviewProvider } from "../../planning/provider.js"
 import type { AppDependencies } from "../app.js"
 
 export function registerTriggerRoute(app: FastifyInstance, dependencies: AppDependencies): void {
-  const auth = new BearerAuthProvider(dependencies.config.security.bearer_token)
+  const auth = new BearerAuthProvider(dependencies.bearerToken)
   const planReview = new ConfigPlanReviewProvider(dependencies.config.planning.require_approval_for)
 
   app.post("/trigger", async (request, reply) => {

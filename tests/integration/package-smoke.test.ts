@@ -13,6 +13,12 @@ beforeAll(async () => {
   if (result.exitCode !== 0) throw new Error(result.stderr)
 }, 60_000)
 
+it("builds the package before release smoke tests", async () => {
+  const manifest = await readFile(resolve(ROOT, "package.json"), "utf8")
+
+  expect(manifest).toContain('"release:check": "bun install --frozen-lockfile && bun run build && bun test')
+})
+
 /**
  * Run a command in the project root and return stdout.
  */

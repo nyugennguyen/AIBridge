@@ -62,6 +62,16 @@ export PATH="$(bun pm bin -g):$PATH"
 
 ## Setup
 
+### Create and share the bearer token
+
+AIBridge uses one shared bearer token to authenticate requests between the two hosts. Generate it once on a trusted machine:
+
+```bash
+openssl rand -hex 32
+```
+
+Save the value in an approved secret channel, such as a password manager or encrypted message. Enter that exact same value when `aibr setup` prompts for the bearer token on **both machines**. Do not put it in `config.json`, shell history, or source control.
+
 Run the interactive setup wizard on each machine:
 
 ```bash
@@ -88,6 +98,8 @@ The wizard will:
 4. **Validate and save** — write a Zod-validated JSON config and secrets file to your XDG directories with owner-only permissions.
 
 Setup does **not** start any services. When it completes, it tells you the next command to run.
+
+The bearer token is stored as `~/.local/share/aibridge/<profile>/secrets/bearer_token` by default (or beneath your configured XDG data directory). It is not stored in `config.json`.
 
 ### XDG Profile Locations
 
@@ -141,6 +153,22 @@ This reports:
 - `healthy` — tmux session exists and the bridge health endpoint responds.
 - `session_missing` — the tmux session is not running.
 - `bridge_unavailable` — the tmux session exists but the bridge is not responding.
+
+## Verify Cross-Host Authentication
+
+`aibr status` confirms that the local bridge is reachable, but `/health` does not require a bearer token. To verify that the two hosts share the same token without putting it in shell history, read it into a temporary shell variable, then send a deliberately incomplete request to the peer's protected trigger endpoint. Paste the token at the hidden prompt and press Enter:
+
+```bash
+read -rs AIBRIDGE_TOKEN
+printf '\n'
+curl -i -X POST http://test-vps.tailnet:8787/trigger \
+  -H "Authorization: Bearer $AIBRIDGE_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{}'
+unset AIBRIDGE_TOKEN
+```
+
+An `HTTP 400` response means authentication succeeded and AIBridge rejected only the intentionally incomplete request body. An `HTTP 401` response means the token is missing or does not exactly match the token saved on the peer. This request cannot create a job.
 
 ## Serve (advanced)
 
@@ -214,11 +242,24 @@ These are reference examples only. Use `aibr setup` to create your actual profil
 
 Important fields:
 
-- `security.bearer_token`: protects AIBridge webhook endpoints. Use a strong random string.
+- `security.auth_mode`: currently always `"bearer-token"`; the actual token is kept in the separate profile secrets file, not in this JSON configuration.
 - `security.allowed_sources`: declares which source agents can trigger this agent and which capabilities they can request.
 - `projects[].path`: allowlisted remote project directories. Trigger requests cannot run outside these paths.
 - `planning.require_approval_for`: capabilities that require approved Plan Annotator metadata.
 - `permissions`: controls opencode permission replies. Unknown tools are rejected by default.
+
+## Troubleshoot Bearer-Token Authentication
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| `HTTP 401` from `/trigger` or `/report` | The supplied token is missing or differs from the peer's token. | Compare the token saved for the selected profile on both machines and enter the exact same value during setup. |
+| `bearer_token` file is missing | Setup did not complete for the selected profile, or the profile data was removed. | Run `aibr setup --profile <name>` again and provide the shared token. |
+| The wrong profile starts | The command's `--profile` value does not match the profile configured for that host. | Use `aibr status --profile <name>` to identify the running profile, then start or set up the intended profile. |
+| `aibr status` is healthy but protected requests return `HTTP 401` | The health endpoint does not require authentication. | Use the cross-host verification request above and correct the token mismatch on both machines. |
+
+## Rotate a Bearer Token
+
+The bearer-token secret is write-once. To rotate a compromised token, stop AIBridge on both machines, remove `~/.local/share/aibridge/<profile>/secrets/bearer_token` (or the equivalent path beneath your configured XDG data directory) on both machines, run `aibr setup --profile <name>` again with one new shared token, restart both profiles, and repeat the authentication verification. Update both machines together; leaving one host on the old token causes `HTTP 401` responses.
 
 ## Update
 

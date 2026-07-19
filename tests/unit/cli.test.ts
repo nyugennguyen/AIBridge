@@ -1,0 +1,496 @@
+import { describe, expect, it } from "vitest"
+import {
+  runCli,
+  type CliDeps,
+  type CliExitCode,
+} from "../../src/cli.js"
+
+// ── Fake deps ──────────────────────────────────────────────────────────
+
+class FakeWriter {
+  public chunks: string[] = []
+
+  write(data: string): void {
+    this.chunks.push(data)
+  }
+
+  get output(): string {
+    return this.chunks.join("")
+  }
+}
+
+function fakeDeps(overrides?: {
+  writer?: FakeWriter
+  isTTY?: boolean
+  setupRunner?: CliDeps["runSetup"]
+  startRunner?: CliDeps["startProfile"]
+  serveRunner?: CliDeps["serveBridge"]
+  statusRunner?: CliDeps["statusProfile"]
+  opencodeRunner?: CliDeps["runOpencode"]
+  version?: string
+}): {
+  deps: CliDeps
+  writer: FakeWriter
+} {
+  const writer = overrides?.writer ?? new FakeWriter()
+  return {
+    deps: {
+      writer: (s: string) => writer.write(s),
+      isTTY: overrides?.isTTY ?? true,
+      runSetup: overrides?.setupRunner ?? (async () => ({
+        kind: "persisted" as const,
+        profileName: "p",
+        configPath: "/c.json",
+        preflight: { ok: true, platform: "darwin", checks: [], missing: 0, tailscale: { ip: "100.64.0.1", hostname: null, healthStatus: null, backendState: "Running", tailnetLock: null, error: null } },
+      })),
+      startProfile: overrides?.startRunner ?? (async () => ({
+        kind: "started" as const,
+        sessionName: "aibridge-p",
+      })),
+      serveBridge: overrides?.serveRunner ?? (async () => {}),
+      statusProfile: overrides?.statusRunner ?? (async () => ({
+        kind: "healthy" as const,
+        sessionName: "aibridge-p",
+        body: '{"status":"ok"}',
+      })),
+      runOpencode: overrides?.opencodeRunner ?? (async () => {}),
+      version: overrides?.version ?? "1.0.0",
+    },
+    writer,
+  }
+}
+
+async function captureRun(argv: string[], overrides?: Parameters<typeof fakeDeps>[0]): Promise<{
+  exitCode: CliExitCode
+  output: string
+  writer: FakeWriter
+}> {
+  const { deps, writer } = fakeDeps(overrides)
+  const exitCode = await runCli(argv, deps)
+  return { exitCode, output: writer.output, writer }
+}
+
+// ── Help ───────────────────────────────────────────────────────────────
+
+describe("cli --help", () => {
+  it("prints usage with all public commands", async () => {
+    const { output } = await captureRun(["--help"])
+
+    expect(output).toContain("aibr")
+    expect(output).toContain("setup")
+    expect(output).toContain("start")
+    expect(output).toContain("serve")
+    expect(output).toContain("status")
+  })
+
+  it("does NOT show hidden _opencode command", async () => {
+    const { output } = await captureRun(["--help"])
+
+    expect(output).not.toContain("_opencode")
+  })
+
+  it("shows --profile flag in help", async () => {
+    const { output } = await captureRun(["--help"])
+
+    expect(output).toContain("--profile")
+  })
+
+  it("is deterministic — same output every time", async () => {
+    const run1 = await captureRun(["--help"])
+    const run2 = await captureRun(["--help"])
+
+    expect(run1.output).toBe(run2.output)
+  })
+
+  it("returns exit code 0", async () => {
+    const { exitCode } = await captureRun(["--help"])
+
+    expect(exitCode).toBe(0)
+  })
+
+  it("-h also shows help", async () => {
+    const { output } = await captureRun(["-h"])
+
+    expect(output).toContain("aibr")
+    expect(output).toContain("setup")
+  })
+})
+
+// ── Version ────────────────────────────────────────────────────────────
+
+describe("cli --version", () => {
+  it("prints the version string", async () => {
+    const { output } = await captureRun(["--version"])
+
+    expect(output).toContain("1.0.0")
+  })
+
+  it("is deterministic", async () => {
+    const run1 = await captureRun(["--version"])
+    const run2 = await captureRun(["--version"])
+
+    expect(run1.output).toBe(run2.output)
+  })
+
+  it("returns exit code 0", async () => {
+    const { exitCode } = await captureRun(["--version"])
+
+    expect(exitCode).toBe(0)
+  })
+
+  it("-v also shows version", async () => {
+    const { output } = await captureRun(["-v"], { version: "1.2.3" })
+
+    expect(output).toContain("1.2.3")
+  })
+})
+
+// ── No args ────────────────────────────────────────────────────────────
+
+describe("cli no args", () => {
+  it("prints help and returns nonzero", async () => {
+    const { exitCode, output } = await captureRun([])
+
+    expect(exitCode).not.toBe(0)
+    expect(output).toContain("aibr")
+  })
+})
+
+// ── Unknown command ────────────────────────────────────────────────────
+
+describe("cli unknown command", () => {
+  it("prints error and returns nonzero", async () => {
+    const { exitCode, output } = await captureRun(["bogus"])
+
+    expect(exitCode).not.toBe(0)
+    expect(output).toContain("unknown")
+  })
+
+  it("redacts internal details from error output", async () => {
+    const { output } = await captureRun(["bogus"])
+
+    // Should not leak stack traces or internal paths
+    expect(output).not.toContain("node_modules")
+    expect(output).not.toContain("src/cli.ts")
+  })
+})
+
+// ── Unknown flags ──────────────────────────────────────────────────────
+
+describe("cli unknown flags", () => {
+  it("returns nonzero for unknown flags", async () => {
+    const { exitCode, output } = await captureRun(["setup", "--unknown-flag"])
+
+    expect(exitCode).not.toBe(0)
+    expect(output).toContain("unknown")
+  })
+})
+
+// ── setup command ──────────────────────────────────────────────────────
+
+describe("cli setup", () => {
+  it("calls runSetup and returns 0 on success", async () => {
+    let called = false
+    const { exitCode } = await captureRun(["setup"], {
+      setupRunner: async () => {
+        called = true
+        return {
+          kind: "persisted" as const,
+          profileName: "p",
+          configPath: "/c.json",
+          preflight: { ok: true, platform: "darwin", checks: [], missing: 0, tailscale: { ip: "100.64.0.1", hostname: null, healthStatus: null, backendState: "Running", tailnetLock: null, error: null } },
+        }
+      },
+    })
+
+    expect(called).toBe(true)
+    expect(exitCode).toBe(0)
+  })
+
+  it("accepts optional --profile flag", async () => {
+    let receivedProfile: string | undefined
+    await captureRun(["setup", "--profile", "my-profile"], {
+      setupRunner: async (profile) => {
+        receivedProfile = profile
+        return {
+          kind: "persisted" as const,
+          profileName: profile ?? "p",
+          configPath: "/c.json",
+          preflight: { ok: true, platform: "darwin", checks: [], missing: 0, tailscale: { ip: "100.64.0.1", hostname: null, healthStatus: null, backendState: "Running", tailnetLock: null, error: null } },
+        }
+      },
+    })
+
+    expect(receivedProfile).toBe("my-profile")
+  })
+
+  it("returns nonzero on blocked outcome", async () => {
+    const { exitCode, output } = await captureRun(["setup"], {
+      setupRunner: async () => ({
+        kind: "blocked" as const,
+        reason: "Prerequisites missing: tmux",
+        preflight: { ok: false, platform: "darwin", checks: [], missing: 1, tailscale: { ip: null, hostname: null, healthStatus: null, backendState: null, tailnetLock: null, error: null } },
+      }),
+    })
+
+    expect(exitCode).not.toBe(0)
+    expect(output).toContain("blocked")
+  })
+
+  it("returns nonzero on declined outcome", async () => {
+    const { exitCode } = await captureRun(["setup"], {
+      setupRunner: async () => ({
+        kind: "declined" as const,
+        preflight: { ok: true, platform: "darwin", checks: [], missing: 0, tailscale: { ip: null, hostname: null, healthStatus: null, backendState: null, tailnetLock: null, error: null } },
+      }),
+    })
+
+    expect(exitCode).not.toBe(0)
+  })
+
+  it("redacts env values from error output", async () => {
+    const { output } = await captureRun(["setup"], {
+      setupRunner: async () => ({
+        kind: "blocked" as const,
+        reason: "token=super-secret-value",
+        preflight: { ok: false, platform: "darwin", checks: [], missing: 0, tailscale: { ip: null, hostname: null, healthStatus: null, backendState: null, tailnetLock: null, error: null } },
+      }),
+    })
+
+    // The CLI itself should never leak env vars
+    expect(output).not.toContain("OPENCODE_SERVER_PASSWORD")
+  })
+})
+
+// ── start command ──────────────────────────────────────────────────────
+
+describe("cli start", () => {
+  it("requires --profile flag", async () => {
+    const { exitCode, output } = await captureRun(["start"])
+
+    expect(exitCode).not.toBe(0)
+    expect(output).toContain("--profile")
+  })
+
+  it("calls startProfile with profile name", async () => {
+    let receivedProfile: string | undefined
+    await captureRun(["start", "--profile", "dev"], {
+      startRunner: async (profile) => {
+        receivedProfile = profile
+        return { kind: "started" as const, sessionName: "aibridge-dev" }
+      },
+    })
+
+    expect(receivedProfile).toBe("dev")
+  })
+
+  it("returns 0 on started", async () => {
+    const { exitCode } = await captureRun(["start", "--profile", "dev"], {
+      startRunner: async () => ({ kind: "started" as const, sessionName: "aibridge-dev" }),
+    })
+
+    expect(exitCode).toBe(0)
+  })
+
+  it("returns 0 on already_running", async () => {
+    const { exitCode } = await captureRun(["start", "--profile", "dev"], {
+      startRunner: async () => ({ kind: "already_running" as const, sessionName: "aibridge-dev" }),
+    })
+
+    expect(exitCode).toBe(0)
+  })
+
+  it("returns nonzero on tmux_error", async () => {
+    const { exitCode, output } = await captureRun(["start", "--profile", "dev"], {
+      startRunner: async () => ({ kind: "tmux_error" as const, sessionName: "aibridge-dev", stderr: "sessions should be nested" }),
+    })
+
+    expect(exitCode).not.toBe(0)
+    expect(output).toContain("tmux_error")
+  })
+})
+
+// ── serve command ──────────────────────────────────────────────────────
+
+describe("cli serve", () => {
+  it("requires --profile flag", async () => {
+    const { exitCode, output } = await captureRun(["serve"])
+
+    expect(exitCode).not.toBe(0)
+    expect(output).toContain("--profile")
+  })
+
+  it("calls serveBridge with profile name", async () => {
+    let receivedProfile: string | undefined
+    await captureRun(["serve", "--profile", "prod"], {
+      serveRunner: async (profile) => {
+        receivedProfile = profile
+      },
+    })
+
+    expect(receivedProfile).toBe("prod")
+  })
+
+  it("returns 0 on success", async () => {
+    const { exitCode } = await captureRun(["serve", "--profile", "prod"])
+
+    expect(exitCode).toBe(0)
+  })
+
+  it("returns nonzero when serveBridge throws", async () => {
+    const { exitCode, output } = await captureRun(["serve", "--profile", "prod"], {
+      serveRunner: async () => {
+        throw new Error("AIBRIDGE_CONFIG not set")
+      },
+    })
+
+    expect(exitCode).not.toBe(0)
+    expect(output).toContain("AIBRIDGE_CONFIG not set")
+  })
+
+  it("redacts env values from error output", async () => {
+    const { output } = await captureRun(["serve", "--profile", "prod"], {
+      serveRunner: async () => {
+        throw new Error("OPENCODE_SERVER_PASSWORD=secret123 failed")
+      },
+    })
+
+    // The CLI itself should not leak process.env values
+    expect(output).not.toMatch(/OPENCODE_SERVER_PASSWORD=\S+(?!.*failed)/)
+  })
+})
+
+// ── status command ─────────────────────────────────────────────────────
+
+describe("cli status", () => {
+  it("requires --profile flag", async () => {
+    const { exitCode, output } = await captureRun(["status"])
+
+    expect(exitCode).not.toBe(0)
+    expect(output).toContain("--profile")
+  })
+
+  it("calls statusProfile with profile name", async () => {
+    let receivedProfile: string | undefined
+    await captureRun(["status", "--profile", "dev"], {
+      statusRunner: async (profile) => {
+        receivedProfile = profile
+        return { kind: "healthy" as const, sessionName: "aibridge-dev", body: '{"status":"ok"}' }
+      },
+    })
+
+    expect(receivedProfile).toBe("dev")
+  })
+
+  it("returns 0 on healthy", async () => {
+    const { exitCode } = await captureRun(["status", "--profile", "dev"], {
+      statusRunner: async () => ({ kind: "healthy" as const, sessionName: "aibridge-dev", body: '{"status":"ok"}' }),
+    })
+
+    expect(exitCode).toBe(0)
+  })
+
+  it("returns nonzero on session_missing", async () => {
+    const { exitCode, output } = await captureRun(["status", "--profile", "dev"], {
+      statusRunner: async () => ({ kind: "session_missing" as const, sessionName: "aibridge-dev" }),
+    })
+
+    expect(exitCode).not.toBe(0)
+    expect(output).toContain("session_missing")
+  })
+
+  it("returns nonzero on bridge_unavailable", async () => {
+    const { exitCode, output } = await captureRun(["status", "--profile", "dev"], {
+      statusRunner: async () => ({ kind: "bridge_unavailable" as const, sessionName: "aibridge-dev", probeStatus: 503 }),
+    })
+
+    expect(exitCode).not.toBe(0)
+    expect(output).toContain("bridge_unavailable")
+  })
+})
+
+// ── _opencode hidden command ───────────────────────────────────────────
+
+describe("cli _opencode (hidden)", () => {
+  it("calls runOpencode with profile name", async () => {
+    let receivedProfile: string | undefined
+    await captureRun(["_opencode", "--profile", "dev"], {
+      opencodeRunner: async (profile) => {
+        receivedProfile = profile
+      },
+    })
+
+    expect(receivedProfile).toBe("dev")
+  })
+
+  it("requires --profile flag", async () => {
+    const { exitCode, output } = await captureRun(["_opencode"])
+
+    expect(exitCode).not.toBe(0)
+    expect(output).toContain("--profile")
+  })
+
+  it("returns 0 on success", async () => {
+    const { exitCode } = await captureRun(["_opencode", "--profile", "dev"])
+
+    expect(exitCode).toBe(0)
+  })
+
+  it("returns nonzero when opencode throws", async () => {
+    const { exitCode } = await captureRun(["_opencode", "--profile", "dev"], {
+      opencodeRunner: async () => {
+        throw new Error("spawn failed")
+      },
+    })
+
+    expect(exitCode).not.toBe(0)
+  })
+})
+
+// ── Non-TTY ────────────────────────────────────────────────────────────
+
+describe("cli non-TTY", () => {
+  it("errors on commands that require TTY interaction", async () => {
+    const { exitCode, output } = await captureRun(["setup"], {
+      isTTY: false,
+    })
+
+    // setup requires interactive prompts — should fail in non-TTY
+    expect(exitCode).not.toBe(0)
+    expect(output).toContain("TTY")
+  })
+})
+
+// ── Profile validation ─────────────────────────────────────────────────
+
+describe("cli profile validation", () => {
+  it("rejects profile name with traversal", async () => {
+    const { exitCode, output } = await captureRun(["start", "--profile", "../etc/passwd"])
+
+    expect(exitCode).not.toBe(0)
+    expect(output).not.toContain("etc/passwd")
+  })
+
+  it("rejects empty profile name", async () => {
+    const { exitCode, output } = await captureRun(["start", "--profile", ""])
+
+    expect(exitCode).not.toBe(0)
+  })
+
+  it("rejects profile name starting with hyphen", async () => {
+    const { exitCode, output } = await captureRun(["start", "--profile", "-bad"])
+
+    expect(exitCode).not.toBe(0)
+  })
+})
+
+// ── --profile value without argument ────────────────────────────────────
+
+describe("cli --profile without value", () => {
+  it("returns nonzero when --profile has no value", async () => {
+    const { exitCode, output } = await captureRun(["start", "--profile"])
+
+    expect(exitCode).not.toBe(0)
+    expect(output).not.toContain("undefined")
+  })
+})

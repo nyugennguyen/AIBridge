@@ -7,6 +7,9 @@ export class BearerAuthProvider implements AuthProvider {
 
   validate(authorizationHeader: string | undefined): boolean {
     if (!authorizationHeader?.startsWith("Bearer ")) return false
-    return authorizationHeader.slice("Bearer ".length) === this.token
+    const received = Buffer.from(authorizationHeader.slice("Bearer ".length))
+    const expected = Buffer.from(this.token)
+    return received.length === expected.length && timingSafeEqual(received, expected)
   }
 }
+import { timingSafeEqual } from "node:crypto"

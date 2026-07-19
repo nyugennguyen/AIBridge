@@ -9,7 +9,6 @@ describe("AIBridge schemas", () => {
       opencode: { base_url: "http://127.0.0.1:4096", server_port: 4096, username: "opencode", password_env: "OPENCODE_SERVER_PASSWORD" },
       security: {
         auth_mode: "bearer-token",
-        bearer_token: "secret",
         allowed_sources: [{ source_agent_id: "dev-main", capabilities: ["testing"], requires_plan_approval: ["deployment"] }],
       },
       permissions: { default_response: "reject", allow_tools: ["read", "grep", "glob"], require_plan_approval_for_tools: ["bash", "edit", "write"] },

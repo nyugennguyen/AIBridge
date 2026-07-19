@@ -38,7 +38,6 @@ export function testConfig(): BridgeConfig {
     opencode: { base_url: "http://127.0.0.1:4096", server_port: 4096, username: "opencode", password_env: "OPENCODE_SERVER_PASSWORD" },
     security: {
       auth_mode: "bearer-token",
-      bearer_token: "secret",
       allowed_sources: [{ source_agent_id: "dev-main", capabilities: ["testing"], requires_plan_approval: ["deployment"] }],
     },
     permissions: { default_response: "reject", allow_tools: ["read"], require_plan_approval_for_tools: ["bash"] },
@@ -110,6 +109,7 @@ export async function buildTestApp(overrides: BuildTestAppOverrides = {}) {
   const jobManager = overrides.jobManager ?? new JobManager(new JsonFileJobStore(await mkdtemp(join(tmpdir(), "aibridge-integration-"))))
   const app = createApp({
     config,
+    bearerToken: "secret",
     jobManager,
     opencodeClient: opencode,
     callbackReporter: new CallbackReporter({ attempts: 1, baseDelayMs: 1, fetcher: async () => new Response(null, { status: 200 }) }),

@@ -123,3 +123,33 @@ install_aibridge() {
   fi
   aibr --version || true
 }
+
+verify_tailscale() {
+  if ! has_cmd tailscale; then
+    echo "⚠ tailscale not installed — install with: $(install_cmd_for tailscale)"
+    return 0
+  fi
+  if ! tailscale status >/dev/null 2>&1; then
+    echo "⚠ Tailscale not active — run: sudo tailscale up (BackendState not Running)" >&2
+  else
+    echo "✓ tailscale status ok"
+    tailscale ip -4 2>/dev/null | head -n1 | xargs -I{} echo "  Tailscale IP: {}"
+  fi
+}
+
+main() {
+  echo "AIBridge installer — https://github.com/nyugennguyen/AIBridge"
+  check_prereqs
+  ensure_bun
+  verify_tailscale
+  install_aibridge
+  echo ""
+  echo "✓ Installed. Next:"
+  echo "  aibr setup --profile <name>   # interactive host setup"
+  echo "  aibr start --profile <name>   # start tmux session"
+  echo "  aibr status --profile <name>  # verify bridge health"
+  echo ""
+  echo "Bridge binds Tailscale-only (never public Internet). opencode on 127.0.0.1 only."
+  echo "Private network via Tailscale — no public exposure."
+}
+main

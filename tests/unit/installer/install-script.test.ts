@@ -41,8 +41,12 @@ describe("install.sh — prereq checks", () => {
     expect(s).toContain("brew install tmux")
     expect(s).toContain("brew install tailscale")
     expect(s).toContain("apt-get install -y tmux")
-    expect(s).not.toMatch(/curl.*\|.*sh/)
-    expect(s).not.toMatch(/curl.*\|.*bash/)
+    // Table itself must not use curl pipes; bun bootstrap is allowed elsewhere
+    const start = s.indexOf("install_cmd_for")
+    const end = s.indexOf("check_prereqs")
+    const table = start !== -1 && end !== -1 ? s.slice(start, end) : s
+    expect(table).not.toMatch(/curl.*\|.*sh/)
+    expect(table).not.toMatch(/curl.*\|.*bash/)
   })
   it("checks for tmux/opencode/tailscale via 'command -v' or 'which'", async () => {
     const s = await readFile(SCRIPT, "utf8")
@@ -54,5 +58,32 @@ describe("install.sh — prereq checks", () => {
   it("marks opencode as missing without auto-install (manual instruction)", async () => {
     const s = await readFile(SCRIPT, "utf8")
     expect(s).toMatch(/opencode.*manual|opencode.*bun install -g opencode-ai/i)
+  })
+})
+
+describe("install.sh — bun and package install", () => {
+  it("checks bun version >=1.3.0 and handles missing bun", async () => {
+    const s = await readFile(SCRIPT, "utf8")
+    expect(s).toContain("bun --version")
+    expect(s).toContain("1.3.0")
+    expect(s).toMatch(/curl.*bun\.sh.*install|https:\/\/bun\.sh\/install/i)
+  })
+  it("installs aibridge via bun global install", async () => {
+    const s = await readFile(SCRIPT, "utf8")
+    expect(s).toContain("bun install -g @nyugennguyen/aibridge")
+  })
+  it("supports AIBRIDGE_VERSION env override", async () => {
+    const s = await readFile(SCRIPT, "utf8")
+    expect(s).toContain("AIBRIDGE_VERSION")
+  })
+  it("verifies aibr is on PATH and advises bun pm bin -g", async () => {
+    const s = await readFile(SCRIPT, "utf8")
+    expect(s).toContain("bun pm bin -g")
+    expect(s).toContain("aibr --version")
+  })
+  it("uses set -euo pipefail and no sudo by default (user confirms)", async () => {
+    const s = await readFile(SCRIPT, "utf8")
+    expect(s).toContain("set -euo pipefail")
+    expect(s).not.toMatch(/^\s*sudo apt-get/m)
   })
 })

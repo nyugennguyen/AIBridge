@@ -25,3 +25,33 @@ case "$(uname -s)" in
 esac
 
 echo "Detected OS: $OS ($ARCH)"
+
+# --- prereq check (mirrors src/host/preflight.ts checkPrereqs) ---
+has_cmd() { command -v "$1" >/dev/null 2>&1; }
+
+install_cmd_for() {
+  local tool="$1"
+  case "$OS:$tool" in
+    macos:tmux) echo "brew install tmux" ;;
+    macos:tailscale) echo "brew install tailscale" ;;
+    debian:tmux|ubuntu:tmux) echo "apt-get install -y tmux" ;;
+    debian:tailscale|ubuntu:tailscale) echo "tailscale install-from-source --confirm --prefix=/usr/local" ;;
+    *) echo "" ;;
+  esac
+}
+
+check_prereqs() {
+  # opencode manual fallback is intentional — no auto-install for opencode
+  for tool in tmux opencode tailscale; do
+    if has_cmd "$tool"; then
+      echo "✓ $tool installed"
+    else
+      cmd="$(install_cmd_for "$tool")"
+      if [ -n "$cmd" ]; then
+        echo "✗ $tool missing — install with: $cmd"
+      else
+        echo "✗ $tool missing — install manually: bun install -g opencode-ai (see https://opencode.ai)"
+      fi
+    fi
+  done
+}

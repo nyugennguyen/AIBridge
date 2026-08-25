@@ -34,3 +34,25 @@ describe("install.sh — platform detection", () => {
     expect(s).not.toContain("winget")
   })
 })
+
+describe("install.sh — prereq checks", () => {
+  it("defines fixed argv install commands per OS (no curl|sh)", async () => {
+    const s = await readFile(SCRIPT, "utf8")
+    expect(s).toContain("brew install tmux")
+    expect(s).toContain("brew install tailscale")
+    expect(s).toContain("apt-get install -y tmux")
+    expect(s).not.toMatch(/curl.*\|.*sh/)
+    expect(s).not.toMatch(/curl.*\|.*bash/)
+  })
+  it("checks for tmux/opencode/tailscale via 'command -v' or 'which'", async () => {
+    const s = await readFile(SCRIPT, "utf8")
+    expect(s).toMatch(/command -v|which tmux/)
+    expect(s).toContain("tmux")
+    expect(s).toContain("opencode")
+    expect(s).toContain("tailscale")
+  })
+  it("marks opencode as missing without auto-install (manual instruction)", async () => {
+    const s = await readFile(SCRIPT, "utf8")
+    expect(s).toMatch(/opencode.*manual|opencode.*bun install -g opencode-ai/i)
+  })
+})

@@ -87,3 +87,23 @@ describe("install.sh — bun and package install", () => {
     expect(s).not.toMatch(/^\s*sudo apt-get/m)
   })
 })
+
+describe("install.sh — confirmation gating", () => {
+  it("prompts before brew/apt installs and respects --yes", async () => {
+    const s = await readFile(SCRIPT, "utf8")
+    expect(s).toContain("--yes")
+    expect(s).toMatch(/read.*install.*tmux|prompt.*confirm/i)
+    expect(s).toContain("Install tmux?")
+  })
+  it("supports --help and --version flags", async () => {
+    const s = await readFile(SCRIPT, "utf8")
+    expect(s).toContain("--help")
+    expect(s).toContain("--version")
+  })
+  it("never auto-sudos without confirmation", async () => {
+    const s = await readFile(SCRIPT, "utf8")
+    const sudoLines = s.split("\n").filter((l) => l.includes("sudo"))
+    expect(sudoLines.length).toBeGreaterThan(0)
+    expect(s.indexOf("confirm") < s.indexOf("sudo")).toBe(true)
+  })
+})

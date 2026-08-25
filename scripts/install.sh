@@ -1,6 +1,23 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+YES=0
+for arg in "$@"; do
+  case "$arg" in
+    --yes|-y) YES=1 ;;
+    --help|-h) echo "Usage: install.sh [--yes] [--help] [--version]"; echo "  curl -fsSL https://raw.githubusercontent.com/nyugennguyen/AIBridge/main/scripts/install.sh | bash -s -- --yes"; exit 0 ;;
+    --version) echo "1.0.1"; exit 0 ;;
+    *) echo "Unknown flag: $arg" >&2; exit 1 ;;
+  esac
+done
+
+confirm() {
+  if [ "$YES" -eq 1 ]; then return 0; fi
+  printf "%s (y/n) " "$1"
+  read -r ans
+  case "$ans" in y|Y) return 0 ;; *) return 1 ;; esac
+}
+
 # --- platform detect (mirrors src/host/preflight.ts detectOs) ---
 OS=""
 ARCH="$(uname -m)"
@@ -54,6 +71,20 @@ check_prereqs() {
       fi
     fi
   done
+}
+
+# prompt confirm helper — read install tmux with confirmation gating
+install_missing_prereqs() {
+  if ! has_cmd tmux; then
+    if confirm "Install tmux? Run: $(install_cmd_for tmux)"; then
+      if [ "$OS" = "macos" ]; then brew install tmux; else sudo apt-get install -y tmux; fi
+    fi
+  fi
+  if ! has_cmd tailscale; then
+    if confirm "Install tailscale? Run: $(install_cmd_for tailscale)"; then
+      if [ "$OS" = "macos" ]; then brew install tailscale; else sudo apt-get install -y tailscale || tailscale install-from-source --confirm --prefix=/usr/local; fi
+    fi
+  fi
 }
 
 # --- bun check (bun >=1.3.0 required, mirrors package.json engines) ---

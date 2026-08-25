@@ -31,17 +31,27 @@ Before installing AIBridge, ensure every participating machine has:
 
 ## Install
 
-Install Bun first if you don't have it:
+One-liner (macOS / Debian / Ubuntu, requires Tailscale):
 
 ```bash
-# macOS / Linux
-curl -fsSL https://bun.sh/install | bash
+curl -fsSL https://raw.githubusercontent.com/nyugennguyen/AIBridge/main/scripts/install.sh | bash
+# non-interactive (CI):
+curl -fsSL https://raw.githubusercontent.com/nyugennguyen/AIBridge/main/scripts/install.sh | bash -s -- --yes
 ```
 
-Then install AIBridge globally:
+The installer will:
+1. Detect OS (macOS / Debian / Ubuntu) — refuses unsupported platforms.
+2. Check `bun >=1.3.0` (prompts to install from bun.sh if missing), `tmux`, `opencode`, `tailscale`.
+3. Prompt before any `brew`/`apt-get` install (bypass with `--yes`).
+4. Run `bun install -g @nyugennguyen/aibridge` (or `@<version>` via `AIBRIDGE_VERSION`).
+5. Verify `aibr --version` and that `$(bun pm bin -g)` is on `PATH`.
+6. Warn if `tailscale status` is not `Running`.
+
+Manual fallback:
 
 ```bash
 bun install -g @nyugennguyen/aibridge
+aibr --version
 ```
 
 Verify the `aibr` command is on your PATH:
@@ -314,11 +324,14 @@ bun run build
 # Run the full release validation suite
 bun run release:check
 
-# Manual publish (requires npm credentials)
-bun publish --access public
+# Configure npm trusted publishing once for this repository, then publish by
+# creating a GitHub Release for a v<package.json version> tag.
+# The Publish npm package workflow validates and publishes the package.
 ```
 
 `release:check` runs: frozen lockfile install, full test suite, strict typecheck, production build, CLI smoke test, and `bun pm pack --dry-run`. The CI workflow runs the same checks on every push and pull request.
+
+To authorize automated publishing, configure `@nyugennguyen/aibridge` on npmjs.com with the GitHub Actions trusted publisher `nyugennguyen/AIBridge` and workflow filename `publish.yml`. The workflow uses npm trusted publishing rather than an `NPM_TOKEN`; it publishes only after a GitHub Release is published and its tag matches `v<package.json version>`.
 
 ## Architecture
 

@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.1.0] - 2026-08-25
+
+### Added
+
+- curl|bash one-line installer at `scripts/install.sh` with OS detection, prereq prompts, and `bun install -g` for `@nyugennguyen/aibridge`.
+
 ## [1.0.1] - 2026-07-20
 
 ### Changed

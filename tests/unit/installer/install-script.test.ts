@@ -107,3 +107,20 @@ describe("install.sh — confirmation gating", () => {
     expect(s.indexOf("confirm") < s.indexOf("sudo")).toBe(true)
   })
 })
+
+describe("install.sh — tailscale and final output", () => {
+  it("verifies tailscale status and warns if not Running", async () => {
+    const s = await readFile(SCRIPT, "utf8")
+    expect(s).toContain("tailscale status")
+    expect(s).toMatch(/Tailscale.*not active|BackendState/i)
+  })
+  it("prints next steps: aibr setup --profile", async () => {
+    const s = await readFile(SCRIPT, "utf8")
+    expect(s).toContain("aibr setup --profile")
+    expect(s).toContain("aibr status --profile")
+  })
+  it("prints Tailscale-only binding warning", async () => {
+    const s = await readFile(SCRIPT, "utf8")
+    expect(s).toMatch(/Tailscale.*only|private.*network/i)
+  })
+})

@@ -25,6 +25,12 @@ jobs:
       - name: Install dependencies (frozen lockfile)
         run: bun install --frozen-lockfile
 
+      - name: Lint installer script
+        run: |
+          sudo apt-get update && sudo apt-get install -y shellcheck
+          shellcheck scripts/install.sh
+          bash -n scripts/install.sh
+
       - name: Run tests
         run: bun test
 

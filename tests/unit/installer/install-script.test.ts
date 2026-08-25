@@ -124,3 +124,19 @@ describe("install.sh — tailscale and final output", () => {
     expect(s).toMatch(/Tailscale.*only|private.*network/i)
   })
 })
+
+describe("install.sh — shell quality", () => {
+  it("passes bash -n syntax check", async () => {
+    const { execSync } = await import("node:child_process")
+    execSync("bash -n scripts/install.sh", { stdio: "pipe" })
+  })
+  it("has no TODO/FIXME placeholders", async () => {
+    const s = await readFile(SCRIPT, "utf8")
+    expect(s).not.toMatch(/TODO|FIXME|HACK/)
+  })
+  it("is executable", async () => {
+    const { stat } = await import("node:fs/promises")
+    const st = await stat(new URL("../../../scripts/install.sh", import.meta.url))
+    expect((st.mode & 0o111) !== 0).toBe(true)
+  })
+})

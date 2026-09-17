@@ -1,0 +1,86 @@
+[
+  {
+    "id": "job-completed",
+    "trigger": {
+      "job_id": "job-completed",
+      "source_agent_id": "dev-main",
+      "target_agent_id": "test-vps",
+      "capability": "testing",
+      "project_dir": "/srv/apps/app",
+      "prompt": "Run the complete test suite.",
+      "callback_url": "http://dev-main.tailnet:8787/report",
+      "timeout_seconds": 600,
+      "depends_on": [],
+      "task_id": "#1"
+    },
+    "status": "completed",
+    "opencodeSessionId": "ses-completed",
+    "callbackDelivery": {
+      "status": "failed",
+      "attemptedAt": "2026-09-16T00:08:00Z",
+      "error": "Remote callback endpoint unavailable"
+    },
+    "createdAt": "2026-09-16T00:00:00Z",
+    "updatedAt": "2026-09-16T00:07:00Z"
+  },
+  {
+    "id": "job-running",
+    "trigger": {
+      "job_id": "job-running",
+      "source_agent_id": "dev-main",
+      "target_agent_id": "test-vps",
+      "capability": "deployment",
+      "project_dir": "/srv/apps/app",
+      "prompt": "Deploy the verified build.",
+      "callback_url": "http://dev-main.tailnet:8787/report",
+      "timeout_seconds": 900,
+      "depends_on": [
+        "job-completed",
+        { "agent_id": "audit-vps", "job_id": "remote-audit" }
+      ],
+      "task_id": "#2",
+      "metadata": {
+        "plan_status": "approved",
+        "plan_reference": ".aibridge/plans/deploy.md",
+        "approved_by": "legacy-operator",
+        "approved_at": "2026-09-16T00:09:00Z"
+      }
+    },
+    "status": "running",
+    "opencodeSessionId": "ses-running",
+    "depends_on": ["job-completed"],
+    "remoteDependencies": [
+      {
+        "agent_id": "audit-vps",
+        "job_id": "remote-audit",
+        "status": "completed",
+        "reportedAt": "2026-09-16T00:09:30Z"
+      }
+    ],
+    "createdAt": "2026-09-16T00:10:00Z",
+    "updatedAt": "2026-09-16T00:12:00Z"
+  },
+  {
+    "id": "job-callback-failed",
+    "trigger": {
+      "job_id": "job-callback-failed",
+      "source_agent_id": "dev-main",
+      "target_agent_id": "test-vps",
+      "capability": "testing",
+      "project_dir": "/srv/apps/app",
+      "prompt": "Collect compatibility evidence.",
+      "callback_url": "http://dev-main.tailnet:8787/report",
+      "timeout_seconds": 300,
+      "depends_on": [],
+      "task_id": "#3"
+    },
+    "status": "callback_failed",
+    "callbackDelivery": {
+      "status": "failed",
+      "attemptedAt": "2026-09-16T00:20:00Z",
+      "error": "Callback attempts exhausted"
+    },
+    "createdAt": "2026-09-16T00:15:00Z",
+    "updatedAt": "2026-09-16T00:20:00Z"
+  }
+]

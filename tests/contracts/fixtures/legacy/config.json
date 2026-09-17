@@ -1,0 +1,51 @@
+{
+  "agent_id": "test-vps",
+  "bridge": {
+    "host": "100.90.80.70",
+    "port": 8787,
+    "public_url": "http://test-vps.tailnet:8787"
+  },
+  "opencode": {
+    "base_url": "http://127.0.0.1:4096",
+    "server_port": 4096,
+    "username": "opencode",
+    "password_env": "OPENCODE_SERVER_PASSWORD"
+  },
+  "security": {
+    "auth_mode": "bearer-token",
+    "allowed_sources": [
+      {
+        "source_agent_id": "dev-main",
+        "capabilities": ["testing", "deployment"],
+        "requires_plan_approval": ["deployment"]
+      }
+    ]
+  },
+  "permissions": {
+    "default_response": "reject",
+    "allow_tools": ["read", "bash"],
+    "require_plan_approval_for_tools": ["bash"]
+  },
+  "projects": [
+    {
+      "id": "app",
+      "path": "/srv/apps/app",
+      "capabilities": ["testing", "deployment"]
+    }
+  ],
+  "agents": [
+    {
+      "id": "dev-main",
+      "url": "http://dev-main.tailnet:8787",
+      "capabilities": ["development"]
+    }
+  ],
+  "timeouts": {
+    "default_job_seconds": 600,
+    "callback_retry_attempts": 3
+  },
+  "planning": {
+    "plan_annotator_enabled": true,
+    "require_approval_for": ["deployment"]
+  }
+}

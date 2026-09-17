@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "runId": "run-contract",
+  "projectId": "project-contract",
+  "goal": "Exercise the version-one contract harness.",
+  "state": "active",
+  "createdAt": "2026-09-17T00:00:00.000Z",
+  "updatedAt": "2026-09-17T00:01:00.000Z",
+  "externalReferences": [
+    { "namespace": "legacy.job", "id": "contract-job" }
+  ]
+}

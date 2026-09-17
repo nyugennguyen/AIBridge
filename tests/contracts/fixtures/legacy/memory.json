@@ -1,0 +1,24 @@
+{
+  "projectId": "app",
+  "decisions": [
+    {
+      "id": "decision-1",
+      "timestamp": "2026-09-15T23:55:00Z",
+      "agent": "dev-main",
+      "content": "Use the existing Tailscale-only bridge endpoint."
+    }
+  ],
+  "constraints": [
+    "Never expose the OpenCode server publicly."
+  ],
+  "handoffs": [
+    {
+      "id": "handoff-1",
+      "from": "dev-main",
+      "to": "test-vps",
+      "context": "Verify deployment after the test job completes.",
+      "status": "accepted",
+      "createdAt": "2026-09-16T00:09:00Z"
+    }
+  ]
+}

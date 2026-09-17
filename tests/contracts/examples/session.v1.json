@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "sessionId": "session-contract",
+  "projectId": "project-contract",
+  "runId": "run-contract",
+  "taskId": "task-contract",
+  "dispatchId": "dispatch-contract",
+  "nodeId": "node-contract",
+  "installationId": "installation-contract",
+  "runtimeKind": "contract-fake",
+  "state": "working",
+  "terminalId": "terminal-contract"
+}

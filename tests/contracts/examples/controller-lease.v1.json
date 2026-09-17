@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "leaseId": "lease-contract",
+  "projectId": "project-contract",
+  "runId": "run-contract",
+  "controllerNodeId": "node-contract",
+  "epoch": 1,
+  "issuedAt": "2026-09-17T00:00:00.000Z",
+  "expiresAt": "2026-09-17T00:05:00.000Z"
+}

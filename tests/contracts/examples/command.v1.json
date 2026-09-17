@@ -1,0 +1,118 @@
+{
+  "schemaVersion": 1,
+  "commandId": "command-contract",
+  "projectId": "project-contract",
+  "runId": "run-contract",
+  "actor": { "kind": "node", "nodeId": "node-contract" },
+  "controllerNodeId": "node-contract",
+  "controllerEpoch": 1,
+  "leaseId": "lease-contract",
+  "issuedAt": "2026-09-17T00:00:00.000Z",
+  "expiresAt": "2026-09-17T00:04:00.000Z",
+  "correlationId": "correlation-contract",
+  "causation": null,
+  "type": "dispatch.execute",
+  "payload": {
+    "dispatch": {
+      "schemaVersion": 1,
+      "envelope": {
+        "schemaVersion": 1,
+        "dispatchId": "dispatch-contract",
+        "attempt": 1,
+        "projectId": "project-contract",
+        "runId": "run-contract",
+        "taskId": "task-contract",
+        "targetNodeId": "node-contract",
+        "installationId": "installation-contract",
+        "runtimeKind": "contract-fake",
+        "projectPathId": "project-path-contract",
+        "prompt": "Validate the contract fixture without side effects.",
+        "roleSnapshot": {
+          "schemaVersion": 1,
+          "roleId": "role-contract",
+          "templateVersion": 1,
+          "projectId": "project-contract",
+          "name": "Contract implementer",
+          "purpose": "Exercise a bounded contract fixture.",
+          "instructions": "Only validate the assigned version-one example.",
+          "requiredCapabilities": ["read"],
+          "preferredRuntimeKinds": ["contract-fake"],
+          "contextSelectionPolicyReference": { "namespace": "policy", "id": "contract-v1" },
+          "permissionRestrictions": {
+            "allowedCapabilities": ["read"],
+            "deniedCapabilities": ["write"],
+            "approvalRequirements": {
+              "destructiveEffects": true,
+              "externalEffects": true,
+              "capabilities": ["read"]
+            }
+          },
+          "author": { "kind": "user", "userId": "user-contract" },
+          "createdAt": "2026-09-17T00:00:00.000Z"
+        },
+        "ruleSnapshots": [
+          {
+            "schemaVersion": 1,
+            "ruleId": "rule-contract",
+            "templateVersion": 1,
+            "projectId": "project-contract",
+            "enabled": true,
+            "match": { "requestedCapabilitiesAny": ["read"] },
+            "effect": {
+              "kind": "restrict",
+              "deniedCapabilities": ["write"],
+              "requireApprovalForDestructiveEffects": true,
+              "requireApprovalForExternalEffects": true
+            },
+            "author": { "kind": "user", "userId": "user-contract" },
+            "createdAt": "2026-09-17T00:00:00.000Z"
+          }
+        ],
+        "contextManifest": {
+          "references": [
+            {
+              "sourceKind": "memory",
+              "sourceId": "memory-contract",
+              "contentDigest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+              "sensitivity": "internal",
+              "byteCount": 42
+            }
+          ],
+          "manifestDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+        },
+        "requestedCapabilities": ["read"],
+        "permissionEnvelope": {
+          "allowedCapabilities": ["read"],
+          "deniedCapabilities": ["write"],
+          "approvalRequirements": {
+            "destructiveEffects": true,
+            "externalEffects": true,
+            "capabilities": ["read"]
+          }
+        },
+        "dependencies": [],
+        "timeoutSeconds": 300,
+        "controllerEpoch": 1,
+        "model": "contract/model-v1"
+      },
+      "envelopeDigest": "sha256:82607667ee132b0180fcb8e09796b5b399d4967b43a985bf0c8e0382fba8d7dd",
+      "state": "approved",
+      "createdAt": "2026-09-17T00:00:00.000Z",
+      "externalReferences": [
+        { "namespace": "legacy.job", "id": "contract-job" }
+      ]
+    },
+    "approval": {
+      "schemaVersion": 1,
+      "approvalId": "approval-contract",
+      "projectId": "project-contract",
+      "runId": "run-contract",
+      "dispatchId": "dispatch-contract",
+      "envelopeDigest": "sha256:82607667ee132b0180fcb8e09796b5b399d4967b43a985bf0c8e0382fba8d7dd",
+      "decision": "approved",
+      "basis": { "kind": "user" },
+      "actor": { "kind": "user", "userId": "user-contract" },
+      "decidedAt": "2026-09-17T00:00:30.000Z"
+    }
+  }
+}

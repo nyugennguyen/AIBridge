@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "memoryId": "memory-contract",
+  "projectId": "project-contract",
+  "kind": "finding",
+  "content": "The canonical fixture is deterministic.",
+  "contentDigest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "scope": { "kind": "run", "runId": "run-contract" },
+  "author": { "kind": "user", "userId": "user-contract" },
+  "createdAt": "2026-09-17T00:00:00.000Z",
+  "sourceReferences": [
+    { "namespace": "legacy.memory", "id": "contract-memory" }
+  ],
+  "trustState": "accepted",
+  "sensitivity": "internal",
+  "retention": "project"
+}

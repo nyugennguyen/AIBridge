@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "nodeId": "node-contract",
+  "meshId": "mesh-contract",
+  "displayName": "Contract worker",
+  "enrollment": {
+    "status": "enrolled",
+    "enrolledAt": "2026-09-17T00:00:00.000Z"
+  },
+  "externalReferences": [
+    { "namespace": "legacy.agent", "id": "contract-worker" }
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "roleId": "role-contract",
+  "templateVersion": 1,
+  "projectId": "project-contract",
+  "name": "Contract implementer",
+  "purpose": "Exercise a bounded contract fixture.",
+  "instructions": "Only validate the assigned version-one example.",
+  "requiredCapabilities": ["read"],
+  "preferredRuntimeKinds": ["contract-fake"],
+  "contextSelectionPolicyReference": { "namespace": "policy", "id": "contract-v1" },
+  "permissionRestrictions": {
+    "allowedCapabilities": ["read"],
+    "deniedCapabilities": ["write"],
+    "approvalRequirements": {
+      "destructiveEffects": true,
+      "externalEffects": true,
+      "capabilities": ["read"]
+    }
+  },
+  "author": { "kind": "user", "userId": "user-contract" },
+  "createdAt": "2026-09-17T00:00:00.000Z"
+}

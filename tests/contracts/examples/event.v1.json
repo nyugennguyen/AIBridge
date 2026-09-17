@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "eventId": "event-contract",
+  "sequence": 1,
+  "projectId": "project-contract",
+  "runId": "run-contract",
+  "actor": { "kind": "node", "nodeId": "node-contract" },
+  "occurredAt": "2026-09-17T00:00:00.000Z",
+  "correlationId": "correlation-contract",
+  "causation": { "kind": "command", "commandId": "command-contract" },
+  "controllerEpoch": 1,
+  "commandId": "command-contract",
+  "type": "controller.lease.changed",
+  "payload": {
+    "lease": {
+      "schemaVersion": 1,
+      "leaseId": "lease-contract",
+      "projectId": "project-contract",
+      "runId": "run-contract",
+      "controllerNodeId": "node-contract",
+      "epoch": 1,
+      "issuedAt": "2026-09-17T00:00:00.000Z",
+      "expiresAt": "2026-09-17T00:05:00.000Z"
+    }
+  }
+}

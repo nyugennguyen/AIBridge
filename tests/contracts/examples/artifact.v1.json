@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "artifactId": "artifact-contract",
+  "projectId": "project-contract",
+  "runId": "run-contract",
+  "dispatchId": "dispatch-contract",
+  "sessionId": "session-contract",
+  "name": "contract-report.json",
+  "mediaType": "application/json",
+  "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "byteCount": 42,
+  "source": { "kind": "session", "sessionId": "session-contract" },
+  "location": { "kind": "external_reference", "reference": { "namespace": "object-store", "id": "contract-report" } }
+}

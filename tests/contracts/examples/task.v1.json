@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "taskId": "task-contract",
+  "runId": "run-contract",
+  "projectId": "project-contract",
+  "title": "Exercise contracts",
+  "description": "Parse canonical version-one contract examples.",
+  "state": "ready",
+  "dependencies": [],
+  "externalReferences": [
+    { "namespace": "legacy.task", "id": "#1" }
+  ]
+}

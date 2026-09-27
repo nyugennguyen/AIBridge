@@ -40,11 +40,16 @@ export interface PermissionPolicy {
 export interface OpencodeClient {
   health(): Promise<boolean>
   createSession(title: string, directory: string): Promise<CreateSessionResult>
-  sendPromptAsync(sessionId: string, prompt: string, directory: string): Promise<void>
+  sendPromptAsync(sessionId: string, prompt: string, directory: string, policy?: OpencodePromptPolicy): Promise<void>
   subscribeEvents(directory: string): Promise<AsyncIterable<OpencodeEvent>>
   getSessionStatus(sessionId: string): Promise<SessionStatus>
   replyPermission(sessionId: string, permissionId: string, response: PermissionDecision): Promise<void>
   abortSession(sessionId: string): Promise<void>
+}
+
+export interface OpencodePromptPolicy {
+  readonly system?: string
+  readonly tools?: Readonly<Record<string, boolean>>
 }
 
 export interface PermissionPolicyConfig {

@@ -1,6 +1,6 @@
 import { createOpencodeClient } from "@opencode-ai/sdk/v2"
 import type { OpencodeClient as SdkOpencodeClient } from "@opencode-ai/sdk/v2"
-import type { CreateSessionResult, OpencodeClient, OpencodeEvent, PermissionDecision, SessionStatus } from "./types.js"
+import type { CreateSessionResult, OpencodeClient, OpencodeEvent, OpencodePromptPolicy, PermissionDecision, SessionStatus } from "./types.js"
 
 export interface SdkOpencodeClientOptions {
   baseUrl: string
@@ -31,9 +31,15 @@ export class SdkOpencodeClientAdapter implements OpencodeClient {
     return { id }
   }
 
-  async sendPromptAsync(sessionId: string, prompt: string, directory: string): Promise<void> {
-    await this.client.session.prompt(
-      { sessionID: sessionId, directory, parts: [{ type: "text", text: prompt }] },
+  async sendPromptAsync(sessionId: string, prompt: string, directory: string, policy?: OpencodePromptPolicy): Promise<void> {
+    await this.client.session.promptAsync(
+      {
+        sessionID: sessionId,
+        directory,
+        parts: [{ type: "text", text: prompt }],
+        ...(policy?.system === undefined ? {} : { system: policy.system }),
+        ...(policy?.tools === undefined ? {} : { tools: policy.tools }),
+      },
       { throwOnError: true },
     )
   }

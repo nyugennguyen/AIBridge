@@ -1,0 +1,46 @@
+name: Publish npm package
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.14"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - name: Read package manifest
+        id: package
+        run: echo "manifest=$(jq -c . package.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Verify release tag
+        if: github.event.release.tag_name != format('v{0}', fromJSON(steps.package.outputs.manifest).version)
+        run: |
+          echo "Release tag must match the package version."
+          exit 1
+
+      - name: Validate release package
+        run: bun run release:check
+
+      - name: Publish to npm
+        run: npm publish

@@ -8,7 +8,7 @@
  *
  * Design constraints:
  * - `_opencode` is hidden from `--help` output.
- * - `--profile` is required for `start`, `serve`, `status`, `_opencode`;
+ * - `--profile` is required for `start`, `serve`, `status`, `tui`, `_opencode`;
  *   optional for `setup`.
  * - Help and version output are deterministic (no timestamps, no random).
  * - Error messages never leak internal paths, stack traces, or env values.
@@ -32,6 +32,8 @@ export interface CliDeps {
   readonly writer: (data: string) => void
   /** Whether the current process stdout is a TTY. */
   readonly isTTY: boolean
+  /** Whether the current process stdin is a TTY (needed by the full-screen UI). */
+  readonly isInputTTY?: boolean
   /** Run interactive setup. Profile is undefined when not passed. */
   readonly runSetup: (profile?: string) => Promise<{
     readonly kind: "persisted" | "blocked" | "declined"
@@ -57,6 +59,8 @@ export interface CliDeps {
   }>
   /** Run `opencode serve` for a given profile. */
   readonly runOpencode: (profile: string) => Promise<void>
+  /** Run the separately-composed interactive TUI for a validated profile. */
+  readonly runTui?: (profile: string) => Promise<CliExitCode>
   /** Package version string. */
   readonly version: string
 }
@@ -65,7 +69,7 @@ export interface CliDeps {
 
 const PROG = "aibr"
 
-const COMMANDS = ["setup", "start", "serve", "status"] as const
+const COMMANDS = ["setup", "start", "serve", "status", "tui"] as const
 
 const ALL_COMMANDS = [...COMMANDS, "_opencode"] as const
 
@@ -129,9 +133,10 @@ function helpText(): string {
     "  start    Start opencode + bridge in tmux",
     "  serve    Run the bridge server",
     "  status   Check tmux session and bridge health",
+    "  tui      Open the interactive local UI",
     "",
     "Options:",
-    "  --profile, -p <name>   Profile name (required for start/serve/status)",
+    "  --profile, -p <name>   Profile name (required for start/serve/status/tui)",
     "  --help, -h             Show this help",
     "  --version, -v          Show version",
     "",
@@ -234,6 +239,24 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<Cl
 
   const profile = args.profile!
 
+  // ── tui ────────────────────────────────────────────────────────────
+  if (command === "tui") {
+    if (!deps.isTTY || deps.isInputTTY === false) {
+      deps.writer("Error: tui requires interactive stdin and stdout TTYs\n")
+      return 1
+    }
+    if (deps.runTui === undefined) {
+      deps.writer("Error: TUI application service is unavailable\n")
+      return 1
+    }
+    try {
+      return await deps.runTui(profile)
+    } catch (err) {
+      deps.writer(`Error: ${err instanceof Error ? err.message : "tui failed"}\n`)
+      return 1
+    }
+  }
+
   // ── start ──────────────────────────────────────────────────────────
   if (command === "start") {
     try {
@@ -318,6 +341,11 @@ async function createRealDeps(): Promise<CliDeps> {
   return {
     writer: (s: string) => process.stdout.write(s),
     isTTY: Boolean(process.stdout?.isTTY),
+    isInputTTY: Boolean(process.stdin?.isTTY),
+    runTui: async (profile: string) => {
+      const { runLocalTui } = await import("./tui/bootstrap.js")
+      return runLocalTui(profile)
+    },
 
     runSetup: async (profile?: string) => {
       const reader = createStreamLineReader(Bun.stdin.stream())

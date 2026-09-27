@@ -1,0 +1,79 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1592" height="1266" viewBox="0 0 1592 1266">
+<style>
+  .background { fill: #0b1020; }
+  .panel { fill: #111827; stroke: #334155; stroke-width: 2; }
+  .title { fill: #7dd3fc; font: 700 17px ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .terminal { fill: #e5e7eb; font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre; }
+</style>
+<rect width="100%" height="100%" class="background"/>
+<g><rect x="24" y="24" width="760" height="390" rx="12" class="panel"/><text x="42" y="54" class="title">1. Authorized project</text><text x="42" y="82" class="terminal">AIBridge — Projects &gt; projects</text>
+<text x="42" y="95" class="terminal">[READY] M1 fixture project — /workspace/m1-fixture</text>
+<text x="42" y="108" class="terminal">Compact layout — breadcrumbs preserve every screen.</text>
+<text x="42" y="121" class="terminal"></text>
+<text x="42" y="134" class="terminal">&gt; M1 fixture project — /workspace/m1-fixture [Scripted OpenCode]</text>
+<text x="42" y="147" class="terminal"></text>
+<text x="42" y="160" class="terminal">Up/Down: select project  Enter: select  n: new one-task run</text>
+<text x="42" y="173" class="terminal"></text>
+<text x="42" y="186" class="terminal">COMMAND — Tab: focus  F1/?: help  f: refresh  q: close UI</text></g>
+<g><rect x="808" y="24" width="760" height="390" rx="12" class="panel"/><text x="826" y="54" class="title">2. One-task draft</text><text x="826" y="82" class="terminal">AIBridge — Projects &gt; draft</text>
+<text x="826" y="95" class="terminal">[READY] M1 fixture project — /workspace/m1-fixture</text>
+<text x="826" y="108" class="terminal">Compact layout — breadcrumbs preserve every screen.</text>
+<text x="826" y="121" class="terminal"></text>
+<text x="826" y="134" class="terminal">  Goal: Prove the approved flow</text>
+<text x="826" y="147" class="terminal">  Task title: One deterministic task</text>
+<text x="826" y="160" class="terminal">  Task description: Exercise the integrated M1 boundaries</text>
+<text x="826" y="173" class="terminal">  Prompt: Inspect, interact, and report verified completion</text>
+<text x="826" y="186" class="terminal">  Model: fixture-model</text>
+<text x="826" y="199" class="terminal">&gt; Timeout: 900s</text>
+<text x="826" y="212" class="terminal">Tab: next field  Enter: review proposal  Esc: leave field</text>
+<text x="826" y="225" class="terminal"></text>
+<text x="826" y="238" class="terminal">EDITING — text keys edit this field; Escape exits field</text></g>
+<g><rect x="24" y="438" width="760" height="390" rx="12" class="panel"/><text x="42" y="468" class="title">3. Immutable proposal</text><text x="42" y="496" class="terminal">AIBridge — Projects &gt; proposal</text>
+<text x="42" y="509" class="terminal">[PROPOSAL REQUIRED] M1 fixture project — /workspace/m1-fixture</text>
+<text x="42" y="522" class="terminal">Compact layout — breadcrumbs preserve every screen.</text>
+<text x="42" y="535" class="terminal"></text>
+<text x="42" y="548" class="terminal">Dispatch: dispatch-m1-5  attempt: 1</text>
+<text x="42" y="561" class="terminal">Digest: sha256:3eec6d2f473f61997b6ac7e835d1c96df572612f0271a7d503cd0eddf1caffea</text>
+<text x="42" y="574" class="terminal">Project/path: project-m1 / path-m1</text>
+<text x="42" y="587" class="terminal">Target: node-m1  runtime: scripted-opencode (installation-m1)</text>
+<text x="42" y="600" class="terminal">Model: fixture-model  timeout: 900s</text>
+<text x="42" y="613" class="terminal">Requested capabilities: filesystem.read, filesystem.write</text>
+<text x="42" y="626" class="terminal">Allowed: filesystem.read, filesystem.write</text>
+<text x="42" y="639" class="terminal">Denied: network.external</text>
+<text x="42" y="652" class="terminal">Approval: REQUIRED</text>
+<text x="42" y="665" class="terminal">Launch: NOT-REQUESTED</text>
+<text x="42" y="678" class="terminal">Enter: full envelope  a: approval dialog  r: reject dialog  e: revise</text>
+<text x="42" y="691" class="terminal"></text>
+<text x="42" y="704" class="terminal">COMMAND — Tab: focus  F1/?: help  f: refresh  q: close UI</text></g>
+<g><rect x="808" y="438" width="760" height="390" rx="12" class="panel"/><text x="826" y="468" class="title">4. Exact approval guard</text><text x="826" y="496" class="terminal">AIBridge — Projects &gt; proposal</text>
+<text x="826" y="509" class="terminal">[PROPOSAL REQUIRED] M1 fixture project — /workspace/m1-fixture</text>
+<text x="826" y="522" class="terminal"></text>
+<text x="826" y="535" class="terminal">CONFIRM APPROVAL</text>
+<text x="826" y="548" class="terminal">[Back]  Approve and start — Enter goes Back; Tab selects Approve and start</text>
+<text x="826" y="561" class="terminal">Dispatch dispatch-m1-5; attempt 1</text>
+<text x="826" y="574" class="terminal">Digest sha256:3eec6d2f473f61997b6ac7e835d1c96df572612f0271a7d503cd0eddf1caffea</text>
+<text x="826" y="587" class="terminal">Target and permissions below are immutable for this approval.</text>
+<text x="826" y="600" class="terminal">Target: node-m1 / scripted-opencode</text>
+<text x="826" y="613" class="terminal">Permissions: filesystem.read, filesystem.write</text>
+<text x="826" y="626" class="terminal">PageUp/PageDown: review all confirmation details</text></g>
+<g><rect x="24" y="852" width="760" height="390" rx="12" class="panel"/><text x="42" y="882" class="title">5. Working session</text><text x="42" y="910" class="terminal">AIBridge — Projects &gt; session</text>
+<text x="42" y="923" class="terminal">[WORKING] M1 fixture project — /workspace/m1-fixture</text>
+<text x="42" y="936" class="terminal">Compact layout — breadcrumbs preserve every screen.</text>
+<text x="42" y="949" class="terminal"></text>
+<text x="42" y="962" class="terminal">Session: session-m1  terminal: terminal-m1</text>
+<text x="42" y="975" class="terminal">Runtime: scripted-opencode  node: node-m1</text>
+<text x="42" y="988" class="terminal">State: [WORKING]</text>
+<text x="42" y="1001" class="terminal">t: terminal (read-only)  f: refresh/reconcile  v: review result  c: cancel  x: t</text>
+<text x="42" y="1014" class="terminal">erminate</text>
+<text x="42" y="1027" class="terminal"></text>
+<text x="42" y="1040" class="terminal">COMMAND — Tab: focus  F1/?: help  f: refresh  q: close UI</text></g>
+<g><rect x="808" y="852" width="760" height="390" rx="12" class="panel"/><text x="826" y="882" class="title">6. Read-only terminal</text><text x="826" y="910" class="terminal">AIBridge — Projects &gt; terminal</text>
+<text x="826" y="923" class="terminal">[WORKING] M1 fixture project — /workspace/m1-fixture</text>
+<text x="826" y="936" class="terminal">Fixture terminal — Fixture OpenCode session</text>
+<text x="826" y="949" class="terminal">[READ ONLY] M1 fixture project</text>
+<text x="826" y="962" class="terminal">agent&gt; working</text>
+<text x="826" y="975" class="terminal"></text>
+<text x="826" y="988" class="terminal">Terminal notice: Attached read-only</text>
+<text x="826" y="1001" class="terminal">READ ONLY — i requests input</text>
+<text x="826" y="1014" class="terminal">i: request input  o: explicit takeover  d: detach</text></g>
+</svg>

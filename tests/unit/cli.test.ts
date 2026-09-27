@@ -22,11 +22,13 @@ class FakeWriter {
 function fakeDeps(overrides?: {
   writer?: FakeWriter
   isTTY?: boolean
+  isInputTTY?: boolean
   setupRunner?: CliDeps["runSetup"]
   startRunner?: CliDeps["startProfile"]
   serveRunner?: CliDeps["serveBridge"]
   statusRunner?: CliDeps["statusProfile"]
   opencodeRunner?: CliDeps["runOpencode"]
+  tuiRunner?: NonNullable<CliDeps["runTui"]>
   version?: string
 }): {
   deps: CliDeps
@@ -37,6 +39,7 @@ function fakeDeps(overrides?: {
     deps: {
       writer: (s: string) => writer.write(s),
       isTTY: overrides?.isTTY ?? true,
+      isInputTTY: overrides?.isInputTTY ?? true,
       runSetup: overrides?.setupRunner ?? (async () => ({
         kind: "persisted" as const,
         profileName: "p",
@@ -54,6 +57,7 @@ function fakeDeps(overrides?: {
         body: '{"status":"ok"}',
       })),
       runOpencode: overrides?.opencodeRunner ?? (async () => {}),
+      runTui: overrides?.tuiRunner,
       version: overrides?.version ?? "1.0.0",
     },
     writer,
@@ -81,6 +85,7 @@ describe("cli --help", () => {
     expect(output).toContain("start")
     expect(output).toContain("serve")
     expect(output).toContain("status")
+    expect(output).toContain("tui")
   })
 
   it("does NOT show hidden _opencode command", async () => {
@@ -448,6 +453,62 @@ describe("cli _opencode (hidden)", () => {
 })
 
 // ── Non-TTY ────────────────────────────────────────────────────────────
+
+describe("cli tui", () => {
+  it("requires a profile", async () => {
+    const { exitCode, output } = await captureRun(["tui"])
+
+    expect(exitCode).toBe(1)
+    expect(output).toContain("--profile")
+  })
+
+  it("requires both interactive streams before creating the shell", async () => {
+    let called = false
+    const { exitCode, output } = await captureRun(["tui", "--profile", "dev"], {
+      isTTY: true,
+      isInputTTY: false,
+      tuiRunner: async () => { called = true; return 0 },
+    })
+
+    expect(exitCode).toBe(1)
+    expect(output).toContain("stdin and stdout TTYs")
+    expect(called).toBe(false)
+  })
+
+  it("rejects non-interactive stdout before creating the shell", async () => {
+    let called = false
+    const { exitCode, output } = await captureRun(["tui", "--profile", "dev"], {
+      isTTY: false,
+      isInputTTY: true,
+      tuiRunner: async () => { called = true; return 0 },
+    })
+
+    expect(exitCode).toBe(1)
+    expect(output).toContain("stdin and stdout TTYs")
+    expect(called).toBe(false)
+  })
+
+  it("delegates a validated profile to the separately injected shell", async () => {
+    let profile: string | undefined
+    const { exitCode } = await captureRun(["tui", "--profile", "dev"], {
+      tuiRunner: async (value) => { profile = value; return 0 },
+    })
+
+    expect(exitCode).toBe(0)
+    expect(profile).toBe("dev")
+  })
+
+  it("keeps help and version usable without TTYs", async () => {
+    const help = await captureRun(["tui", "--help"], { isTTY: false, isInputTTY: false })
+    const version = await captureRun(["tui", "--version"], { isTTY: false, isInputTTY: false })
+
+    expect(help.exitCode).toBe(0)
+    expect(help.output).toContain("Usage")
+    expect(version.exitCode).toBe(0)
+  })
+})
+
+// ── Non-TTY ───────────────────────────────────────────────────────────
 
 describe("cli non-TTY", () => {
   it("errors on commands that require TTY interaction", async () => {

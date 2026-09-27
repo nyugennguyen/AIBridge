@@ -1,11 +1,17 @@
 import type { Result } from "../orchestration/errors.js"
 import type {
+  AdapterCapabilityReport,
   AgentInstallation,
   AgentResponse,
   AgentResult,
   AgentRuntimeEvent,
+  CapabilityDetail,
+  CapabilityEvidenceSource,
+  CapabilitySupportStatus,
   LaunchAgentRequest,
   NodeContext,
+  ObservationConfidence,
+  ObservationSource,
   PromptRequest,
   RuntimeCapabilities,
   RuntimeOperationContext,
@@ -14,12 +20,18 @@ import type {
 } from "./schemas.js"
 
 export type {
+  AdapterCapabilityReport,
   AgentInstallation,
   AgentResponse,
   AgentResult,
   AgentRuntimeEvent,
+  CapabilityDetail,
+  CapabilityEvidenceSource,
+  CapabilitySupportStatus,
   LaunchAgentRequest,
   NodeContext,
+  ObservationConfidence,
+  ObservationSource,
   PromptRequest,
   RuntimeCapabilities,
   RuntimeOperationContext,
@@ -35,6 +47,7 @@ export type {
 export interface AgentRuntimeAdapter {
   readonly kind: string
   readonly capabilities: RuntimeCapabilities
+  readonly capabilityReport?: AdapterCapabilityReport
 
   detect(nodeContext: NodeContext): Promise<Result<AgentInstallation[]>>
   launch(request: LaunchAgentRequest): Promise<Result<RuntimeSession>>

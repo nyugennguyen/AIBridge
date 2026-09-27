@@ -62,6 +62,7 @@ export class FakeAgentRuntimeAdapter implements AgentRuntimeAdapter {
   #sessions = new Map<string, RuntimeSession>()
   #sessionReferences = new Map<string, RuntimeSessionReference>()
   #dispatchSessions = new Map<string, string>()
+  #prompts = new Map<string, { fingerprint: string; result: Result<void> }>()
   #launchSideEffectCount = 0
 
   constructor(options: FakeRuntimeAdapterOptions = {}) {
@@ -155,7 +156,24 @@ export class FakeAgentRuntimeAdapter implements AgentRuntimeAdapter {
   }
 
   async prompt(session: RuntimeSession, request: PromptRequest): Promise<Result<void>> {
-    return this.validateSessionScope(session, request.operation) ?? success(undefined)
+    const scopeFailure = this.validateSessionScope(session, request.operation)
+    if (scopeFailure) return scopeFailure
+
+    const fingerprint = digestJson(request)
+    const previous = this.#prompts.get(request.operation.commandId)
+    if (previous) {
+      return previous.fingerprint === fingerprint
+        ? previous.result
+        : typedFailure(
+            "conflict",
+            "runtime.prompt.command_conflict",
+            "A command ID cannot be reused with different prompt content.",
+            request.operation.correlationId,
+          )
+    }
+    const result = success(undefined)
+    this.#prompts.set(request.operation.commandId, { fingerprint, result })
+    return result
   }
 
   async *observe(session: RuntimeSession, operation: RuntimeOperationContext): AsyncIterable<Result<AgentRuntimeEvent>> {

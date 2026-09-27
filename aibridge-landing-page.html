@@ -1,0 +1,1983 @@
+
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AIBridge — Coordinate Trusted AI Agents Across Your Private Mesh</title>
+  <meta name="description" content="One terminal to compose, approve, observe, and guide trusted CLI AI agents across every machine in your private Tailscale mesh.">
+  <style>
+    /* --- CSS Reset & Variables --- */
+    *, *::before, *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    :root {
+      /* OKLch Base Palette */
+      --bg: oklch(13% 0.022 260);
+      --bg-deep: oklch(10% 0.025 260);
+      --surface: oklch(17% 0.025 260);
+      --surface-glass: oklch(17% 0.025 260 / 0.72);
+      --surface-elevated: oklch(21% 0.03 260);
+      --surface-active: oklch(24% 0.035 260);
+      --border: oklch(26% 0.02 260);
+      --border-subtle: oklch(20% 0.015 260);
+      --border-bright: oklch(38% 0.035 260);
+
+      /* Typography */
+      --fg: oklch(98% 0.005 260);
+      --fg-muted: oklch(74% 0.015 260);
+      --fg-dim: oklch(52% 0.018 260);
+
+      /* Accents & Status */
+      --cyan: oklch(78% 0.16 205);
+      --cyan-dim: oklch(78% 0.16 205 / 0.15);
+      --violet: oklch(68% 0.22 295);
+      --violet-dim: oklch(68% 0.22 295 / 0.15);
+      --lime: oklch(82% 0.20 142);
+      --lime-dim: oklch(82% 0.20 142 / 0.16);
+      --amber: oklch(78% 0.17 70);
+      --amber-dim: oklch(78% 0.17 70 / 0.15);
+      --crimson: oklch(64% 0.22 25);
+
+      /* Typography Families */
+      --font-display: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", "Segoe UI", system-ui, sans-serif;
+      --font-body: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, system-ui, sans-serif;
+      --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", "Menlo", "Consolas", monospace;
+
+      /* Radii & Shadows */
+      --radius-sm: 4px;
+      --radius-md: 8px;
+      --radius-lg: 14px;
+      --radius-xl: 20px;
+      --glow-cyan: 0 0 35px oklch(78% 0.16 205 / 0.22);
+      --glow-violet: 0 0 45px oklch(68% 0.22 295 / 0.18);
+    }
+
+    html {
+      color-scheme: dark;
+      scroll-behavior: smooth;
+      font-size: 16px;
+      background-color: var(--bg);
+      color: var(--fg);
+      font-family: var(--font-body);
+      line-height: 1.55;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+
+    body {
+      overflow-x: hidden;
+      background: 
+        radial-gradient(ellipse 90% 60% at 50% -10%, oklch(24% 0.05 270 / 0.45), transparent 70%),
+        radial-gradient(circle 800px at 85% 20%, oklch(22% 0.07 205 / 0.18), transparent 60%),
+        radial-gradient(circle 900px at 15% 65%, oklch(20% 0.08 295 / 0.14), transparent 65%),
+        var(--bg);
+      min-height: 100vh;
+    }
+
+    /* Subdued Background Grid Texture */
+    .mesh-grid-canvas {
+      position: fixed;
+      inset: 0;
+      background-image: 
+        linear-gradient(to right, oklch(22% 0.015 260 / 0.35) 1px, transparent 1px),
+        linear-gradient(to bottom, oklch(22% 0.015 260 / 0.35) 1px, transparent 1px);
+      background-size: 56px 56px;
+      mask-image: radial-gradient(ellipse 80% 70% at 50% 40%, black 20%, transparent 85%);
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    /* Accessible focus rings */
+    :focus-visible {
+      outline: 2px solid var(--cyan);
+      outline-offset: 3px;
+    }
+
+    a {
+      color: inherit;
+      text-decoration: none;
+    }
+
+    /* --- Container & Utilities --- */
+    .container {
+      max-width: 1240px;
+      margin: 0 auto;
+      padding: 0 24px;
+      position: relative;
+      z-index: 1;
+    }
+
+    .kicker {
+      font-family: var(--font-mono);
+      font-size: 0.78rem;
+      font-weight: 600;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--cyan);
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .kicker::before {
+      content: "";
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background-color: var(--cyan);
+      box-shadow: 0 0 10px var(--cyan);
+    }
+
+    .pill-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 3px 10px;
+      border-radius: 999px;
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      border: 1px solid var(--border);
+      background: var(--surface-glass);
+      backdrop-filter: blur(8px);
+    }
+
+    .pill-badge.status-shipped {
+      border-color: oklch(82% 0.20 142 / 0.4);
+      color: var(--lime);
+      background: var(--lime-dim);
+    }
+
+    .pill-badge.status-roadmap {
+      border-color: oklch(78% 0.16 205 / 0.4);
+      color: var(--cyan);
+      background: var(--cyan-dim);
+    }
+
+    .pill-badge.status-future {
+      border-color: oklch(68% 0.22 295 / 0.4);
+      color: var(--violet);
+      background: var(--violet-dim);
+    }
+
+    /* --- Primary & Secondary CTAs --- */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      padding: 12px 22px;
+      border-radius: var(--radius-md);
+      font-family: var(--font-mono);
+      font-size: 0.88rem;
+      font-weight: 600;
+      transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+      cursor: pointer;
+      border: 1px solid transparent;
+      white-space: nowrap;
+    }
+
+    .btn-primary {
+      background: var(--fg);
+      color: var(--bg-deep);
+      box-shadow: 0 2px 14px rgba(255, 255, 255, 0.18);
+    }
+    .btn-primary:hover {
+      background: oklch(92% 0.01 260);
+      transform: translateY(-1px);
+      box-shadow: 0 4px 20px rgba(255, 255, 255, 0.25);
+    }
+
+    .btn-secondary {
+      background: var(--surface);
+      color: var(--fg);
+      border: 1px solid var(--border);
+    }
+    .btn-secondary:hover {
+      background: var(--surface-elevated);
+      border-color: var(--border-bright);
+      transform: translateY(-1px);
+    }
+
+    .btn-ghost {
+      background: transparent;
+      color: var(--fg-muted);
+      border: 1px solid transparent;
+    }
+    .btn-ghost:hover {
+      color: var(--fg);
+      background: var(--surface);
+      border-color: var(--border);
+    }
+
+    /* --- Announcement Top Bar --- */
+    .top-announcement {
+      border-bottom: 1px solid var(--border-subtle);
+      background: oklch(11% 0.02 260 / 0.85);
+      backdrop-filter: blur(12px);
+      font-size: 0.78rem;
+      font-family: var(--font-mono);
+      padding: 8px 16px;
+      text-align: center;
+      color: var(--fg-muted);
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    .top-announcement-inner {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .top-announcement a {
+      color: var(--cyan);
+      text-decoration: underline;
+      text-underline-offset: 3px;
+    }
+
+    /* --- Navigation --- */
+    .site-nav {
+      padding: 18px 0;
+      position: sticky;
+      top: 35px;
+      z-index: 90;
+      background: oklch(13% 0.022 260 / 0.82);
+      backdrop-filter: blur(16px);
+      border-bottom: 1px solid var(--border-subtle);
+    }
+
+    .nav-inner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .brand-logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-family: var(--font-display);
+      font-size: 1.15rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      color: var(--fg);
+    }
+
+    .brand-logo svg {
+      width: 26px;
+      height: 26px;
+      color: var(--cyan);
+    }
+
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 28px;
+      list-style: none;
+    }
+
+    .nav-link {
+      font-size: 0.88rem;
+      font-weight: 500;
+      color: var(--fg-muted);
+      transition: color 0.15s ease;
+    }
+    .nav-link:hover {
+      color: var(--fg);
+    }
+
+    .nav-actions {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    /* --- Hero Section --- */
+    .hero-section {
+      padding: 80px 0 60px;
+      text-align: left;
+    }
+
+    .hero-grid {
+      display: grid;
+      grid-template-columns: 1.1fr 0.9fr;
+      gap: 48px;
+      align-items: center;
+    }
+
+    .hero-editorial-lead {
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+    }
+
+    .hero-meta-strip {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .hero-title {
+      font-family: var(--font-display);
+      font-size: clamp(2.4rem, 4.2vw, 3.8rem);
+      line-height: 1.05;
+      font-weight: 750;
+      letter-spacing: -0.035em;
+      color: var(--fg);
+      text-wrap: balance;
+    }
+
+    .hero-title .gradient-text {
+      background: linear-gradient(135deg, var(--fg) 25%, var(--cyan) 75%, var(--violet) 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .hero-description {
+      font-size: 1.12rem;
+      line-height: 1.6;
+      color: var(--fg-muted);
+      max-width: 580px;
+      text-wrap: pretty;
+    }
+
+    .hero-cta-group {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      flex-wrap: wrap;
+      margin-top: 6px;
+    }
+
+    .hero-pulse-status {
+      display: flex;
+      align-items: center;
+      gap: 18px;
+      padding: 12px 16px;
+      background: var(--surface-glass);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      font-family: var(--font-mono);
+      font-size: 0.78rem;
+      color: var(--fg-dim);
+      max-width: fit-content;
+    }
+    .node-indicator {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--fg-muted);
+    }
+    .pulse-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--lime);
+      box-shadow: 0 0 10px var(--lime);
+      animation: pulseAnim 2.5s infinite;
+    }
+    @keyframes pulseAnim {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.45; transform: scale(0.85); }
+    }
+
+    /* --- Hero Interactive Orchestration Canvas --- */
+    .tui-orchestrator-card {
+      background: var(--surface-glass);
+      border: 1px solid var(--border-bright);
+      border-radius: var(--radius-lg);
+      overflow: hidden;
+      box-shadow: 0 24px 60px rgba(0, 0, 0, 0.6), var(--glow-cyan);
+      backdrop-filter: blur(20px);
+      position: relative;
+    }
+
+    .tui-titlebar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 16px;
+      background: oklch(15% 0.025 260);
+      border-bottom: 1px solid var(--border);
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      color: var(--fg-dim);
+    }
+
+    .tui-traffic-lights {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .traffic-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--border);
+    }
+    .traffic-dot:nth-child(1) { background: oklch(62% 0.22 25); }
+    .traffic-dot:nth-child(2) { background: oklch(75% 0.18 70); }
+    .traffic-dot:nth-child(3) { background: oklch(78% 0.18 142); }
+
+    .tui-tabs {
+      display: flex;
+      background: oklch(14% 0.022 260);
+      border-bottom: 1px solid var(--border);
+      overflow-x: auto;
+    }
+    .tui-tab {
+      padding: 8px 16px;
+      font-family: var(--font-mono);
+      font-size: 0.76rem;
+      background: transparent;
+      border: none;
+      color: var(--fg-dim);
+      cursor: pointer;
+      border-right: 1px solid var(--border);
+      border-bottom: 2px solid transparent;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      transition: all 0.15s ease;
+    }
+    .tui-tab:hover {
+      color: var(--fg);
+      background: oklch(16% 0.025 260);
+    }
+    .tui-tab.active {
+      color: var(--cyan);
+      background: var(--surface);
+      border-bottom-color: var(--cyan);
+    }
+    .tui-tab .badge {
+      font-size: 0.65rem;
+      padding: 1px 5px;
+      border-radius: 3px;
+      background: oklch(26% 0.02 260);
+      color: var(--fg);
+    }
+    .tui-tab.active .badge {
+      background: var(--cyan-dim);
+      color: var(--cyan);
+    }
+
+    .tui-workspace {
+      display: grid;
+      grid-template-columns: 240px 1fr;
+      min-height: 380px;
+    }
+
+    .tui-sidebar {
+      background: oklch(14% 0.022 260 / 0.8);
+      border-right: 1px solid var(--border);
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .sidebar-block-title {
+      font-family: var(--font-mono);
+      font-size: 0.68rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--fg-dim);
+      margin-bottom: 8px;
+    }
+
+    .mesh-node-item {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      padding: 8px 10px;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border-subtle);
+      background: var(--surface);
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      margin-bottom: 6px;
+    }
+    .mesh-node-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      color: var(--fg);
+      font-weight: 600;
+    }
+    .mesh-node-ip {
+      color: var(--fg-dim);
+      font-size: 0.7rem;
+    }
+
+    .tui-content-pane {
+      padding: 16px;
+      background: oklch(12% 0.02 260);
+      overflow-y: auto;
+      font-family: var(--font-mono);
+      font-size: 0.8rem;
+      line-height: 1.5;
+    }
+
+    .dag-chain {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .dag-node-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 10px 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      position: relative;
+    }
+    .dag-node-card.running {
+      border-color: var(--cyan);
+      background: oklch(17% 0.03 205 / 0.4);
+    }
+    .dag-node-card.blocked {
+      border-color: var(--amber);
+      background: oklch(18% 0.04 70 / 0.3);
+    }
+    .dag-node-card.done {
+      border-color: var(--border-subtle);
+      opacity: 0.75;
+    }
+
+    .dag-node-info {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .dag-step-num {
+      color: var(--fg-dim);
+      font-size: 0.72rem;
+    }
+    .dag-title {
+      font-weight: 600;
+      color: var(--fg);
+    }
+    .dag-agent-badge {
+      font-size: 0.7rem;
+      padding: 2px 7px;
+      border-radius: 4px;
+      background: oklch(24% 0.02 260);
+      color: var(--fg-muted);
+    }
+
+    .dag-status-pill {
+      font-size: 0.72rem;
+      padding: 3px 8px;
+      border-radius: 4px;
+      font-weight: 600;
+    }
+    .dag-status-pill.done { color: var(--lime); background: var(--lime-dim); }
+    .dag-status-pill.running { color: var(--cyan); background: var(--cyan-dim); }
+    .dag-status-pill.blocked { color: var(--amber); background: var(--amber-dim); }
+
+    .approval-gate-banner {
+      margin-top: 14px;
+      padding: 12px 14px;
+      border: 1px solid var(--amber);
+      border-radius: var(--radius-sm);
+      background: oklch(16% 0.04 70 / 0.4);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .approval-gate-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      color: var(--amber);
+      font-weight: 600;
+      font-size: 0.78rem;
+    }
+    .approval-actions {
+      display: flex;
+      gap: 8px;
+      margin-top: 4px;
+    }
+    .btn-approval-yes {
+      padding: 4px 10px;
+      background: var(--lime);
+      color: var(--bg-deep);
+      border: none;
+      border-radius: 3px;
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .btn-approval-diff {
+      padding: 4px 10px;
+      background: transparent;
+      color: var(--fg-muted);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      cursor: pointer;
+    }
+
+    /* Terminal stream output lines */
+    .stream-log {
+      color: var(--fg-muted);
+      font-size: 0.76rem;
+      line-height: 1.6;
+    }
+    .stream-log .cyan { color: var(--cyan); }
+    .stream-log .lime { color: var(--lime); }
+    .stream-log .amber { color: var(--amber); }
+    .stream-log .dim { color: var(--fg-dim); }
+
+    /* --- Section: Architectural Evolution (From Bridge to Control Plane) --- */
+    .section {
+      padding: 96px 0;
+      border-top: 1px solid var(--border-subtle);
+    }
+
+    .section-header {
+      margin-bottom: 56px;
+      max-width: 760px;
+    }
+    .section-header .section-title {
+      font-family: var(--font-display);
+      font-size: clamp(2rem, 3.2vw, 2.8rem);
+      font-weight: 750;
+      letter-spacing: -0.03em;
+      line-height: 1.12;
+      margin-top: 12px;
+      margin-bottom: 16px;
+    }
+    .section-header .section-subtitle {
+      font-size: 1.05rem;
+      color: var(--fg-muted);
+      line-height: 1.6;
+    }
+
+    .evolution-comparison-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 28px;
+    }
+
+    .comparison-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 32px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+      position: relative;
+    }
+
+    .comparison-card.shipped-card {
+      border-color: oklch(34% 0.04 142 / 0.5);
+      background: linear-gradient(180deg, oklch(16% 0.025 260), oklch(14% 0.02 260));
+    }
+    .comparison-card.roadmap-card {
+      border-color: oklch(38% 0.08 205 / 0.5);
+      background: linear-gradient(180deg, oklch(17% 0.03 260), oklch(14% 0.022 260));
+      box-shadow: var(--glow-cyan);
+    }
+
+    .card-badge-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .comparison-card h3 {
+      font-family: var(--font-display);
+      font-size: 1.5rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+
+    .comparison-card p {
+      color: var(--fg-muted);
+      font-size: 0.95rem;
+      line-height: 1.55;
+    }
+
+    .comparison-spec-list {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      margin-top: 8px;
+      border-top: 1px solid var(--border-subtle);
+      padding-top: 18px;
+    }
+
+    .comparison-spec-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      font-size: 0.88rem;
+      color: var(--fg-muted);
+    }
+
+    .spec-icon {
+      width: 18px;
+      height: 18px;
+      flex-shrink: 0;
+      margin-top: 2px;
+    }
+    .spec-icon.green { color: var(--lime); }
+    .spec-icon.cyan { color: var(--cyan); }
+
+    /* --- Section: Three Core Value Pillars --- */
+    .pillars-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 24px;
+    }
+
+    .pillar-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 30px;
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+      transition: border-color 0.2s ease, transform 0.2s ease;
+    }
+    .pillar-card:hover {
+      border-color: var(--border-bright);
+      transform: translateY(-2px);
+    }
+
+    .pillar-icon-box {
+      width: 44px;
+      height: 44px;
+      border-radius: var(--radius-md);
+      background: var(--surface-elevated);
+      border: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--cyan);
+    }
+
+    .pillar-title {
+      font-family: var(--font-display);
+      font-size: 1.25rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+
+    .pillar-desc {
+      font-size: 0.92rem;
+      color: var(--fg-muted);
+      line-height: 1.6;
+    }
+
+    .pillar-code-snippet {
+      background: oklch(11% 0.02 260);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-sm);
+      padding: 12px;
+      font-family: var(--font-mono);
+      font-size: 0.76rem;
+      color: var(--fg-muted);
+      overflow-x: auto;
+    }
+
+    /* --- Section: How a Run Moves (Workflow Pipeline) --- */
+    .workflow-strip {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 16px;
+      position: relative;
+    }
+
+    .workflow-step {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      padding: 22px 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      position: relative;
+    }
+    .workflow-step::after {
+      content: "→";
+      position: absolute;
+      right: -14px;
+      top: 50%;
+      transform: translateY(-50%);
+      font-family: var(--font-mono);
+      color: var(--fg-dim);
+      font-size: 1.1rem;
+      z-index: 2;
+    }
+    .workflow-step:last-child::after {
+      display: none;
+    }
+
+    .step-counter {
+      font-family: var(--font-mono);
+      font-size: 0.72rem;
+      color: var(--cyan);
+      font-weight: 700;
+    }
+
+    .step-name {
+      font-family: var(--font-display);
+      font-size: 1.05rem;
+      font-weight: 700;
+      color: var(--fg);
+    }
+
+    .step-desc {
+      font-size: 0.84rem;
+      color: var(--fg-muted);
+      line-height: 1.5;
+    }
+
+    /* --- Section: Roadmap & Milestone Engine --- */
+    .roadmap-timeline-box {
+      background: var(--surface-glass);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-xl);
+      padding: 40px;
+      backdrop-filter: blur(16px);
+    }
+
+    .roadmap-legend {
+      display: flex;
+      align-items: center;
+      gap: 24px;
+      margin-bottom: 36px;
+      padding-bottom: 20px;
+      border-bottom: 1px solid var(--border-subtle);
+      flex-wrap: wrap;
+    }
+
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-family: var(--font-mono);
+      font-size: 0.78rem;
+      color: var(--fg-muted);
+    }
+
+    .roadmap-nodes-flow {
+      display: grid;
+      grid-template-columns: repeat(6, 1fr);
+      gap: 16px;
+    }
+
+    .roadmap-milestone {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      padding: 20px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      position: relative;
+    }
+
+    .roadmap-milestone.current-shipped {
+      border-color: var(--lime);
+      background: linear-gradient(180deg, oklch(17% 0.025 260), oklch(15% 0.03 142 / 0.2));
+    }
+    .roadmap-milestone.first-release {
+      border-color: var(--cyan);
+      box-shadow: 0 0 20px oklch(78% 0.16 205 / 0.2);
+    }
+
+    .milestone-tag {
+      font-family: var(--font-mono);
+      font-size: 0.68rem;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+    .milestone-tag.shipped { color: var(--lime); }
+    .milestone-tag.dev { color: var(--cyan); }
+    .milestone-tag.future { color: var(--violet); }
+
+    .milestone-title {
+      font-family: var(--font-display);
+      font-size: 0.98rem;
+      font-weight: 700;
+      color: var(--fg);
+      line-height: 1.3;
+    }
+
+    .milestone-body {
+      font-size: 0.8rem;
+      color: var(--fg-muted);
+      line-height: 1.45;
+    }
+
+    .release-boundary-banner {
+      margin-top: 32px;
+      padding: 16px 20px;
+      background: oklch(16% 0.03 205 / 0.35);
+      border: 1px dashed var(--cyan);
+      border-radius: var(--radius-md);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      font-size: 0.86rem;
+      color: var(--fg-muted);
+      flex-wrap: wrap;
+    }
+    .release-boundary-banner strong {
+      color: var(--fg);
+    }
+
+    /* --- Section: Trust & Safety Architecture --- */
+    .safety-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 24px;
+    }
+
+    .safety-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 28px;
+      display: flex;
+      gap: 20px;
+    }
+
+    .safety-num {
+      font-family: var(--font-mono);
+      font-size: 1.1rem;
+      font-weight: 700;
+      color: var(--cyan);
+    }
+
+    .safety-content {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .safety-card h4 {
+      font-family: var(--font-display);
+      font-size: 1.15rem;
+      font-weight: 700;
+    }
+
+    .safety-card p {
+      font-size: 0.9rem;
+      color: var(--fg-muted);
+      line-height: 1.55;
+    }
+
+    /* --- Final High Impact CTA Section --- */
+    .final-cta-section {
+      padding: 110px 0;
+      text-align: center;
+      position: relative;
+    }
+
+    .cta-card {
+      background: linear-gradient(180deg, oklch(18% 0.035 260), oklch(13% 0.02 260));
+      border: 1px solid var(--border-bright);
+      border-radius: var(--radius-xl);
+      padding: 64px 32px;
+      max-width: 880px;
+      margin: 0 auto;
+      box-shadow: var(--glow-violet);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .cta-card::before {
+      content: "";
+      position: absolute;
+      top: 0;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 60%;
+      height: 2px;
+      background: linear-gradient(90deg, transparent, var(--cyan), var(--violet), transparent);
+    }
+
+    .cta-headline {
+      font-family: var(--font-display);
+      font-size: clamp(2rem, 3.6vw, 3rem);
+      font-weight: 800;
+      letter-spacing: -0.03em;
+      line-height: 1.15;
+      margin-bottom: 16px;
+    }
+
+    .cta-subtext {
+      font-size: 1.05rem;
+      color: var(--fg-muted);
+      max-width: 620px;
+      margin: 0 auto 36px;
+      line-height: 1.6;
+    }
+
+    .install-box-wrapper {
+      max-width: 580px;
+      margin: 28px auto 0;
+    }
+
+    .install-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: oklch(10% 0.025 260);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      padding: 10px 14px;
+      font-family: var(--font-mono);
+      font-size: 0.8rem;
+      color: var(--fg);
+    }
+
+    .install-cmd {
+      overflow-x: auto;
+      white-space: nowrap;
+      color: var(--cyan);
+      margin-right: 12px;
+    }
+
+    .copy-btn {
+      background: var(--surface-elevated);
+      border: 1px solid var(--border);
+      color: var(--fg-muted);
+      padding: 6px 12px;
+      border-radius: var(--radius-sm);
+      font-family: var(--font-mono);
+      font-size: 0.72rem;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.15s ease;
+      flex-shrink: 0;
+    }
+    .copy-btn:hover {
+      background: var(--surface-active);
+      color: var(--fg);
+      border-color: var(--border-bright);
+    }
+
+    .copy-notice {
+      font-size: 0.72rem;
+      color: var(--lime);
+      margin-top: 8px;
+      font-family: var(--font-mono);
+      min-height: 18px;
+    }
+
+    /* --- Footer --- */
+    .site-footer {
+      border-top: 1px solid var(--border-subtle);
+      padding: 60px 0 40px;
+      background: var(--bg-deep);
+      font-size: 0.85rem;
+      color: var(--fg-dim);
+    }
+
+    .footer-grid {
+      display: grid;
+      grid-template-columns: 1.5fr repeat(3, 1fr);
+      gap: 40px;
+      margin-bottom: 48px;
+    }
+
+    .footer-brand {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .footer-brand p {
+      max-width: 320px;
+      line-height: 1.6;
+      color: var(--fg-muted);
+    }
+
+    .footer-col h5 {
+      font-family: var(--font-mono);
+      font-size: 0.78rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--fg);
+      margin-bottom: 14px;
+    }
+
+    .footer-col ul {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .footer-col a {
+      color: var(--fg-muted);
+      transition: color 0.15s;
+    }
+    .footer-col a:hover {
+      color: var(--fg);
+    }
+
+    .footer-bottom-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-top: 1px solid var(--border-subtle);
+      padding-top: 24px;
+      font-size: 0.78rem;
+      font-family: var(--font-mono);
+      flex-wrap: wrap;
+      gap: 16px;
+    }
+
+    .tech-specs-pills {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    /* --- Responsive Breakpoints --- */
+    @media (max-width: 1080px) {
+      .hero-grid {
+        grid-template-columns: 1fr;
+        gap: 40px;
+      }
+      .tui-workspace {
+        grid-template-columns: 1fr;
+      }
+      .tui-sidebar {
+        border-right: none;
+        border-bottom: 1px solid var(--border);
+      }
+      .pillars-grid {
+        grid-template-columns: 1fr;
+      }
+      .workflow-strip {
+        grid-template-columns: 1fr;
+      }
+      .workflow-step::after {
+        display: none;
+      }
+      .roadmap-nodes-flow {
+        grid-template-columns: repeat(2, 1fr);
+      }
+      .evolution-comparison-grid {
+        grid-template-columns: 1fr;
+      }
+      .footer-grid {
+        grid-template-columns: 1fr 1fr;
+      }
+    }
+
+    @media (max-width: 640px) {
+      .nav-links {
+        display: none;
+      }
+      .roadmap-nodes-flow {
+        grid-template-columns: 1fr;
+      }
+      .safety-grid {
+        grid-template-columns: 1fr;
+      }
+      .footer-grid {
+        grid-template-columns: 1fr;
+      }
+      .hero-title {
+        font-size: 2.2rem;
+      }
+      .cta-card {
+        padding: 40px 20px;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Subtle Ambient Network Grid Background -->
+  <div class="mesh-grid-canvas" aria-hidden="true"></div>
+
+  <!-- Top Real-World Status Bar -->
+  <aside class="top-announcement" data-od-id="top-announcement-bar">
+    <div class="container top-announcement-inner">
+      <span class="pill-badge status-shipped">v0.2 SHIPPED</span>
+      <span>Two-host OpenCode Tailscale bridge active</span>
+      <span style="opacity: 0.4;">|</span>
+      <span class="pill-badge status-roadmap">v1.0 IN PROGRESS</span>
+      <span>Terminal Control Plane roadmap announced</span>
+      <a href="#roadmap">Inspect Milestones &rarr;</a>
+    </div>
+  </aside>
+
+  <!-- Global Sticky Nav -->
+  <header class="site-nav" data-od-id="site-navigation">
+    <div class="container nav-inner">
+      <a href="#" class="brand-logo" aria-label="AIBridge Home">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect>
+          <rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect>
+          <line x1="6" y1="6" x2="6.01" y2="6"></line>
+          <line x1="6" y1="18" x2="6.01" y2="18"></line>
+          <path d="M18 10v4"></path>
+          <path d="M14 12h8"></path>
+        </svg>
+        <span>AIBridge</span>
+      </a>
+
+      <nav aria-label="Primary Navigation">
+        <ul class="nav-links">
+          <li><a href="#control-plane" class="nav-link">Control Plane</a></li>
+          <li><a href="#pillars" class="nav-link">Capabilities</a></li>
+          <li><a href="#workflow" class="nav-link">How it Moves</a></li>
+          <li><a href="#roadmap" class="nav-link">Roadmap</a></li>
+          <li><a href="#trust-safety" class="nav-link">Security Floor</a></li>
+        </ul>
+      </nav>
+
+      <div class="nav-actions">
+        <a href="https://github.com/nyugennguyen/AIBridge" target="_blank" rel="noopener noreferrer" class="btn btn-secondary" style="padding: 8px 14px; font-size: 0.8rem;">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"></path>
+          </svg>
+          <span>GitHub</span>
+        </a>
+        <a href="#roadmap" class="btn btn-primary" style="padding: 8px 16px; font-size: 0.8rem;">
+          <span>Explore Roadmap</span>
+        </a>
+      </div>
+    </div>
+  </header>
+
+  <!-- Hero Section -->
+  <main>
+    <section class="hero-section" data-od-id="hero-section">
+      <div class="container">
+        <div class="hero-grid">
+          
+          <!-- Left Column: Editorial Commanding Lead -->
+          <div class="hero-editorial-lead">
+            <div class="hero-meta-strip">
+              <span class="kicker">Terminal-Native Control Plane</span>
+              <span class="pill-badge">Zero Public Internet Exposure</span>
+              <span class="pill-badge">Tailscale Peer-to-Peer</span>
+            </div>
+
+            <h1 class="hero-title">
+              One terminal to coordinate trusted AI agents across your <span class="gradient-text">private mesh.</span>
+            </h1>
+
+            <p class="hero-description">
+              AIBridge connects your macOS workstation, local test runners, and remote Linux servers into an auditable control plane. Dispatch tasks to OpenCode, Claude Code, and Codex with strict human approvals, durable event recovery, and zero open ports.
+            </p>
+
+            <div class="hero-cta-group">
+              <a href="#roadmap" class="btn btn-primary" data-od-id="hero-primary-cta">
+                <span>Explore the Roadmap</span>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"></line><polyline points="19 12 12 19 5 12"></polyline></svg>
+              </a>
+              <a href="https://github.com/nyugennguyen/AIBridge" target="_blank" rel="noopener noreferrer" class="btn btn-secondary">
+                <span>View Shipped Bridge (v0.2)</span>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
+              </a>
+            </div>
+
+            <div class="hero-pulse-status">
+              <div class="node-indicator">
+                <span class="pulse-dot"></span>
+                <span>Controller Lease: <strong>workstation.mesh</strong></span>
+              </div>
+              <span style="opacity: 0.4;">|</span>
+              <div>Nodes: <strong>2 active (100.64.0.0/10)</strong></div>
+              <span style="opacity: 0.4;">|</span>
+              <div style="color: var(--cyan);">Latency: <strong>14ms</strong></div>
+            </div>
+          </div>
+
+          <!-- Right Column: UI-Inspired Terminal Control Plane Visual -->
+          <div class="hero-visual-wrapper" data-od-id="hero-tui-visual">
+            <div class="tui-orchestrator-card">
+              <!-- Top TUI Bar -->
+              <div class="tui-titlebar">
+                <div class="tui-traffic-lights">
+                  <span class="traffic-dot"></span>
+                  <span class="traffic-dot"></span>
+                  <span class="traffic-dot"></span>
+                </div>
+                <div>aibridge tui &mdash; run: #run-89f4 &mdash; mesh: authenticated</div>
+                <div style="color: var(--lime); font-size: 0.7rem;">&#9679; WIRESTREAM OK</div>
+              </div>
+
+              <!-- Interactive Tabs -->
+              <div class="tui-tabs" role="tablist">
+                <button class="tui-tab active" id="tab-dag" role="tab" aria-selected="true" onclick="switchTuiTab('dag')">
+                  <span>Task Graph (DAG)</span>
+                  <span class="badge">4 tasks</span>
+                </button>
+                <button class="tui-tab" id="tab-approval" role="tab" aria-selected="false" onclick="switchTuiTab('approval')">
+                  <span style="color: var(--amber);">&#9888; Approvals</span>
+                  <span class="badge" style="background: var(--amber-dim); color: var(--amber);">1 Action</span>
+                </button>
+                <button class="tui-tab" id="tab-stream" role="tab" aria-selected="false" onclick="switchTuiTab('stream')">
+                  <span>Live PTY Stream</span>
+                </button>
+                <button class="tui-tab" id="tab-wal" role="tab" aria-selected="false" onclick="switchTuiTab('wal')">
+                  <span>WAL Journal</span>
+                </button>
+              </div>
+
+              <!-- Workspace Layout: Left Nodes List, Right Main View -->
+              <div class="tui-workspace">
+                <div class="tui-sidebar">
+                  <div>
+                    <div class="sidebar-block-title">Mesh Nodes (2)</div>
+                    <div class="mesh-node-item">
+                      <div class="mesh-node-header">
+                        <span>macbook-pro</span>
+                        <span style="color: var(--lime); font-size: 0.65rem;">CONTROLLER</span>
+                      </div>
+                      <div class="mesh-node-ip">100.89.12.4 &bull; macOS Sonoma</div>
+                      <div style="font-size: 0.68rem; color: var(--cyan);">Agent: OpenCode (local)</div>
+                    </div>
+                    <div class="mesh-node-item">
+                      <div class="mesh-node-header">
+                        <span>worker-vps</span>
+                        <span style="color: var(--cyan); font-size: 0.65rem;">WORKER</span>
+                      </div>
+                      <div class="mesh-node-ip">100.89.12.98 &bull; Debian 12</div>
+                      <div style="font-size: 0.68rem; color: var(--violet);">Agent: Claude Code</div>
+                    </div>
+                  </div>
+
+                  <div>
+                    <div class="sidebar-block-title">Active Policies</div>
+                    <div style="font-family: var(--font-mono); font-size: 0.72rem; color: var(--fg-dim); line-height: 1.4;">
+                      &bull; path: /opt/testbed/*<br>
+                      &bull; network: no-egress<br>
+                      &bull; timeout: 600s
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Pane 1: Dynamic Task Graph (Default) -->
+                <div class="tui-content-pane" id="pane-dag">
+                  <div class="dag-chain">
+                    <div class="dag-node-card done">
+                      <div class="dag-node-info">
+                        <span class="dag-step-num">#01</span>
+                        <div>
+                          <div class="dag-title">git:sync &amp; build-deps</div>
+                          <div style="font-size: 0.7rem; color: var(--fg-dim);">node: macbook-pro &bull; OpenCode</div>
+                        </div>
+                      </div>
+                      <span class="dag-status-pill done">&#10003; FINISHED (4.2s)</span>
+                    </div>
+
+                    <div class="dag-node-card running">
+                      <div class="dag-node-info">
+                        <span class="dag-step-num">#02</span>
+                        <div>
+                          <div class="dag-title">test:integration-matrix</div>
+                          <div style="font-size: 0.7rem; color: var(--cyan);">node: worker-vps &bull; Claude Code</div>
+                        </div>
+                      </div>
+                      <span class="dag-status-pill running">&#9654; RUNNING (68%)</span>
+                    </div>
+
+                    <div class="dag-node-card blocked">
+                      <div class="dag-node-info">
+                        <span class="dag-step-num">#03</span>
+                        <div>
+                          <div class="dag-title">deploy:staging-smoke-test</div>
+                          <div style="font-size: 0.7rem; color: var(--amber);">node: worker-vps &bull; Codex</div>
+                        </div>
+                      </div>
+                      <span class="dag-status-pill blocked">&#9646;&#9646; PAUSED: APPROVAL</span>
+                    </div>
+                  </div>
+
+                  <!-- Inline Approval Trigger Preview -->
+                  <div class="approval-gate-banner">
+                    <div class="approval-gate-header">
+                      <span>HUMAN APPROVAL REQUIRED (DISPATCH #402)</span>
+                      <span>ROLE: staging-runner</span>
+                    </div>
+                    <div style="font-size: 0.75rem; color: var(--fg-muted);">
+                      Claude Code is requesting execution of privileged command on <code>worker-vps</code>:
+                      <br><code style="color: var(--amber); background: oklch(12% 0.02 260); padding: 2px 6px; border-radius: 3px; display: inline-block; margin-top: 4px;">docker compose -f test.yml up -d --build</code>
+                    </div>
+                    <div class="approval-actions">
+                      <button class="btn-approval-yes" onclick="approveMockAction(this)">[y] Approve Dispatch</button>
+                      <button class="btn-approval-diff">[d] Diff Sandboxed Args</button>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Pane 2: Approvals View -->
+                <div class="tui-content-pane" id="pane-approval" style="display: none;">
+                  <div style="margin-bottom: 12px; color: var(--fg); font-weight: 600;">
+                    Approval Inbox &bull; 1 Pending Dispatch
+                  </div>
+                  <div style="background: var(--surface); border: 1px solid var(--border); padding: 14px; border-radius: 6px;">
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 6px;">
+                      <span style="color: var(--amber); font-weight: 600;">ID: req_7718ac9</span>
+                      <span style="color: var(--fg-dim);">Origin: worker-vps (Claude Code)</span>
+                    </div>
+                    <div style="font-size: 0.75rem; color: var(--fg-muted); margin-bottom: 8px;">
+                      Requested: Write to protected directory <code>/opt/staging/config.json</code>
+                    </div>
+                    <pre style="background: oklch(10% 0.02 260); padding: 8px; border-radius: 4px; font-size: 0.72rem; color: var(--cyan); overflow-x: auto;">
++  "ENABLE_REMOTE_MESH_FALLBACK": true,
++  "MAX_PARALLEL_DISPATCHES": 8</pre>
+                    <div class="approval-actions" style="margin-top: 10px;">
+                      <button class="btn-approval-yes" onclick="approveMockAction(this)">Approve &amp; Sign (Key 0x88F)</button>
+                      <button class="btn-approval-diff" style="color: var(--crimson);">Deny &amp; Abort</button>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Pane 3: Live PTY Stream View -->
+                <div class="tui-content-pane" id="pane-stream" style="display: none;">
+                  <div class="stream-log">
+                    <span class="dim">[14:22:01]</span> <span class="cyan">aibridge[mesh]:</span> Dispatching context payload to node <code>worker-vps</code> (hash: 8cf01b)...<br>
+                    <span class="dim">[14:22:02]</span> <span class="lime">worker-vps[daemon]:</span> Auth token verified. Subprocess spawned on 127.0.0.1:4049.<br>
+                    <span class="dim">[14:22:03]</span> <span class="cyan">claude-code:</span> Reading target files in /opt/testbed/tests/...<br>
+                    <span class="dim">[14:22:04]</span> <span class="dim">claude-code:</span> Executing bun test --bail (suite: 18 tests found)...<br>
+                    <span class="dim">[14:22:06]</span> <span class="lime">&#10003; 14 tests passing.</span> 4 integration assertions remaining.<br>
+                    <span class="dim">[14:22:07]</span> <span class="amber">wirestream:</span> Tailscale tunnel 14ms ping jitter negligible.<br>
+                    <span class="dim">[14:22:08]</span> <span class="cyan">claude-code:</span> Preparing checkpoint artifact: integration-report.json...
+                  </div>
+                </div>
+
+                <!-- Pane 4: WAL Journal View -->
+                <div class="tui-content-pane" id="pane-wal" style="display: none;">
+                  <div style="margin-bottom: 8px; color: var(--fg-dim); font-size: 0.72rem;">SQLite/WAL Projection &bull; Append-Only Event Log</div>
+                  <div class="stream-log">
+                    <span class="dim">LSN #10802:</span> EVT_SESSION_INIT { lease: "macbook-pro", quorum: 2 }<br>
+                    <span class="dim">LSN #10803:</span> EVT_TASK_TRANSITION { id: "01", from: "QUEUED", to: "DONE" }<br>
+                    <span class="dim">LSN #10804:</span> EVT_DISPATCH_SIG { signer: "mac_ed25519_pk", node: "worker-vps" }<br>
+                    <span class="dim">LSN #10805:</span> EVT_APPROVAL_ENQUEUE { gate: "PRIV_DOCKER_SOCKET", id: 402 }<br>
+                    <span class="dim">LSN #10806:</span> EVT_HEARTBEAT_ACK { rtt: "13.8ms", jitter: "0.2ms" }
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </section>
+
+    <!-- Section: Architectural Evolution (From Bridge to Control Plane) -->
+    <section class="section" id="control-plane" data-od-id="evolution-section">
+      <div class="container">
+        <div class="section-header">
+          <div class="kicker">Evolution Strategy</div>
+          <h2 class="section-title">From two-host bridge to terminal-native control plane</h2>
+          <p class="section-subtitle">
+            AIBridge began as a lean TypeScript/Bun daemon enabling secure cross-machine OpenCode execution. We are expanding that durable foundation into a complete multi-agent orchestration plane.
+          </p>
+        </div>
+
+        <div class="evolution-comparison-grid">
+          <!-- Left: Shipped Bridge Today -->
+          <div class="comparison-card shipped-card" data-od-id="card-shipped-today">
+            <div class="card-badge-row">
+              <span class="pill-badge status-shipped">SHIPPED TODAY (v0.2)</span>
+              <span style="font-family: var(--font-mono); font-size: 0.75rem; color: var(--lime);">bun install -g aibridge</span>
+            </div>
+            <h3>The Reliable Bridge</h3>
+            <p>
+              A focused, production-grade bridge for developers who write code on a MacBook and dispatch integration testing, builds, or scripts to a dedicated Linux host.
+            </p>
+            <ul class="comparison-spec-list">
+              <li class="comparison-spec-item">
+                <svg class="spec-icon green" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                <span><strong>Topology:</strong> Development workstation dispatching to remote testing VPS.</span>
+              </li>
+              <li class="comparison-spec-item">
+                <svg class="spec-icon green" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                <span><strong>Runtime:</strong> OpenCode agents kept strictly on loopback (<code>127.0.0.1</code>).</span>
+              </li>
+              <li class="comparison-spec-item">
+                <svg class="spec-icon green" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                <span><strong>Network:</strong> Tailscale private transport &mdash; zero open ports to the public internet.</span>
+              </li>
+              <li class="comparison-spec-item">
+                <svg class="spec-icon green" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                <span><strong>Security:</strong> Granular project path allowlists and token-authorized triggers.</span>
+              </li>
+            </ul>
+          </div>
+
+          <!-- Right: Future Control Plane -->
+          <div class="comparison-card roadmap-card" data-od-id="card-roadmap-v1">
+            <div class="card-badge-row">
+              <span class="pill-badge status-roadmap">ROADMAP TARGET (v1.0)</span>
+              <span style="font-family: var(--font-mono); font-size: 0.75rem; color: var(--cyan);">FIRST RELEASE BOUNDARY</span>
+            </div>
+            <h3>The Terminal Control Plane</h3>
+            <p>
+              A complete orchestration kernel with an interactive TUI for multi-agent coordination, graph planning, human approval gates, and network recovery.
+            </p>
+            <ul class="comparison-spec-list">
+              <li class="comparison-spec-item">
+                <svg class="spec-icon cyan" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                <span><strong>Unified TUI:</strong> Task graphs, agent states, approval queue, and audit log in one terminal.</span>
+              </li>
+              <li class="comparison-spec-item">
+                <svg class="spec-icon cyan" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                <span><strong>Multi-Runtime:</strong> OpenCode, Claude Code, and Codex adapters preserving native ergonomics.</span>
+              </li>
+              <li class="comparison-spec-item">
+                <svg class="spec-icon cyan" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                <span><strong>Supervised by Default:</strong> Explicit human approval for writes, bounded roles, immutable safety.</span>
+              </li>
+              <li class="comparison-spec-item">
+                <svg class="spec-icon cyan" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                <span><strong>Durable Kernel:</strong> SQLite/WAL event log, controller leases, and instant reconnect recovery.</span>
+              </li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Section: Three Core Value Pillars -->
+    <section class="section" id="pillars" data-od-id="pillars-section">
+      <div class="container">
+        <div class="section-header">
+          <div class="kicker">Core Capabilities</div>
+          <h2 class="section-title">Built for engineers who demand total operational control</h2>
+          <p class="section-subtitle">
+            Autonomous agents shouldn't run in an opaque cloud box. AIBridge enforces bounded authority, explicit human signoffs, and full post-incident auditability.
+          </p>
+        </div>
+
+        <div class="pillars-grid">
+          <!-- Pillar 1: Compose Work -->
+          <article class="pillar-card" data-od-id="pillar-compose">
+            <div class="pillar-icon-box">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 16v1a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h11a2 2 0 0 1 2 2v1"></path><path d="M18 8h4a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-4"></path><circle cx="8" cy="12" r="2"></circle></svg>
+            </div>
+            <h3 class="pillar-title">Compose Work with Precision</h3>
+            <p class="pillar-desc">
+              Declare dependency-aware task graphs that dispatch specific jobs to specific machines. Pin memory-heavy testing to high-core VPS instances and lightweight reviews to your laptop.
+            </p>
+            <div class="pillar-code-snippet">
+              <span style="color: var(--fg-dim);"># Specifying node &amp; runtime affinity</span><br>
+              <span style="color: var(--cyan);">node:</span> "worker-vps.mesh"<br>
+              <span style="color: var(--cyan);">runtime:</span> "claude-code"<br>
+              <span style="color: var(--cyan);">role:</span> "e2e-runner"<br>
+              <span style="color: var(--cyan);">timeout:</span> 450s
+            </div>
+          </article>
+
+          <!-- Pillar 2: Approve Dispatches -->
+          <article class="pillar-card" data-od-id="pillar-approve">
+            <div class="pillar-icon-box">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+            </div>
+            <h3 class="pillar-title">Approve Exact Dispatches</h3>
+            <p class="pillar-desc">
+              Nothing executes silently. When an agent requests filesystem modifications, package installations, or external calls, execution pauses for explicit cryptographic confirmation in your TUI.
+            </p>
+            <div class="pillar-code-snippet">
+              <span style="color: var(--fg-dim);"># Approval policy trigger</span><br>
+              <span style="color: var(--amber);">prompt:</span> "Execute sudo apt update?"<br>
+              <span style="color: var(--lime);">policy:</span> "strict-human-signoff"<br>
+              <span style="color: var(--fg-muted);">signature:</span> "ed25519:workstation-key"
+            </div>
+          </article>
+
+          <!-- Pillar 3: Observe & Recover -->
+          <article class="pillar-card" data-od-id="pillar-observe">
+            <div class="pillar-icon-box">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
+            </div>
+            <h3 class="pillar-title">Observe, Audit, and Recover</h3>
+            <p class="pillar-desc">
+              Every transition is recorded in an append-only SQLite/WAL journal. If a laptop lid closes or WiFi drops, remote agents pause safely until the controller lease reclaims execution.
+            </p>
+            <div class="pillar-code-snippet">
+              <span style="color: var(--fg-dim);"># Durable state recovery</span><br>
+              <span style="color: var(--cyan);">storage:</span> "wal-journal.sqlite"<br>
+              <span style="color: var(--lime);">recovery:</span> "idempotent-replay"<br>
+              <span style="color: var(--fg-muted);">lease_ttl:</span> 30s &plusmn; 2s heartbeat
+            </div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <!-- Section: How a Run Moves (Workflow Pipeline) -->
+    <section class="section" id="workflow" data-od-id="workflow-section">
+      <div class="container">
+        <div class="section-header">
+          <div class="kicker">Execution Lifecycle</div>
+          <h2 class="section-title">How a run moves through the mesh</h2>
+          <p class="section-subtitle">
+            From initial goal formulation to auditable commits, see the 5-stage pipeline that guarantees safety across physical and virtual machines.
+          </p>
+        </div>
+
+        <div class="workflow-strip">
+          <div class="workflow-step">
+            <span class="step-counter">STEP 01</span>
+            <div class="step-name">Goal Formulation</div>
+            <p class="step-desc">Specify the task via CLI flags or composable YAML workflows with explicit input artifacts.</p>
+          </div>
+
+          <div class="workflow-step">
+            <span class="step-counter">STEP 02</span>
+            <div class="step-name">Task Graph DAG</div>
+            <p class="step-desc">AIBridge compiles dependencies, assigns optimal machine affinity, and configures bounded runtime roles.</p>
+          </div>
+
+          <div class="workflow-step">
+            <span class="step-counter">STEP 03</span>
+            <div class="step-name">Approval Gate</div>
+            <p class="step-desc">Policy checks evaluate intended commands against allowlists. Risky commands require a single keystroke in your TUI.</p>
+          </div>
+
+          <div class="workflow-step">
+            <span class="step-counter">STEP 04</span>
+            <div class="step-name">Native Agent Session</div>
+            <p class="step-desc">Dispatched across Tailscale to local loopback daemons. OpenCode, Claude Code, or Codex run in their native environments.</p>
+          </div>
+
+          <div class="workflow-step">
+            <span class="step-counter">STEP 05</span>
+            <div class="step-name">Auditable Result</div>
+            <p class="step-desc">Structured diffs and handoffs are recorded into SQLite/WAL. Raw token waste is replaced with scoped attributable memory.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Section: Comprehensive Roadmap Journey -->
+    <section class="section" id="roadmap" data-od-id="roadmap-section">
+      <div class="container">
+        <div class="section-header">
+          <div class="kicker">Milestone Architecture</div>
+          <h2 class="section-title">A transparent roadmap from bridge to mesh orchestrator</h2>
+          <p class="section-subtitle">
+            We make an unmistakable distinction between what is shipped today and what is currently being built. No vaporware claims.
+          </p>
+        </div>
+
+        <div class="roadmap-timeline-box">
+          <div class="roadmap-legend">
+            <div class="legend-item">
+              <span class="pill-badge status-shipped">SHIPPED TODAY</span>
+              <span>Production verified code</span>
+            </div>
+            <div class="legend-item">
+              <span class="pill-badge status-roadmap">ROADMAP (v1.0)</span>
+              <span>Current sprint milestones</span>
+            </div>
+            <div class="legend-item">
+              <span class="pill-badge status-future">LATER</span>
+              <span>Post-v1.0 ecosystem</span>
+            </div>
+          </div>
+
+          <div class="roadmap-nodes-flow">
+            <!-- Now: Shipped -->
+            <div class="roadmap-milestone current-shipped">
+              <span class="milestone-tag shipped">&#10003; Shipped Now</span>
+              <div class="milestone-title">Two-Host OpenCode Bridge</div>
+              <p class="milestone-body">CLI setup, start, and status. Workstation-to-VPS dispatch over Tailscale. Loopback socket isolation.</p>
+            </div>
+
+            <!-- Milestone 1 -->
+            <div class="roadmap-milestone">
+              <span class="milestone-tag dev">Milestone 1</span>
+              <div class="milestone-title">Single-Node TUI Slice</div>
+              <p class="milestone-body">Terminal dashboard with projects, run lists, live output streaming, and initial hotkeys.</p>
+            </div>
+
+            <!-- Milestone 2 -->
+            <div class="roadmap-milestone">
+              <span class="milestone-tag dev">Milestone 2</span>
+              <div class="milestone-title">Multi-Runtime Adapters</div>
+              <p class="milestone-body">Native support for Claude Code and Codex alongside OpenCode without losing CLI fidelity.</p>
+            </div>
+
+            <!-- Milestone 3 -->
+            <div class="roadmap-milestone">
+              <span class="milestone-tag dev">Milestone 3</span>
+              <div class="milestone-title">Durable Task Kernel</div>
+              <p class="milestone-body">DAG engine, SQLite event journal, granular approval inbox, and bounded role-based policies.</p>
+            </div>
+
+            <!-- Milestone 4 -->
+            <div class="roadmap-milestone first-release">
+              <span class="milestone-tag dev" style="color: var(--cyan);">&#9733; Milestone 4</span>
+              <div class="milestone-title">Distributed Mesh &amp; v1.0</div>
+              <p class="milestone-body">Controller leases, network disconnect recovery, live multi-node streaming. First major release.</p>
+            </div>
+
+            <!-- Later -->
+            <div class="roadmap-milestone" style="opacity: 0.85;">
+              <span class="milestone-tag future">Post-v1.0 Horizon</span>
+              <div class="milestone-title">Context Engineering</div>
+              <p class="milestone-body">Attributable shared memory, cross-agent handoffs, and ecosystem workflow plugins.</p>
+            </div>
+          </div>
+
+          <div class="release-boundary-banner">
+            <div>
+              <strong>v1.0 Release Boundary:</strong> Milestones 1 through 4 represent the complete transition into a multi-agent private control plane.
+            </div>
+            <a href="https://github.com/nyugennguyen/AIBridge" target="_blank" rel="noopener noreferrer" class="btn btn-secondary" style="padding: 6px 14px; font-size: 0.78rem;">
+              Follow Milestones on GitHub &rarr;
+            </a>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Section: Trust & Safety Architecture -->
+    <section class="section" id="trust-safety" data-od-id="trust-safety-section">
+      <div class="container">
+        <div class="section-header">
+          <div class="kicker">Cryptographic Isolation</div>
+          <h2 class="section-title">Engineered with an immutable safety floor</h2>
+          <p class="section-subtitle">
+            AI agents must never have unfettered access to infrastructure. AIBridge replaces trust with architectural guarantees.
+          </p>
+        </div>
+
+        <div class="safety-grid">
+          <div class="safety-card">
+            <div class="safety-num">01</div>
+            <div class="safety-content">
+              <h4>Tailscale WireGuard Mesh</h4>
+              <p>
+                All traffic travels over point-to-point WireGuard tunnels authenticated via Tailscale identity. Zero public IP exposure, zero open ingress firewall ports, and zero relay dependencies.
+              </p>
+            </div>
+          </div>
+
+          <div class="safety-card">
+            <div class="safety-num">02</div>
+            <div class="safety-content">
+              <h4>Strict Loopback Confinement</h4>
+              <p>
+                OpenCode and partner runtimes bind exclusively to <code>127.0.0.1</code> on host machines. AIBridge acts as the sole authenticated gatekeeper, rejecting unauthorized cross-node calls.
+              </p>
+            </div>
+          </div>
+
+          <div class="safety-card">
+            <div class="safety-num">03</div>
+            <div class="safety-content">
+              <h4>Project Path Allowlists</h4>
+              <p>
+                Agents are restricted to explicit directory paths. Path traversal attempts (e.g. <code>../../etc/shadow</code>) trigger immediate run suspension and operator alerts.
+              </p>
+            </div>
+          </div>
+
+          <div class="safety-card">
+            <div class="safety-num">04</div>
+            <div class="safety-content">
+              <h4>Scoped Attributable Memory</h4>
+              <p>
+                Instead of dumping multi-megabyte conversational transcripts between agents, AIBridge captures structured outputs, validated test results, and attributed code diffs.
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Section: High Impact Final CTA -->
+    <section class="final-cta-section" data-od-id="final-cta-section">
+      <div class="container">
+        <div class="cta-card">
+          <span class="kicker" style="margin-bottom: 12px;">Get Started Today</span>
+          <h2 class="cta-headline">Ready to take control of your AI agent fleet?</h2>
+          <p class="cta-subtext">
+            Start using the shipped v0.2 bridge today to dispatch OpenCode across macOS and Linux, or star the repository to track our journey toward the v1.0 Terminal Control Plane.
+          </p>
+
+          <div style="display: flex; justify-content: center; gap: 14px; flex-wrap: wrap;">
+            <a href="https://github.com/nyugennguyen/AIBridge" target="_blank" rel="noopener noreferrer" class="btn btn-primary" style="padding: 14px 28px; font-size: 0.95rem;">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"></path>
+              </svg>
+              <span>View on GitHub (v0.2)</span>
+            </a>
+            <a href="#roadmap" class="btn btn-secondary" style="padding: 14px 24px; font-size: 0.95rem;">
+              <span>Inspect v1.0 Architecture</span>
+            </a>
+          </div>
+
+          <!-- Install snippet -->
+          <div class="install-box-wrapper">
+            <div class="install-bar">
+              <span class="install-cmd" id="install-cmd-text">curl -fsSL https://raw.githubusercontent.com/nyugennguyen/AIBridge/main/scripts/install.sh | bash</span>
+              <button class="copy-btn" onclick="copyInstallCmd()" aria-label="Copy install script command">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                <span id="copy-label">Copy</span>
+              </button>
+            </div>
+            <div class="copy-notice" id="copy-notice" aria-live="polite"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Site Footer -->
+  <footer class="site-footer" data-od-id="site-footer">
+    <div class="container">
+      <div class="footer-grid">
+        <div class="footer-brand">
+          <div class="brand-logo">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22" aria-hidden="true">
+              <rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect>
+              <rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect>
+              <line x1="6" y1="6" x2="6.01" y2="6"></line>
+              <line x1="6" y1="18" x2="6.01" y2="18"></line>
+            </svg>
+            <span>AIBridge</span>
+          </div>
+          <p>
+            Terminal-native control plane for coordinating trusted AI agents across a private Tailscale mesh.
+          </p>
+        </div>
+
+        <div class="footer-col">
+          <h5>Architecture</h5>
+          <ul>
+            <li><a href="#control-plane">Evolution Plan</a></li>
+            <li><a href="#pillars">Task Graphs &amp; DAGs</a></li>
+            <li><a href="#trust-safety">Safety Floor</a></li>
+            <li><a href="#workflow">Execution Lifecycle</a></li>
+          </ul>
+        </div>
+
+        <div class="footer-col">
+          <h5>Ecosystem</h5>
+          <ul>
+            <li><a href="https://github.com/nyugennguyen/AIBridge" target="_blank" rel="noopener noreferrer">GitHub Repository</a></li>
+            <li><a href="https://github.com/nyugennguyen/AIBridge/issues" target="_blank" rel="noopener noreferrer">Issue Tracker</a></li>
+            <li><a href="#roadmap">Milestone Tracker</a></li>
+            <li><a href="https://tailscale.com" target="_blank" rel="noopener noreferrer">Tailscale Mesh</a></li>
+          </ul>
+        </div>
+
+        <div class="footer-col">
+          <h5>Supported Runtimes</h5>
+          <ul>
+            <li><span style="color: var(--fg);">OpenCode</span> (Shipped)</li>
+            <li><span style="color: var(--fg);">Claude Code</span> (v1.0 Milestone)</li>
+            <li><span style="color: var(--fg);">Codex</span> (v1.0 Milestone)</li>
+            <li><span style="color: var(--fg);">Custom Adapter SDK</span></li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="footer-bottom-row">
+        <div>
+          &copy; 2026 AIBridge Project &bull; Released under open source software license.
+        </div>
+        <div class="tech-specs-pills">
+          <span class="pill-badge">macOS (Apple Silicon &amp; Intel)</span>
+          <span class="pill-badge">Debian / Ubuntu 22.04+</span>
+          <span class="pill-badge">TypeScript &bull; Bun</span>
+          <span class="pill-badge">Tailscale WireGuard</span>
+        </div>
+      </div>
+    </div>
+  </footer>
+
+  <!-- Light Vanilla Script for Interactive TUI Tabs & Copy -->
+  <script>
+    function switchTuiTab(tabKey) {
+      // Deactivate tabs
+      const tabs = ['dag', 'approval', 'stream', 'wal'];
+      tabs.forEach(key => {
+        const tabEl = document.getElementById('tab-' + key);
+        const paneEl = document.getElementById('pane-' + key);
+        if (tabEl) {
+          tabEl.classList.remove('active');
+          tabEl.setAttribute('aria-selected', 'false');
+        }
+        if (paneEl) {
+          paneEl.style.display = 'none';
+        }
+      });
+
+      // Activate clicked tab
+      const activeTab = document.getElementById('tab-' + tabKey);
+      const activePane = document.getElementById('pane-' + tabKey);
+      if (activeTab) {
+        activeTab.classList.add('active');
+        activeTab.setAttribute('aria-selected', 'true');
+      }
+      if (activePane) {
+        activePane.style.display = 'block';
+      }
+    }
+
+    function approveMockAction(btn) {
+      btn.textContent = "✓ Approved & Dispatched";
+      btn.style.backgroundColor = "var(--border)";
+      btn.style.color = "var(--fg-dim)";
+      btn.disabled = true;
+      const runningBanner = document.querySelector('.dag-node-card.blocked');
+      if (runningBanner) {
+        runningBanner.classList.remove('blocked');
+        runningBanner.classList.add('running');
+        const pill = runningBanner.querySelector('.dag-status-pill');
+        if (pill) {
+          pill.className = 'dag-status-pill running';
+          pill.textContent = '▶ DISPATCHED OVER MESH';
+        }
+      }
+    }
+
+    function copyInstallCmd() {
+      const cmdText = document.getElementById('install-cmd-text').innerText;
+      navigator.clipboard.writeText(cmdText).then(() => {
+        const label = document.getElementById('copy-label');
+        const notice = document.getElementById('copy-notice');
+        label.textContent = "Copied!";
+        notice.textContent = "✓ Command copied to clipboard.";
+        setTimeout(() => {
+          label.textContent = "Copy";
+          notice.textContent = "";
+        }, 3000);
+      }).catch(() => {
+        const notice = document.getElementById('copy-notice');
+        notice.textContent = "Press Cmd+C to copy command.";
+      });
+    }
+  </script>
+</body>
+</html>

@@ -29,6 +29,36 @@ const safeMetadataKeySchema = z
 
 export const runtimeKindSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/)
 
+export const capabilitySupportStatusSchema = z.enum(["supported", "unsupported", "conditional"])
+
+export const capabilityEvidenceSourceSchema = z.enum([
+  "api",
+  "hook",
+  "process_state",
+  "terminal_manifest",
+  "user_config",
+])
+
+export const capabilityDetailSchema = z
+  .object({
+    status: capabilitySupportStatusSchema,
+    evidenceSource: capabilityEvidenceSourceSchema,
+    detail: z.string().trim().min(1).max(1024).optional(),
+  })
+  .strict()
+
+export const adapterCapabilityReportSchema = z
+  .object({
+    structuredPermissions: capabilityDetailSchema,
+    nativeSessionRestore: capabilityDetailSchema,
+    reliableCompletion: capabilityDetailSchema,
+    modelSelection: capabilityDetailSchema,
+    usageData: capabilityDetailSchema,
+    hooks: capabilityDetailSchema,
+    transcriptExport: capabilityDetailSchema,
+  })
+  .strict()
+
 export const runtimeCapabilitiesSchema = z
   .object({
     structuredPermissions: z.boolean(),
@@ -40,6 +70,36 @@ export const runtimeCapabilitiesSchema = z
     transcriptExport: z.boolean(),
   })
   .strict()
+
+export function capabilityReportToRuntimeCapabilities(
+  report: z.infer<typeof adapterCapabilityReportSchema>,
+): z.infer<typeof runtimeCapabilitiesSchema> {
+  return {
+    structuredPermissions: report.structuredPermissions.status === "supported",
+    nativeSessionRestore: report.nativeSessionRestore.status === "supported",
+    reliableCompletion: report.reliableCompletion.status === "supported",
+    modelSelection: report.modelSelection.status === "supported",
+    usageData: report.usageData.status === "supported",
+    hooks: report.hooks.status === "supported",
+    transcriptExport: report.transcriptExport.status === "supported",
+  }
+}
+
+export const observationConfidenceSchema = z.enum([
+  "authoritative",
+  "observed",
+  "inferred",
+  "tentative",
+])
+
+export const observationSourceSchema = z.enum([
+  "api",
+  "hook",
+  "process_state",
+  "terminal_manifest",
+  "user_config",
+  "polling",
+])
 
 export const nodeContextSchema = z
   .object({
@@ -61,6 +121,7 @@ export const agentInstallationSchema = z
     version: z.string().trim().min(1).max(128).optional(),
     executable: z.string().trim().min(1).max(1024).optional(),
     capabilities: runtimeCapabilitiesSchema,
+    capabilityReport: adapterCapabilityReportSchema.optional(),
   })
   .strict()
 
@@ -197,6 +258,8 @@ export const agentRuntimeEventSchema = z.discriminatedUnion("type", [
       type: z.literal("lifecycle"),
       state: sessionStateSchema,
       detail: boundedTextSchema.optional(),
+      source: observationSourceSchema.optional(),
+      confidence: observationConfidenceSchema.optional(),
     })
     .strict(),
   z
@@ -232,6 +295,12 @@ export const agentRuntimeEventSchema = z.discriminatedUnion("type", [
     .strict(),
 ])
 
+export type CapabilitySupportStatus = z.infer<typeof capabilitySupportStatusSchema>
+export type CapabilityEvidenceSource = z.infer<typeof capabilityEvidenceSourceSchema>
+export type CapabilityDetail = z.infer<typeof capabilityDetailSchema>
+export type AdapterCapabilityReport = z.infer<typeof adapterCapabilityReportSchema>
+export type ObservationConfidence = z.infer<typeof observationConfidenceSchema>
+export type ObservationSource = z.infer<typeof observationSourceSchema>
 export type RuntimeCapabilities = z.infer<typeof runtimeCapabilitiesSchema>
 export type NodeContext = z.infer<typeof nodeContextSchema>
 export type AgentInstallation = z.infer<typeof agentInstallationSchema>

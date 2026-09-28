@@ -88,8 +88,12 @@ export type CoordinatorResult<T> = { readonly ok: true; readonly value: T } | { 
  */
 export const COMMAND_EVENT_ALLOWLIST: Readonly<Record<string, readonly string[]>> = {
   "run.create": ["run.created", "task.created"],
+  "dispatch.propose": ["dispatch.proposed"],
   "run.cancel": ["run.cancelled"],
-  "dispatch.approve": ["approval.decided", "approval.invalidated"],
+  // A revision is a proposal: the plan states an edited envelope creates a new
+  // digest, so the revised envelope MUST be recorded or the log would no longer
+  // contain what was approved/launched.
+  "dispatch.approve": ["approval.invalidated", "dispatch.proposed", "approval.decided"],
   "dispatch.retry": ["dispatch.proposed", "approval.invalidated"],
   "dispatch.timeout.request": ["dispatch.timeout.requested"],
   "dispatch.execute": ["dispatch.started"],

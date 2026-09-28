@@ -422,6 +422,25 @@ export function legacyCorrelationIdFor(mapping: LegacyJobMapping): CorrelationId
  * without a stable command/dispatch idempotency key" guard, satisfied for the
  * legacy path too.
  */
+/**
+ * What the route actually checked before the job was created, recorded so the
+ * launch can be re-verified at the effect boundary.
+ */
+export const legacyLaunchAuthorizationSchema = z
+  .object({
+    sourceAgentId: z.string().min(1).max(256),
+    capability: z.string().min(1).max(128),
+    projectDir: z.string().min(1).max(4_096),
+    promptDigest: z.string().regex(digestPattern),
+    /** The authenticated principal the route admitted. */
+    authorizedBy: z.string().min(1).max(256),
+    /** Binds the authorization to the exact canonical mapping it was made for. */
+    mappingDigest: z.string().regex(digestPattern),
+  })
+  .strict()
+
+export type LegacyLaunchAuthorization = z.infer<typeof legacyLaunchAuthorizationSchema>
+
 export const legacyLaunchIntentSchema = z
   .object({
     schemaVersion: schemaVersionSchema,
@@ -430,6 +449,20 @@ export const legacyLaunchIntentSchema = z
     correlation: legacyCorrelationSchema,
     projectDir: z.string().min(1).max(4_096),
     prompt: z.string().min(1).max(65_536),
+    /**
+     * The exact facts the route authorized, and a digest over them.
+     *
+     * `legacy.runtime.launch` deliberately does not go through
+     * `dispatch.execute`, because legacy work has no canonical approval. That
+     * makes the ROUTE's authorization the only thing standing between this
+     * intent and a runtime, so the intent carries what was checked rather than
+     * trusting the record alone. The digest binds `projectDir` and `prompt` to
+     * the identity, capability and source that were authorized: a delivery step
+     * that receives a tampered payload (a different directory or prompt) can
+     * detect it before crossing the effect boundary, which is the same
+     * "recheck at the effect boundary" discipline ADR 0003 requires of a worker.
+     */
+    authorization: legacyLaunchAuthorizationSchema,
     status: z.enum(["pending", "delivered"]),
   })
   .strict()
@@ -448,17 +481,79 @@ export const LEGACY_LAUNCH_DESTINATION = "legacy.runtime.launch"
  */
 export function legacyLaunchIntent(
   mapping: LegacyJobMapping,
-  job: { readonly trigger: { readonly project_dir: string; readonly prompt: string } },
+  job: {
+    readonly trigger: {
+      readonly project_dir: string
+      readonly prompt: string
+      readonly capability: string
+      readonly source_agent_id: string
+    }
+  },
+  options: { readonly authorizedBy: string },
 ): LegacyLaunchIntent {
+  const projectDir = job.trigger.project_dir
+  const prompt = job.trigger.prompt
+  const authorization = legacyLaunchAuthorizationSchema.parse({
+    sourceAgentId: job.trigger.source_agent_id,
+    capability: job.trigger.capability,
+    projectDir,
+    promptDigest: digestJson(prompt),
+    authorizedBy: options.authorizedBy,
+    mappingDigest: mapping.correlation.mappingDigest,
+  })
   return legacyLaunchIntentSchema.parse({
     schemaVersion: 1,
     outboxId: `obx-legacy-launch-${mapping.correlation.dispatchId}`,
     destination: LEGACY_LAUNCH_DESTINATION,
     correlation: mapping.correlation,
-    projectDir: job.trigger.project_dir,
-    prompt: job.trigger.prompt,
+    projectDir,
+    prompt,
+    authorization,
     status: "pending",
   })
+}
+
+/**
+ * Re-checks a launch intent at the effect boundary.
+ *
+ * The legacy path has no canonical approval, so the route's authorization is the
+ * whole authorization story; this makes that checkable by whoever actually
+ * performs the launch instead of being an unrecorded claim in the route. A
+ * payload whose `projectDir`/`prompt` no longer match the digest that was
+ * authorized must not be delivered.
+ */
+export function verifyLegacyLaunchIntent(
+  intent: LegacyLaunchIntent,
+): { ok: true; value: LegacyLaunchIntent } | { ok: false; error: LegacyTranslationError } {
+  if (digestJson(intent.prompt) !== intent.authorization.promptDigest) {
+    return fail(
+      "unrepresentable",
+      "legacy.launch_payload_tampered",
+      `Legacy launch '${intent.outboxId}' carries a prompt that does not match the digest authorized at intake.`,
+    )
+  }
+  if (intent.projectDir !== intent.authorization.projectDir) {
+    return fail(
+      "unrepresentable",
+      "legacy.launch_payload_tampered",
+      `Legacy launch '${intent.outboxId}' targets '${intent.projectDir}', which is not the authorized '${intent.authorization.projectDir}'.`,
+    )
+  }
+  if (intent.correlation.mappingDigest !== intent.authorization.mappingDigest) {
+    return fail(
+      "unrepresentable",
+      "legacy.launch_mapping_tampered",
+      `Legacy launch '${intent.outboxId}' names mapping '${intent.correlation.mappingDigest}', which is not the authorized '${intent.authorization.mappingDigest}'.`,
+    )
+  }
+  if (intent.authorization.authorizedBy.length === 0) {
+    return fail(
+      "unrepresentable",
+      "legacy.launch_unattributed",
+      `Legacy launch '${intent.outboxId}' names no authorizing principal.`,
+    )
+  }
+  return { ok: true, value: intent }
 }
 
 /**
@@ -577,7 +672,7 @@ export class LegacyTranslation {
    * into a 5xx instead of a 202, so no caller is told work started when the
    * kernel cannot account for it.
    */
-  acceptTrigger(jobInput: unknown): LegacyTriggerAcceptance {
+  acceptTrigger(jobInput: unknown, options?: { readonly authorizedBy?: string }): LegacyTriggerAcceptance {
     if (this.mode === "absent") return { ok: true, mode: "absent", events: [] }
 
     const translated = translateLegacyJob(jobInput, this.#context)
@@ -614,10 +709,23 @@ export class LegacyTranslation {
       }
     }
 
+    const record = jobInput as LegacyJobRecord
     const effect = this.#outbox.record(
       legacyLaunchIntent(
         { correlation: translated.correlation, run: translated.run, task: translated.task, dispatch: translated.dispatch },
-        { trigger: { project_dir: (jobInput as LegacyJobRecord).trigger.project_dir, prompt: (jobInput as LegacyJobRecord).trigger.prompt } },
+        {
+          trigger: {
+            project_dir: record.trigger.project_dir,
+            prompt: record.trigger.prompt,
+            capability: record.trigger.capability,
+            source_agent_id: record.trigger.source_agent_id,
+          },
+        },
+        // The route has authenticated the caller, the source/capability pair and
+        // the project allowlist by this point. Naming the principal makes the
+        // legacy authorization auditable at the effect boundary instead of being
+        // an implicit claim.
+        { authorizedBy: options?.authorizedBy ?? `legacy-bridge:${this.#context.localAgentId}` },
       ),
     )
     return { ok: true, mode: "present", correlation: translated.correlation, effect, events: submitted.value.events }

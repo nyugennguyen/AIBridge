@@ -302,7 +302,14 @@ describe("Command and event are bound together", () => {
     // The allowlist itself is what enforces the pairing.
     expect(COMMAND_EVENT_ALLOWLIST["run.cancel"]).toEqual(["run.cancelled"])
     expect(COMMAND_EVENT_ALLOWLIST["run.cancel"]).not.toContain("run.created")
-    expect(COMMAND_EVENT_ALLOWLIST["dispatch.approve"]).not.toContain("dispatch.proposed")
+    // `dispatch.approve` MAY record a `dispatch.proposed`, because approving a
+    // REVISED envelope has to record that revision (an envelope edit creates a
+    // new digest and the log must contain what was approved). It may not record
+    // a first-time proposal for a dispatch nobody proposed, which the handler
+    // refuses with `coordinator.dispatch_unknown`.
+    expect(COMMAND_EVENT_ALLOWLIST["dispatch.approve"]).toContain("dispatch.proposed")
+    expect(COMMAND_EVENT_ALLOWLIST["dispatch.approve"]).not.toContain("run.created")
+    expect(COMMAND_EVENT_ALLOWLIST["dispatch.approve"]).not.toContain("dispatch.started")
     expect(h).toBeDefined()
   })
 })
@@ -391,7 +398,9 @@ describe("Approval becomes invalid after any envelope mutation", () => {
     )
 
     if (!result.ok) throw new Error(`${result.error.category}/${result.error.code}: ${result.error.message}`)
-    expect(result.value.events).toEqual(["approval.invalidated", "approval.decided"])
+    // The revision is a proposal too: the log must contain the envelope the new
+    // approval binds, or the launched envelope would not be rebuildable.
+    expect(result.value.events).toEqual(["approval.invalidated", "dispatch.proposed", "approval.decided"])
   })
 
   it("rejects an approval whose recorded digest does not match the envelope", () => {
@@ -409,7 +418,14 @@ describe("Approval becomes invalid after any envelope mutation", () => {
 
 describe("Retry adds an attempt and does not erase failure history", () => {
   it("retry requires a strictly greater attempt and invalidates the prior approval", () => {
-    const projection = withApprovedDispatch()
+    // A retry may only follow a TERMINAL attempt, so the seed has attempt 1
+    // finished. Retrying a still-running dispatch would put two live sessions on
+    // one task.
+    const projection = reduceEvent(
+      withApprovedDispatch(),
+      seedEvent("dispatch.finished", { dispatchId: "disp-1", outcome: "failed", summary: "boom" }, 5),
+    )
+    expect(projection.dispatches["disp-1"].lifecycleState).toBe("failed")
 
     const h = makeHarness({ seed: projection })
     const result = h.coordinator.submit(

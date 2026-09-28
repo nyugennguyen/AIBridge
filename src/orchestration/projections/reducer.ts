@@ -226,8 +226,23 @@ export function stripUndefined<T>(value: T): T {
   return result as T
 }
 
+/**
+ * Digests the run's DOMAIN state.
+ *
+ * `lastAppliedPosition` is deliberately EXCLUDED. It is the store's global
+ * insertion cursor, and it is present only on events read back from
+ * `readStream` (`StoredRunEvent`) — a live `OrchestrationEvent` has no such
+ * field. Including it would make `stateDigest` a function of *how* the same
+ * events were delivered rather than of the events themselves, and the plan's
+ * completion criterion "incremental and full-replay projections are identical"
+ * would fail for a projection fed live events versus one rebuilt from the store.
+ * The cursor is still reported on the state; it is just not an identity of the
+ * state.
+ */
 export function computeStateDigest(state: Omit<RunProjectionState, "stateDigest">): Digest {
-  return digestJson(stripUndefined(state))
+  const { lastAppliedPosition: _cursor, ...domainState } = state
+  void _cursor
+  return digestJson(stripUndefined(domainState))
 }
 
 /**

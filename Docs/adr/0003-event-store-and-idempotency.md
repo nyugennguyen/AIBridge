@@ -47,7 +47,14 @@ Committed sequences order only that run. Independent runs have no total order. A
 
 ## Fingerprints and duplicate behavior
 
-For a canonical command, parse with `orchestrationCommandSchema`, then fingerprint the complete parsed object using `digestJson` and the canonical JSON rules from ADR 0002. Every serialized field participates, including `commandId`, actor, scope, payload, controller node/epoch/lease, issue/expiry times, correlation and causation. Transport credentials, retry counters and transport envelopes are outside this object. A retry preserves the original command unchanged; extending its expiry or replacing its lease is a different command and must use a new ID.
+For a canonical command, parse with `orchestrationCommandSchema`, then fingerprint the complete parsed object using `digestJson` and the canonical JSON rules from ADR 0002. The fingerprint version is stored with the receipt. Version 1 fingerprinted every serialized field; version 2 (current, `CURRENT_COMMAND_FINGERPRINT_VERSION`) fingerprints the **semantic** fields and excludes three:
+
+- `commandId` is already the receipt key, so including it adds no discrimination.
+- `issuedAt` / `expiresAt` are the client's clock window. A client retrying a command whose answer it never received legitimately regenerates them, and fingerprinting them turns an ordinary at-least-once retry into a false `FingerprintConflictError` — the defect behind the Milestone 3 criterion "duplicate commands cannot launch duplicate sessions".
+
+Everything else stays in: `type` + `payload` (the requested change), `projectId`/`runId` (authority scope), `actor`, `controllerNodeId`/`controllerEpoch`/`leaseId` (who issued it), `correlationId`/`causation`, and `schemaVersion`. A genuinely mutated command under a reused `commandId` still conflicts: changing the payload, the actor, the epoch or the scope all change the digest. Transport credentials, retry counters and transport envelopes are outside this object entirely.
+
+Excluding the time window does **not** let a client extend a live command: a same-key retry returns the *stored* outcome and never admits new work, so a re-issued command with a longer `expiresAt` observes the original result rather than gaining a fresh effect. Obtaining NEW authority by extending an expiry or replacing a lease is still a different logical operation and must use a new `commandId`. Version-1 receipts remain resolvable because a v1 whole-command digest is also computed and accepted for legacy comparison.
 
 After authenticating the caller and authorizing receipt visibility:
 

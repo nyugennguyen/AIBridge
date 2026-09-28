@@ -5,6 +5,7 @@ import { verifyApproval } from "../policy/approval.js"
 import { canTransitionDispatch, canTransitionRun, isRunTerminal, isDispatchTerminal, isApprovalTerminal, type RunState, type DispatchState } from "../transitions.js"
 import type { Approval, Dispatch, OrchestrationCommand, OrchestrationEvent, Run, Session, Task } from "../types.js"
 import type { EventInput, OutboxRecordInput } from "../event-store/types.js"
+import type { ProjectionDispatchState } from "../projections/types.js"
 import {
   COMMAND_EVENT_ALLOWLIST,
   RUNTIME_DESTINATION,
@@ -131,6 +132,8 @@ export class DispatchCoordinator {
         return this.#createRun(command)
       case "run.cancel":
         return this.#cancelRun(command)
+      case "dispatch.propose":
+        return this.#proposeDispatch(command)
       case "dispatch.approve":
         return this.#approveDispatch(command)
       case "dispatch.retry":
@@ -150,6 +153,18 @@ export class DispatchCoordinator {
     const { run, tasks } = command.payload
     if (run.projectId !== command.projectId || run.runId !== command.runId) {
       return fail("conflict", "coordinator.run_scope_mismatch", "The run payload must match the command's project and run identity.")
+    }
+    // A task is an aggregate owned by one project and run. Accepting a task that
+    // names a different scope would put another project's work inside this run's
+    // stream, where every later read is scoped by this run.
+    for (const task of tasks) {
+      if (task.projectId !== command.projectId || task.runId !== command.runId) {
+        return fail(
+          "conflict",
+          "coordinator.task_scope_mismatch",
+          `Task '${task.taskId}' names ${task.projectId}/${task.runId}, which is outside this command's ${command.projectId}/${command.runId} scope.`,
+        )
+      }
     }
     return ok({
       events: [this.#event(command, "run.created", { run }), ...tasks.map((task) => this.#event(command, "task.created", { task }))],
@@ -182,6 +197,43 @@ export class DispatchCoordinator {
     })
   }
 
+  // --- dispatch.propose ---
+
+  /**
+   * Records the FIRST dispatch for a task.
+   *
+   * This is the entry point of the whole kernel and it must be explicit: a
+   * proposed dispatch is an immutable envelope that will later need a
+   * digest-bound approval before anything may start. `dispatch.retry` cannot
+   * serve this role because it requires a prior attempt, and `dispatch.approve`
+   * only ever proposes as a revision of an existing one — so without this
+   * command there is no way to begin any work at all.
+   */
+  #proposeDispatch(command: Extract<OrchestrationCommand, { type: "dispatch.propose" }>): CoordinatorResult<Plan> {
+    const { dispatch } = command.payload
+    const state = this.#deps.readRun(command.runId)
+    if (state === undefined) {
+      return fail("validation", "coordinator.run_unknown", `Run '${command.runId}' is not known.`)
+    }
+    const envelope = dispatch.envelope
+    if (envelope.projectId !== command.projectId || envelope.runId !== command.runId) {
+      return fail("conflict", "coordinator.dispatch_scope_mismatch", "The dispatch envelope must match the command's project and run identity.")
+    }
+    if (dispatch.state !== "proposed") {
+      return fail("conflict", "coordinator.dispatch_not_proposed", `A new dispatch must be in state 'proposed', not '${dispatch.state}'.`)
+    }
+    if (dispatch.envelopeDigest !== digestDispatchEnvelope(envelope)) {
+      return fail("conflict", "coordinator.dispatch_digest_mismatch", "The dispatch envelopeDigest does not match its own canonical envelope digest.")
+    }
+    if (state.dispatches[envelope.dispatchId] !== undefined) {
+      return fail("conflict", "coordinator.dispatch_already_proposed", `Dispatch '${envelope.dispatchId}' has already been proposed; an envelope is immutable, so a change of content is a new attempt.`)
+    }
+    if (state.tasks[envelope.taskId] === undefined) {
+      return fail("validation", "coordinator.task_unknown", `Task '${envelope.taskId}' is not part of run '${command.runId}'.`)
+    }
+    return ok({ events: [this.#event(command, "dispatch.proposed", { dispatch })], outboxRecords: [] })
+  }
+
   // --- dispatch.approve ---
 
   #approveDispatch(command: Extract<OrchestrationCommand, { type: "dispatch.approve" }>): CoordinatorResult<Plan> {
@@ -192,7 +244,16 @@ export class DispatchCoordinator {
     }
 
     const state = this.#deps.readRun(command.runId)
-    const existing = state === undefined ? undefined : Object.values(state.dispatches).find((d) => d.envelope?.dispatchId === target)
+    if (state === undefined) {
+      return fail("validation", "coordinator.run_unknown", `Run '${command.runId}' is not known.`)
+    }
+    // An approval may only bind to a dispatch the log actually proposed. Without
+    // this the command could mint a live approval for an envelope that exists
+    // nowhere, and `dispatch.execute` would then have something to launch.
+    const existing = Object.values(state.dispatches).find((d) => d.envelope?.dispatchId === target)
+    if (existing === undefined) {
+      return fail("validation", "coordinator.dispatch_unknown", `Dispatch '${target}' has not been proposed for run '${command.runId}'.`)
+    }
     const newDigest = digestDispatchEnvelope(dispatch.envelope)
     // `queued` is a derived read-model value (approved, awaiting a slot), not a
     // lifecycle state; it collapses back to `approved` for machine checks.
@@ -233,9 +294,16 @@ export class DispatchCoordinator {
       return fail("conflict", "coordinator.approval_scope_mismatch", "The approval must reference this exact dispatch, project and run.")
     }
 
+    // A revision is a PROPOSAL as well as a decision. Without recording the
+    // revised envelope, the log would still hold the superseded one while the new
+    // approval and any later launch used the revised one — the launched envelope
+    // would be unrebuildable from history.
+    const isRevision = existing.envelopeDigest !== newDigest
+
     return ok({
       events: [
         ...superseded.map((prior) => this.#event(command, "approval.invalidated", this.#invalidationPayload(prior, "superseded by a decision on a different dispatch envelope digest"))),
+        ...(isRevision ? [this.#event(command, "dispatch.proposed", { dispatch })] : []),
         this.#event(command, "approval.decided", { approval }),
       ],
       outboxRecords: [],
@@ -250,6 +318,16 @@ export class DispatchCoordinator {
     if (state === undefined) {
       return fail("validation", "coordinator.run_unknown", `Run '${command.runId}' is not known.`)
     }
+    // A retried envelope is written into THIS run's stream, so it must name this
+    // run and this project. Without the check, a retry could inject another
+    // project's dispatch — and an approval — into this run's history.
+    if (dispatch.envelope.projectId !== command.projectId || dispatch.envelope.runId !== command.runId) {
+      return fail(
+        "conflict",
+        "coordinator.dispatch_scope_mismatch",
+        `The retry envelope names ${dispatch.envelope.projectId}/${dispatch.envelope.runId}, which is outside this command's ${command.projectId}/${command.runId} scope.`,
+      )
+    }
     if (dispatch.envelope.attempt <= previousAttempt) {
       return fail(
         "conflict",
@@ -260,6 +338,26 @@ export class DispatchCoordinator {
     const previous = state.dispatches[previousDispatchId]
     if (previous === undefined) {
       return fail("validation", "coordinator.dispatch_unknown", `Previous dispatch '${previousDispatchId}' is not known for run '${command.runId}'.`)
+    }
+    // A retry ADDS an attempt; it must never run alongside the attempt it
+    // replaces. Without this, a `running` dispatch could be retried and the same
+    // task would end up holding two live sessions — the plan's "duplicate
+    // commands cannot launch duplicate sessions", reached without any duplicate
+    // command at all.
+    const previousLifecycle: DispatchState = previous.state === "queued" ? "approved" : previous.state
+    if (!isDispatchTerminal(previousLifecycle)) {
+      return fail(
+        "conflict",
+        "coordinator.dispatch_not_terminal",
+        `Previous dispatch '${previousDispatchId}' is '${previousLifecycle}', not terminal; a retry cannot run alongside the attempt it replaces.`,
+      )
+    }
+    if (previous.attempt !== previousAttempt) {
+      return fail(
+        "conflict",
+        "coordinator.retry_attempt_mismatch",
+        `Command claims previous attempt ${previousAttempt} but dispatch '${previousDispatchId}' is recorded at attempt ${previous.attempt}.`,
+      )
     }
     // A retry needs a fresh approval: the prior one bound to the prior digest,
     // and any envelope mutation invalidates it.
@@ -307,19 +405,33 @@ export class DispatchCoordinator {
       return fail("validation", "coordinator.run_unknown", `Run '${command.runId}' is not known.`)
     }
     const target = dispatch.envelope.dispatchId
+    // Everything below is checked against the RECORDED log, not only the command
+    // payload. A payload is caller-supplied: a self-consistent approval (right
+    // digest, right scope, `approved`) proves only that the caller can compute a
+    // hash, never that anyone decided anything. Authorization therefore has to
+    // come from an `approval.decided` and a `dispatch.proposed` that are already
+    // in the stream.
+    const recordedDispatch = state.dispatches[target]
+    if (recordedDispatch === undefined) {
+      return fail("validation", "coordinator.dispatch_unknown", `Dispatch '${target}' has not been proposed for run '${command.runId}'.`)
+    }
+
+    // A dispatch that has ALREADY started answers with the recorded session and
+    // nothing else. This is checked against the RECORD, not the payload, so a
+    // retry of the very command that launched it still returns the original
+    // outcome rather than failing a state precondition it has already passed.
+    const recordedSession = Object.values(state.sessions).find((s) => s.dispatchId === target)
+    if (recordedSession !== undefined) {
+      const recordedLifecycleNow: DispatchState =
+        recordedDispatch.state === "queued" ? "approved" : recordedDispatch.state
+      if (recordedLifecycleNow === "running" || isDispatchTerminal(recordedLifecycleNow)) {
+        return ok({ events: [], outboxRecords: [], result: { sessionId: recordedSession.sessionId } })
+      }
+    }
 
     // Starting a dispatch is the single privilege an approval confers. A
-    // dispatch that is not `approved` has no authority to start, and one that
-    // already started must never start twice.
+    // dispatch that is not `approved` has no authority to start.
     if (dispatch.state !== "approved") {
-      if (dispatch.state === "running" || isDispatchTerminal(dispatch.state)) {
-        const existing = Object.values(state.sessions).find((s) => s.dispatchId === target)
-        if (existing !== undefined) {
-          // A duplicate start returns the recorded session rather than
-          // launching a second one.
-          return ok({ events: [], outboxRecords: [], result: { sessionId: existing.sessionId } })
-        }
-      }
       return fail("conflict", "coordinator.dispatch_not_approved", `Dispatch '${target}' is '${dispatch.state}', not 'approved'; it cannot be started.`)
     }
 
@@ -337,6 +449,63 @@ export class DispatchCoordinator {
         "approval_required",
         "coordinator.approval_stale",
         `Approval '${approval.approvalId}' no longer binds to dispatch '${target}' (${verification.codes.join(", ") || "envelope digest changed"}).`,
+      )
+    }
+
+    // The envelope the command asks to launch must be the one the log recorded.
+    // Otherwise the approval above is self-consistent over an envelope that only
+    // exists in the caller's memory, and the launched effect could not be
+    // rebuilt from history.
+    if (recordedDispatch.envelopeDigest !== verification.computedEnvelopeDigest) {
+      return fail(
+        "conflict",
+        "coordinator.dispatch_envelope_mismatch",
+        `Dispatch '${target}' is recorded with envelope digest '${recordedDispatch.envelopeDigest}' but this command carries an envelope digesting to '${verification.computedEnvelopeDigest}'.`,
+      )
+    }
+
+    // And the recorded dispatch must itself be approved, not merely the payload's
+    // claim. `queued` is the derived read-model form of `approved`.
+    const recordedLifecycle: ProjectionDispatchState = recordedDispatch.state
+    if (recordedLifecycle !== "approved" && recordedLifecycle !== "queued") {
+      return fail(
+        "conflict",
+        "coordinator.dispatch_not_approved",
+        `Dispatch '${target}' is '${recordedLifecycle}' in the recorded log, not 'approved'; it cannot be started.`,
+      )
+    }
+
+    // Finally: the approval must be one the log actually decided. The payload's
+    // approval id is a POINTER, not the grant itself.
+    const recordedApproval = state.approvals[approval.approvalId]
+    if (recordedApproval === undefined || recordedApproval.dispatchId !== target) {
+      return fail(
+        "approval_required",
+        "coordinator.approval_not_recorded",
+        `Approval '${approval.approvalId}' is not a recorded decision for dispatch '${target}'; no 'approval.decided' event authorises this launch.`,
+      )
+    }
+    const recordedVerification = verifyApproval(
+      {
+        schemaVersion: 1,
+        approvalId: recordedApproval.approvalId,
+        projectId: recordedApproval.projectId,
+        runId: recordedApproval.runId,
+        dispatchId: recordedApproval.dispatchId,
+        envelopeDigest: recordedApproval.envelopeDigest,
+        decision: recordedApproval.decision,
+        state: recordedApproval.state,
+        basis: recordedApproval.basis,
+        actor: recordedApproval.actor,
+        decidedAt: recordedApproval.decidedAt,
+      },
+      recordedDispatch.envelope,
+    )
+    if (!recordedVerification.valid || recordedVerification.state !== "approved") {
+      return fail(
+        "approval_required",
+        "coordinator.approval_stale",
+        `Recorded approval '${approval.approvalId}' no longer authorises dispatch '${target}' (${recordedVerification.codes.join(", ") || "recorded state is not approved"}).`,
       )
     }
 

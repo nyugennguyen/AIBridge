@@ -54,14 +54,16 @@ Model assignments are as planned in `Docs/implementation-plans/milestone-3-orche
 | `dispatchSchema` | v1, **breaking** | `queued` removed as a persisted state. |
 | `approvalSchema` | v1, **breaking** | Gains required `state` with a cross-field constraint against `decision`. |
 
-### M0 contract re-approval required
+### M0 contract re-approval: APPROVED 2026-09-28
 
-Commit `24b9aef` is marked `refactor(orchestration)!`. A reviewer must re-approve the M0 aggregate contracts. Concretely:
+Recorded in `Docs/implementation-reports/m0-contract-reapproval.md`, bound to contract-surface-digest `d4f4b947…00291`. Commit `24b9aef` is marked `refactor(orchestration)!`, so the M0 aggregate contracts were put up for re-approval and have been signed off. What was approved:
 
 1. Five aggregate state vocabularies change shape (table above).
 2. `run` and `task` gain required fields; four persisted states are removed.
 3. `tests/contracts/examples/{run,task,session,dispatch}.v1.json` were updated to the new shape.
 4. `tests/contracts/legacy-migration.test.ts` was updated to assert the preserved pause semantic through the new `paused` boolean rather than a fake lifecycle state.
+
+**The approval is digest-bound and expires.** `./scripts/m0-contract-signoff.sh` exits `0` while it applies and returns to `2` with a `STALE` notice — naming both digests — if any contract source, frozen example or M0 assertion file changes. A signature cannot silently outlive what it signed. This was verified by editing the contract and observing the approval correctly lapse.
 
 Rationale: `transitions.ts` and `schemas.ts` held **non-overlapping** vocabularies, so a run persisted as `paused` could not be driven through `transitionRun`, and a session reporting `unknown` produced a projection `transitionSession` rejects. `as TaskState` casts at three call sites hid this from the compiler. These are two different axes — kernel lifecycle versus provider observation — that had been conflated. Persisted enums now **derive** from `transitions.ts`, so future drift is a compile error rather than a cast.
 
@@ -269,16 +271,15 @@ The M0 aggregate contract changes in §2 require reviewer re-approval. Until tha
 
 1. R1 (legacy launch has no canonical approval) is accepted as a bounded risk **only** with an explicit M3.8 decision recorded before M4 begins work on the legacy path.
 2. R2 (`COMMAND_MATRIX` unwired) is accepted and scheduled for M4.
-3. The M0 contract re-approval in §2 must be recorded before M4 relies on the new state model.
+3. ~~The M0 contract re-approval in §2 must be recorded before M4 relies on the new state model.~~ **DISCHARGED 2026-09-28** — see `Docs/implementation-reports/m0-contract-reapproval.md`.
 
-No blocker or high finding introduced by M3 is open. The kernel is **not** authorised for production use until the three conditions above are discharged.
+Two conditions remain open. The kernel is **not** authorised for production use until both are discharged.
 
-### M0 re-approval status
+### M0 re-approval status: APPROVED
 
-`scripts/m0-contract-signoff.sh` (default baseline `e39461a`, the M0 commit) separates the mechanical evidence from the judgement that a human must still make:
+`scripts/m0-contract-signoff.sh` (default baseline `e39461a`, the M0 commit) separates the mechanical evidence from the judgement a human must still make:
 
 - **Mechanical — green:** `tests/contracts/` is **67 pass, 0 fail**. The M0 suite is not regressed.
-- **Re-approval outstanding:** two M0 contract assertion files were edited (`orchestration-schemas.test.ts`, 6 lines; `legacy-migration.test.ts`, 12 lines), and the frozen examples changed by **6 lines across five aggregates**. The script exits `2`, which is the re-approval signal rather than a failure.
-- **Carried-forward findings:** F-01–F-04 and F-07 remain open production obligations untouched by M3. F-06 is partially addressed by the store migrations. **F-05 is live** — see R1.
-
-The script's exit codes are: `0` green and unmodified, `2` re-approval required, `1` the contract suite is red (a regression, not a re-approval).
+- **Re-approval — granted 2026-09-28**, covering two edited assertion files (`orchestration-schemas.test.ts`, 6 lines; `legacy-migration.test.ts`, 12 lines) and a 6-line change to the frozen examples across five aggregates. Bound to contract-surface-digest `d4f4b947…00291`.
+- **Expiry is enforced:** the script exits `0` while the approval applies and `2` with a `STALE` notice if the contract changes again. Verified by editing the contract and watching it lapse.
+- **Carried-forward findings are untouched by that approval:** F-01–F-04 and F-07 remain open production obligations. F-06 is partially addressed by the store migrations. **F-05 is live** — see R1.

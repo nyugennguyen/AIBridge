@@ -1,24 +1,33 @@
 #!/usr/bin/env bash
-# Proves the M0 contract's mechanical evidence is intact, and shows the reviewer
-# exactly what changed so re-approval is a decision about a small diff.
+# Proves the M0 contract's mechanical evidence is intact, reports whether a
+# recorded re-approval covers the current contract surface, and shows a
+# reviewer exactly what changed.
 #
-# M0 sign-off is a DOCUMENT attestation (three named reviewers recorded approval
-# in Docs/implementation-reports/milestone-0-completion.md). It is not a
-# pass/fail test, and it should not be reduced to one. What this script does is
-# separate the two halves of a re-approval:
+# M0 sign-off is a DOCUMENT attestation (three named reviewers recorded
+# approval in Docs/implementation-reports/milestone-0-completion.md). It is
+# not a pass/fail test and should not be reduced to one. This script separates
+# the two halves of a re-approval:
 #
 #   1. MECHANICAL: do the M0 contract tests still pass unmodified? If M3 changed
-#      a contract assertion, this goes red and the change is not a re-approval,
-#      it is a regression.
-#   2. REVIEWABLE: what precisely changed, in the smallest possible diff?
+#      a contract assertion, that is a re-approval, not a regression.
+#   2. RECORDED: has a human signed off on THIS EXACT contract surface?
+#
+# The approval is bound to a digest of the contract surface. If anyone edits
+# the contract again, the digest changes and the recorded approval stops
+# applying, so a signature can never silently outlive what it signed.
 #
 # Usage: scripts/m0-contract-signoff.sh [baseline-ref]
 # Default baseline is the Milestone 0 commit.
+#
+# Exit: 0 = green (unmodified, or drift covered by a recorded approval)
+#       2 = re-approval required (drift present, no valid recorded approval)
+#       1 = the contract suite is red (a regression, not a re-approval)
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 BASELINE="${1:-e39461a}"
+APPROVAL_DOC="Docs/implementation-reports/m0-contract-reapproval.md"
 CONTRACT_SRC=(src/orchestration/schemas.ts src/orchestration/types.ts)
 CONTRACT_TESTS=(
   tests/contracts/orchestration-schemas.test.ts
@@ -31,9 +40,27 @@ EXAMPLES=(tests/contracts/examples)
 fail=0
 hr() { printf '%s\n' "------------------------------------------------------------"; }
 
+# Digest of exactly the surface a re-approver judges. Includes the contract
+# source, the frozen examples, and the M0 assertions themselves.
+contract_digest() {
+  {
+    for f in "${CONTRACT_SRC[@]}"; do printf 'src %s\n' "$(shasum -a 256 "$f" | cut -d' ' -f1)"; done
+    for f in "${EXAMPLES[@]}"/*.json; do printf 'ex  %s\n' "$(shasum -a 256 "$f" | cut -d' ' -f1)"; done
+    for f in "${CONTRACT_TESTS[@]}"; do printf 'tst %s\n' "$(shasum -a 256 "$f" | cut -d' ' -f1)"; done
+  } | shasum -a 256 | cut -d' ' -f1
+}
+
+CURRENT_DIGEST=$(contract_digest)
+RECORDED_DIGEST=""
+if [ -f "$APPROVAL_DOC" ]; then
+  RECORDED_DIGEST=$(grep -ioE 'contract-surface-digest[^0-9a-f]*`?([0-9a-f]{64})' "$APPROVAL_DOC" | grep -oE '[0-9a-f]{64}' | head -1)
+fi
+
 hr
 echo "M0 CONTRACT SIGN-OFF EVIDENCE"
-echo "baseline: $BASELINE   head: $(git rev-parse --short HEAD)"
+echo "baseline:  $BASELINE"
+echo "head:      $(git rev-parse --short HEAD)"
+echo "digest:    $CURRENT_DIGEST"
 hr
 
 # --- 1. MECHANICAL: the M0 contract suite must be green -------------------
@@ -61,38 +88,50 @@ for f in "${CONTRACT_TESTS[@]}"; do
   fi
 done
 
-# --- 3. The reviewer-facing diff ------------------------------------------
+# --- 3. Recorded approval coverage ----------------------------------------
 echo
-echo "[3/4] Contract surface diff (this is what a re-approver reads)"
-git diff --stat "$BASELINE"..HEAD -- "${CONTRACT_SRC[@]}" "${EXAMPLES[@]}" | sed 's/^/      /'
+echo "[3/4] Recorded re-approval"
+approval_state="none"
+if [ "$fail" -ne 0 ]; then
+  approval_state="contract-red"
+  echo "      not evaluated - the contract suite is red"
+elif [ "$touched" -eq 0 ]; then
+  approval_state="unmodified"
+  echo "      no drift; M0's original sign-off still applies"
+elif [ -z "$RECORDED_DIGEST" ]; then
+  approval_state="pending"
+  echo "      NO RECORDED APPROVAL - re-approval required"
+elif [ "$RECORDED_DIGEST" = "$CURRENT_DIGEST" ]; then
+  approval_state="approved"
+  echo "      APPROVED - $APPROVAL_DOC"
+  echo "      the recorded digest matches the current contract surface"
+else
+  approval_state="stale"
+  echo "      STALE - $APPROVAL_DOC approves a DIFFERENT contract surface:"
+  echo "        recorded: $RECORDED_DIGEST"
+  echo "        current:  $CURRENT_DIGEST"
+  echo "      the contract changed after sign-off; the approval no longer applies"
+fi
 
+# --- 4. The reviewer-facing diff ------------------------------------------
 echo
-echo "      Frozen example changes (one line per aggregate = the whole M0 freeze):"
+echo "[4/4] Contract surface diff"
+git diff --stat "$BASELINE"..HEAD -- "${CONTRACT_SRC[@]}" "${EXAMPLES[@]}" | sed 's/^/      /'
+echo
+echo "      Frozen example changes (the whole M0 freeze):"
 git diff "$BASELINE"..HEAD -- "${EXAMPLES[@]}" | grep -E '^[+-] ' | sed 's/^/      /' || echo "      (none)"
 
-# --- 4. M0 carried-forward findings still open? ---------------------------
-echo
-echo "[4/4] M0 findings carried forward as production obligations"
-echo "      These were accepted as constraints, NOT fixed, by the M0 reviewers."
-echo "      Re-approval must confirm they are still tracked, not silently closed."
-printf '      %-6s %-38s %s\n' "F-01" "legacy job-path traversal" "open - not remediated by M3"
-printf '      %-6s %-38s %s\n' "F-02" "callback credential forwarding" "open - not remediated by M3"
-printf '      %-6s %-38s %s\n' "F-03" "unauthenticated legacy job query" "open - not remediated by M3"
-printf '      %-6s %-38s %s\n' "F-04" "lexical path check / symlink escape" "open - not remediated by M3"
-printf '      %-6s %-38s %s\n' "F-05" "asserted legacy identity/approval" "LIVE IN M3 - see milestone-3 R1"
-printf '      %-6s %-38s %s\n' "F-06" "unvalidated/corrupt persisted state" "partially addressed by M3 store migrations"
-printf '      %-6s %-38s %s\n' "F-07" "resource/redaction enforcement" "partially addressed; M6 budgets pending"
-
 hr
-if [ "$fail" -ne 0 ]; then
-  echo "RESULT: MECHANICAL EVIDENCE FAILED - do not sign off"
-  exit 1
-fi
-if [ "$touched" -gt 0 ]; then
-  echo "RESULT: MECHANICAL EVIDENCE GREEN, but $touched contract assertion file(s) were edited."
-  echo "        That is a RE-APPROVAL, not a regression - read diff [3] and re-sign."
-  echo "        F-05 is LIVE: the legacy launch path still derives runtime authority"
-  echo "        from compatibility evidence with no canonical approval."
-  exit 2
-fi
-echo "RESULT: MECHANICAL EVIDENCE GREEN, no contract assertions modified."
+case "$approval_state" in
+  unmodified)
+    echo "RESULT: GREEN - M0 contract unmodified; original sign-off applies." ;;
+  approved)
+    echo "RESULT: GREEN - contract drifted but a recorded re-approval covers it."
+    echo "        Carried-forward findings are NOT closed by this; see F-01..F-07." ;;
+  contract-red)
+    echo "RESULT: MECHANICAL EVIDENCE FAILED - do not sign off"; exit 1 ;;
+  *)
+    echo "RESULT: RE-APPROVAL REQUIRED - contract drifted with no valid recorded approval."
+    echo "        Read diff [4], then record an approval in $APPROVAL_DOC"
+    exit 2 ;;
+esac

@@ -51,7 +51,16 @@ export function registerTriggerRoute(app: FastifyInstance, dependencies: AppDepe
 
       const hasRemoteDependencies = localDependencyIds.length !== dependencyReferences.length
       if (hasDeps && (hasRemoteDependencies || !depJobs.every((dep) => dep.status === "completed"))) {
-        await dependencies.jobManager.markBlocked(job.id, dependencyReferences)
+        const blocked = await dependencies.jobManager.markBlocked(job.id, dependencyReferences)
+
+        // A blocked job is still ACCEPTED work, so the kernel records it. It
+        // maps to a paused draft run with no launch effect: the job must not
+        // reach a runtime until its dependencies are satisfied.
+        const blockedAcceptance = dependencies.orchestration?.translation.acceptTrigger(blocked)
+        if (blockedAcceptance !== undefined && !blockedAcceptance.ok) {
+          await dependencies.jobManager.markFailed(job.id, blockedAcceptance.error.message)
+          return reply.code(500).send({ error: blockedAcceptance.error.message, code: blockedAcceptance.error.code })
+        }
         await dependencies.taskGraphSyncer.syncJobToTask(resolvedTaskId, "blocked", { Job: job.id })
 
         return reply.code(202).send(
@@ -66,10 +75,31 @@ export function registerTriggerRoute(app: FastifyInstance, dependencies: AppDepe
         )
       }
 
+      // The kernel's event transaction must contain no external effect, so the
+      // accepted intent is recorded FIRST and the runtime launch happens after
+      // that append has committed. When no kernel is attached this call is a
+      // no-op and the launch proceeds exactly as it did before.
+      const acceptance = dependencies.orchestration?.translation.acceptTrigger(job)
+      if (acceptance !== undefined && !acceptance.ok) {
+        // Fail closed: the legacy job exists in the JSON store but the kernel
+        // cannot account for it. Reporting 202 here would tell the caller work
+        // started when the canonical record does not exist, so the job is
+        // failed with a diagnosable message instead.
+        await dependencies.jobManager.markFailed(job.id, acceptance.error.message)
+        return reply.code(500).send({ error: acceptance.error.message, code: acceptance.error.code })
+      }
+
       const session = await dependencies.opencodeClient.createSession(`AIBridge ${job.id}`, triggerData.project_dir)
       await dependencies.jobManager.attachSession(job.id, session.id)
       await dependencies.opencodeClient.sendPromptAsync(session.id, triggerData.prompt, triggerData.project_dir)
       const running = await dependencies.jobManager.markRunning(job.id)
+
+      // The effect is acknowledged only once the runtime actually accepted it,
+      // so a crash between the append and the launch leaves a PENDING intent
+      // that a redelivery can recognise rather than a lost job.
+      if (acceptance?.effect !== undefined) {
+        dependencies.orchestration?.translation.acknowledgeLaunch(acceptance.effect.outboxId)
+      }
 
       await dependencies.taskGraphSyncer.syncJobToTask(resolvedTaskId, "running", {
         Job: job.id,

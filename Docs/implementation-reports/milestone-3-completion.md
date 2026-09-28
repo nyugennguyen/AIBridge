@@ -246,17 +246,28 @@ Closing it properly means either giving legacy work a canonical approval — whi
 
 ### For M4 (distributed mesh)
 
-1. **`COMMAND_MATRIX` wiring** (R2), including the `dispatch.approve` revision rule.
-2. **Outbox deliverer** — `claimPendingOutbox` / `markOutboxAcknowledged` / `markOutboxFailed` / `recoverStaleOutbox` exist as storage primitives; the delivery loop, retry/backoff *policy* and max-attempt threshold are M4's. The clock is injected, so a controller can drive it deterministically.
-3. **Snapshot policy** — `saveSnapshot` / `getSnapshot` are implemented, tested and called from nowhere.
-4. **`EffectBoundary` hooks 5–8** need a deliverer and a projection updater to be meaningful.
-5. **Controller leases** — `validateCommandLease` and the epoch invariants exist; ADR 0004's recovery loop does not.
-6. **Concurrency** — two controllers are proven safe against *double claim* but not against *duplicate delivery*; the receiver's inbox de-duplication is the required complement (at-least-once is the honest contract, and nothing in this milestone claims otherwise).
+Tracked as the **Milestone 3 Carry-Forward** section of
+`Docs/implementation-plans/milestone-4-distributed-mesh.md`, with ids the M4 gate
+must evidence. Three block M4.1 and are owned by the new task M4.0:
+
+| id | Item | Blocks M4.1 because |
+| --- | --- | --- |
+| **M4-V** | Widen `schemaVersionSchema` from `z.literal(1)` to a versioned enum | M4.1 introduces eight new wire record families. With a literal version, every one of them is born unversionable, and the M4.1 requirement to handle "version mismatch" has nothing to mismatch on. |
+| **M4-M** | Wire `COMMAND_MATRIX` at the command seam (R2) | M4.4 makes epochs gate dispatch, retry and policy mutation; that gate must be the matrix, not a parallel set of hand-maintained checks. Needs `allowedDispatchStates: ["proposed","approved"]` for `dispatch.approve`. |
+| **M4-A** | Close **F-05** / R1 | A High carried-forward threat-model finding, still open since M0. The decision — canonical approval for legacy work, or retire the legacy launch path — must be taken before M4.1, not deferred to the M4 audit. |
+
+Landing in their natural M4 tasks:
+
+4. **Outbox deliverer (M4-O, in M4.5)** — `claimPendingOutbox` / `markOutboxAcknowledged` / `markOutboxFailed` / `recoverStaleOutbox` exist as storage primitives; the delivery loop, retry/backoff *policy* and max-attempt threshold are M4's. The clock is injected, so a controller can drive it deterministically.
+5. **Snapshot policy (M4-S, in M4.6)** — `saveSnapshot` / `getSnapshot` / `readGlobal` are implemented, tested and called from nowhere. M4.6 already requires a snapshot fallback, so the policy is in scope there.
+6. **`EffectBoundary` hooks 5–8 (M4-B, in M4.5/M4.6)** need the deliverer and a projection updater to be meaningful; M4.9's fault harness must then exercise all eight.
+7. **Controller leases** — `validateCommandLease` and the epoch invariants exist; ADR 0004's recovery loop does not.
+8. **Concurrency** — two controllers are proven safe against *double claim* but not against *duplicate delivery*; the receiver's inbox de-duplication is the required complement (at-least-once is the honest contract, and nothing in this milestone claims otherwise).
 
 ### For M6 (rules and workflows)
 
 1. `roleTemplateSchema` and `ruleSchema` are versioned and snapshotted; the `restrict` / `pre_approve` effect union is implemented but only `restrict` is exercised end-to-end.
-2. R7 (regex bound on `taskTitlePattern`) needs a decision.
+2. R7 (regex bound on `taskTitlePattern`) needs a decision. **M4.1 owns it**, because M4 makes rules authorable from a remote node and a catastrophic-backtracking pattern is a ReDoS vector across the mesh.
 3. `ProjectPolicy` is a caller-supplied input to `evaluatePolicy`; there is no project-policy persistence or rule repository. Building one is M6's.
 
 ### Carried forward as re-approval work
@@ -275,11 +286,11 @@ The M0 aggregate contract changes in §2 require reviewer re-approval. Until tha
 
 **Gate conditions accepted by the reviewers:**
 
-1. R1 (legacy launch has no canonical approval) is accepted as a bounded risk **only** with an explicit M3.8 decision recorded before M4 begins work on the legacy path.
-2. R2 (`COMMAND_MATRIX` unwired) is accepted and scheduled for M4.
+1. R1 (legacy launch has no canonical approval — **F-05**) is accepted as a bounded risk **only** with an explicit M3.8 decision recorded before M4 begins work on the legacy path. **Now owned by M4** as carry-forward item **M4-A**, a prerequisite for M4.1.
+2. R2 (`COMMAND_MATRIX` unwired) is accepted and scheduled for M4. **Now owned by M4** as carry-forward item **M4-M**, also a prerequisite for M4.1.
 3. ~~The M0 contract re-approval in §2 must be recorded before M4 relies on the new state model.~~ **DISCHARGED 2026-09-28** — approved with conditions by all three roles; see `Docs/implementation-reports/m0-contract-reapproval.md`.
 
-Two conditions remain open. The kernel is **not** authorised for production use until both are discharged.
+Two conditions remain open and are **owed to Milestone 4**, not merely noted by it. They are tracked as carry-forward items in `Docs/implementation-plans/milestone-4-distributed-mesh.md` §"Milestone 3 Carry-Forward", with a new task **M4.0** owning the three blocking ones (M4-A, M4-M, and the unversionable-shape problem **M4-V**). The kernel is **not** authorised for production use until M4-A and M4-M are discharged.
 
 ### M0 re-approval status: APPROVED WITH CONDITIONS
 

@@ -23,14 +23,21 @@ import type {
   ApprovalState,
   DispatchState,
   RunState,
+  SessionObservedState,
   SessionState,
   TaskState,
 } from "../transitions.js"
 
+// The projection's `state` fields carry the kernel lifecycle. The extra members
+// are DERIVED, read-model conveniences the scheduler/TUI consume (a task blocked
+// by unsatisfied dependencies, a dispatch queued for a slot, a run held paused) —
+// none of them are ever persisted, and none of them bypass the lifecycle machine
+// to be written. A session's provider vocabulary lives in `SessionProjection
+// .observedState`, never in `.state`.
 export type ProjectionRunState = RunState | "paused"
 export type ProjectionTaskState = TaskState | "blocked"
 export type ProjectionDispatchState = DispatchState | "queued"
-export type ProjectionSessionState = SessionState | "starting" | "working" | "blocked" | "unknown"
+export type ProjectionSessionState = SessionState
 
 export interface RunProjection {
   readonly runId: RunId
@@ -96,6 +103,12 @@ export interface SessionProjection {
   readonly runId: RunId
   readonly projectId: ProjectId
   readonly state: ProjectionSessionState
+  /**
+   * What the provider last reported, kept separate from the kernel lifecycle in
+   * `state`. Retaining both means a `blocked`/`unknown` provider report is
+   * auditable without ever having masqueraded as a lifecycle state.
+   */
+  readonly observedState: SessionObservedState
   readonly adapterMetadata: Record<string, unknown> | null
   readonly createdAt: Timestamp
   readonly updatedAt: Timestamp

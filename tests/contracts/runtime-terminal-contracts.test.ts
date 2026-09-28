@@ -56,7 +56,8 @@ const runtimeSession = runtimeSessionSchema.parse({
   nodeId: "node-1",
   installationId: "installation-1",
   runtimeKind: "fake-runtime",
-  state: "unknown",
+  lifecycleState: "launching",
+  observedState: "unknown",
 })
 
 const fakeRuntime: AgentRuntimeAdapter = {

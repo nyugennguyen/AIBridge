@@ -136,15 +136,21 @@ describe("legacy migration contracts", () => {
 
     expect(running.disposition).toBe("paused")
     expect(running.executionPolicy).toBe("inert")
-    expect(running.run.state).toBe("paused")
+    // Non-terminal migrated work stays paused rather than being auto-resumed;
+    // `paused` is a run-level gate, not a lifecycle state.
+    expect(running.run.state).toBe("active")
+    expect(running.run.paused).toBe(true)
     expect(running.task.state).toBe("running")
     expect(running.dispatch.state).toBe("running")
     expect(running.providerSessionReference).toEqual({ namespace: "opencode.session", id: "ses-running" })
     expect(running.authorization.canonicalApprovalCreated).toBe(false)
     expect(running.legacyRecord.trigger.metadata?.approved_by).toBe("legacy-operator")
 
-    expect(callbackFailed.run.state).toBe("paused")
-    expect(callbackFailed.task.state).toBe("blocked")
+    expect(callbackFailed.run.state).toBe("active")
+    expect(callbackFailed.run.paused).toBe(true)
+    // A legacy blocked job never ran and is not dependency-gated, so its honest
+    // lifecycle is `pending`; the run stays paused and requires reconciliation.
+    expect(callbackFailed.task.state).toBe("pending")
     expect(callbackFailed.dispatch.state).toBe("proposed")
     expect(callbackFailed.callbackDelivery?.status).toBe("failed")
     expect(plan.diagnostics.some((entry) => entry.code === "status.callback_outcome_ambiguous")).toBe(true)

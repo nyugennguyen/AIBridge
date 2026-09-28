@@ -1,4 +1,4 @@
-export const CURRENT_SCHEMA_VERSION = 1
+export const CURRENT_SCHEMA_VERSION = 2
 
 export const SCHEMA_MIGRATIONS_TABLE_SQL = `
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -8,6 +8,11 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 );
 `
 
+/**
+ * v1 shipped the original tables. It is intentionally left byte-for-byte stable:
+ * a database that already recorded migration 1 must keep validating against the
+ * exact DDL that was applied, so v2 is expressed only as additive changes.
+ */
 export const INITIAL_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS run_streams (
   project_id TEXT NOT NULL,
@@ -92,6 +97,87 @@ CREATE TABLE IF NOT EXISTS snapshots (
 CREATE INDEX IF NOT EXISTS idx_snapshots_run_seq ON snapshots(run_id, sequence);
 `
 
+/**
+ * v2 — additive only. No column or table is dropped, renamed, or retyped, so a
+ * database migrated to v2 remains readable by v1 code paths and can be rolled
+ * back by running v1 code against the same file. The rollback boundary is
+ * documented on the v2 migration in ./migrations.ts.
+ *
+ * Adds:
+ *  - outbox claim/lease/retry columns (storage primitives for the M3.7
+ *    coordinator; no delivery loop lives here),
+ *  - outbox run/project/destination indexes for single-run workers,
+ *  - a partial unique index so the same command cannot enqueue the same
+ *    destination payload twice,
+ *  - `command_receipts.fingerprint_version` so semantic (v2) and legacy
+ *    whole-command (v1) receipts can coexist without either side corrupting,
+ *  - `dispatch_attempt_tombstones`, the storage-level guarantee that a
+ *    `(runId, dispatchId, attempt)` envelope is proposed exactly once.
+ */
+export const DISPATCH_ENVELOPE_TOMBSTONE_SQL = `
+CREATE TABLE IF NOT EXISTS dispatch_attempt_tombstones (
+  project_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  dispatch_id TEXT NOT NULL,
+  attempt INTEGER NOT NULL,
+  envelope_digest TEXT NOT NULL,
+  event_id TEXT NOT NULL,
+  sequence INTEGER NOT NULL,
+  proposed_at TEXT NOT NULL,
+  PRIMARY KEY (project_id, run_id, dispatch_id, attempt)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_dispatch_tombstone_event
+  ON dispatch_attempt_tombstones(event_id);
+`
+
+export const OUTBOX_LEASE_COLUMNS_SQL = `
+ALTER TABLE outbox_records ADD COLUMN project_id TEXT;
+ALTER TABLE outbox_records ADD COLUMN run_id TEXT;
+ALTER TABLE outbox_records ADD COLUMN command_id TEXT;
+ALTER TABLE outbox_records ADD COLUMN sequence_start INTEGER;
+ALTER TABLE outbox_records ADD COLUMN sequence_end INTEGER;
+ALTER TABLE outbox_records ADD COLUMN claim_token TEXT;
+ALTER TABLE outbox_records ADD COLUMN lease_expires_at TEXT;
+ALTER TABLE outbox_records ADD COLUMN next_attempt_at TEXT;
+ALTER TABLE outbox_records ADD COLUMN last_error TEXT;
+ALTER TABLE outbox_records ADD COLUMN failed_at TEXT;
+
+CREATE INDEX IF NOT EXISTS idx_outbox_claim
+  ON outbox_records(status, next_attempt_at, created_at);
+CREATE INDEX IF NOT EXISTS idx_outbox_run
+  ON outbox_records(run_id, status);
+CREATE INDEX IF NOT EXISTS idx_outbox_destination
+  ON outbox_records(destination, status);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_outbox_command_destination
+  ON outbox_records(command_id, destination, payload_digest)
+  WHERE command_id IS NOT NULL;
+`
+
+export const RECEIPT_FINGERPRINT_VERSION_COLUMN_SQL = `
+ALTER TABLE command_receipts ADD COLUMN fingerprint_version INTEGER NOT NULL DEFAULT 1;
+
+CREATE INDEX IF NOT EXISTS idx_command_receipts_fingerprint
+  ON command_receipts(project_id, run_id, command_fingerprint)
+  WHERE fingerprint_version = 2;
+`
+
+/**
+ * Physical table/index set that a fully migrated v2 database must expose.
+ * Used by the startup integrity check so a database that is only partially
+ * migrated fails closed instead of silently losing idempotency or dispatch
+ * immutability guarantees.
+ */
+export const REQUIRED_V2_OBJECTS: readonly { type: string, name: string }[] = [
+  { type: "table", name: "dispatch_attempt_tombstones" },
+  { type: "index", name: "idx_dispatch_tombstone_event" },
+  { type: "index", name: "idx_outbox_claim" },
+  { type: "index", name: "idx_outbox_run" },
+  { type: "index", name: "idx_outbox_destination" },
+  { type: "index", name: "idx_outbox_command_destination" },
+  { type: "index", name: "idx_command_receipts_fingerprint" },
+]
+
 export interface SchemaMigrationRow {
   version: number
   applied_at: string
@@ -138,6 +224,8 @@ export interface CommandReceiptRow {
   end_sequence: number | null
   received_at: string
   resolved_at: string | null
+  /** Absent on a database that has not run migration 2. */
+  fingerprint_version?: number | null
 }
 
 export interface OutboxRecordRow {
@@ -150,6 +238,28 @@ export interface OutboxRecordRow {
   created_at: string
   last_attempted_at: string | null
   acknowledged_at: string | null
+  /** v2 columns; null on rows written before migration 2 ran. */
+  project_id?: string | null
+  run_id?: string | null
+  command_id?: string | null
+  sequence_start?: number | null
+  sequence_end?: number | null
+  claim_token?: string | null
+  lease_expires_at?: string | null
+  next_attempt_at?: string | null
+  last_error?: string | null
+  failed_at?: string | null
+}
+
+export interface DispatchAttemptTombstoneRow {
+  project_id: string
+  run_id: string
+  dispatch_id: string
+  attempt: number
+  envelope_digest: string
+  event_id: string
+  sequence: number
+  proposed_at: string
 }
 
 export interface SnapshotRow {

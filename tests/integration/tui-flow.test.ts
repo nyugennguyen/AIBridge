@@ -173,7 +173,7 @@ describe("Milestone 1 deterministic one-task acceptance flow", () => {
     renderer.key("a")
     renderer.key("tab")
     renderer.key("enter")
-    await waitForShell(harness.service, () => shell.getState().run?.session?.state === "starting" && shell.getState().pending === null)
+    await waitForShell(harness.service, () => shell.getState().run?.session?.observedState === "starting" && shell.getState().pending === null)
 
     expect(harness.runtime.launches).toHaveLength(1)
     expect(harness.runtime.launches[0]).toMatchObject({
@@ -184,18 +184,18 @@ describe("Milestone 1 deterministic one-task acceptance flow", () => {
 
     harness.runtime.queueLifecycle("working")
     renderer.key("f")
-    await waitForShell(harness.service, () => shell.getState().run?.session?.state === "working")
+    await waitForShell(harness.service, () => shell.getState().run?.session?.observedState === "working")
     expect(renderer.renders.at(-1)).toContain("[WORKING]")
 
     harness.runtime.queueLifecycle("unknown")
     renderer.key("f")
-    await waitForShell(harness.service, () => shell.getState().run?.session?.state === "unknown")
+    await waitForShell(harness.service, () => shell.getState().run?.session?.observedState === "unknown")
     expect(renderer.renders.at(-1)).toContain("[UNKNOWN]")
     expect(harness.runtime.launches).toHaveLength(1)
 
     harness.runtime.queueLifecycle("blocked")
     renderer.key("f")
-    await waitForShell(harness.service, () => shell.getState().run?.session?.state === "blocked")
+    await waitForShell(harness.service, () => shell.getState().run?.session?.observedState === "blocked")
     const requestId = harness.runtime.queuePermission()
     renderer.key("f")
     await waitForShell(harness.service, () => shell.getState().run?.pendingRequest?.requestId === requestId)
@@ -273,7 +273,7 @@ describe("Milestone 1 deterministic one-task acceptance flow", () => {
     harness.runtime.queueResult(verifiedResult)
     renderer.key("escape")
     renderer.key("f")
-    await waitForShell(harness.service, () => shell.getState().run?.session?.state === "completed")
+    await waitForShell(harness.service, () => shell.getState().run?.session?.observedState === "completed")
     expect(renderer.renders.at(-1)).toContain("[COMPLETED]")
     renderer.key("v")
     await waitForShell(harness.service, () => shell.getState().screen === "result" && shell.getState().pending === null)

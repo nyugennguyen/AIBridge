@@ -117,7 +117,8 @@ class FakeRuntime implements AgentRuntimeAdapter {
       nodeId: request.operation.nodeId,
       installationId: request.dispatchEnvelope.installationId,
       runtimeKind: request.dispatchEnvelope.runtimeKind,
-      state: "starting",
+      lifecycleState: "launching",
+      observedState: "starting",
       ...(this.includeTerminal ? { terminalId: "terminal-runtime-1" } : {}),
     }))
   }
@@ -598,7 +599,7 @@ describe("InMemoryLocalApplicationService", () => {
       state: "completed",
     }))
     const refreshed = requireOk(await service.execute({ type: "session.refresh", operationId: op(), correlationId, runId: snapshot.draft.runId }))
-    expect(refreshed.session?.state).toBe("unknown")
+    expect(refreshed.session?.observedState).toBe("unknown")
     expect(refreshed.run?.state).toBe("active")
 
     runtime.result = agentResultSchema.parse({
@@ -608,7 +609,7 @@ describe("InMemoryLocalApplicationService", () => {
       completionEvidence: { kind: "reliable_provider", mechanism: "fake completion event" },
     })
     const result = requireOk(await service.execute({ type: "result.get", operationId: op(), correlationId, runId: snapshot.draft.runId }))
-    expect(result.snapshot.session?.state).toBe("completed")
+    expect(result.snapshot.session?.lifecycleState).toBe("completed")
     expect(result.snapshot.run?.state).toBe("completed")
     expect(result.result.outcome).toBe("succeeded")
   })
@@ -633,7 +634,10 @@ describe("InMemoryLocalApplicationService", () => {
       requestId: "permission-request-1",
     }))
     const blocked = requireOk(await service.execute({ type: "session.refresh", operationId: op(), correlationId, runId: launch.snapshot.draft.runId }))
-    expect(blocked).toMatchObject({ session: { state: "blocked" }, pendingRequest: { requestId: "permission-request-1" } })
+    // A permission request blocks the PROVIDER, so it is an observation
+    // (`observedState: "blocked"`) while the kernel lifecycle goes idle. `blocked`
+    // is never a lifecycle state.
+    expect(blocked).toMatchObject({ session: { observedState: "blocked", lifecycleState: "idle" }, pendingRequest: { requestId: "permission-request-1" } })
     const response = requireOk(await service.execute({
       type: "session.respond",
       operationId: op(),
@@ -678,7 +682,7 @@ describe("InMemoryLocalApplicationService", () => {
     expect(uncertain.outcome).toBe("unknown")
     expect(uncertain.snapshot.cancellation.state).toBe("unknown")
     expect(uncertain.snapshot.run?.state).toBe("active")
-    expect(uncertain.snapshot.session?.state).toBe("unknown")
+    expect(uncertain.snapshot.session?.observedState).toBe("unknown")
   })
 
   it("returns bounded recovery summaries and quarantines cross-project references", async () => {

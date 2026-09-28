@@ -77,6 +77,16 @@ export interface OutboxRecord {
   readonly createdAt: Timestamp
   readonly lastAttemptedAt?: Timestamp
   readonly acknowledgedAt?: Timestamp
+  readonly projectId?: ProjectId
+  readonly runId?: RunId
+  readonly commandId?: CommandId
+  readonly sequenceStart?: number
+  readonly sequenceEnd?: number
+  readonly claimToken?: string
+  readonly leaseExpiresAt?: Timestamp
+  readonly nextAttemptAt?: Timestamp
+  readonly lastError?: string
+  readonly failedAt?: Timestamp
 }
 
 export interface OutboxRecordInput {
@@ -87,6 +97,60 @@ export interface OutboxRecordInput {
   readonly status?: OutboxRecordStatus
   readonly attempts?: number
   readonly createdAt?: Timestamp
+  readonly projectId?: ProjectId
+  readonly runId?: RunId
+  readonly commandId?: CommandId
+  readonly nextAttemptAt?: Timestamp
+}
+
+export interface OutboxFilter {
+  readonly projectId?: string
+  readonly runId?: string
+  readonly destination?: string
+  readonly status?: OutboxRecordStatus
+  /** Only return records whose backoff deadline has passed (or that have none). */
+  readonly readyAt?: Timestamp
+}
+
+export interface ClaimOutboxOptions extends OutboxFilter {
+  readonly limit?: number
+  /** How long the claim stays valid before `recoverStaleOutbox` may requeue it. */
+  readonly leaseMs?: number
+  /** Injectable clock so recovery/backoff is testable without sleeping. */
+  readonly now?: Timestamp
+  /** Injectable token so a caller can correlate a claim across processes. */
+  readonly claimToken?: string
+}
+
+export interface OutboxClaim {
+  readonly token: string
+  readonly claimedAt: Timestamp
+  readonly leaseExpiresAt: Timestamp
+  readonly records: readonly OutboxRecord[]
+}
+
+export interface OutboxWriteResult {
+  readonly outboxId: string
+  readonly changed: boolean
+  readonly record?: OutboxRecord
+}
+
+export interface OutboxRecoveryResult {
+  readonly recovered: readonly string[]
+  readonly exhausted: readonly string[]
+  readonly requeuedCount: number
+  readonly failedCount: number
+}
+
+export interface DispatchAttemptTombstone {
+  readonly projectId: ProjectId
+  readonly runId: RunId
+  readonly dispatchId: string
+  readonly attempt: number
+  readonly envelopeDigest: Digest
+  readonly eventId: EventId
+  readonly sequence: number
+  readonly proposedAt: Timestamp
 }
 
 export interface SnapshotRecord {

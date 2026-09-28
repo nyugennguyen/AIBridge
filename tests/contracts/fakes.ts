@@ -125,7 +125,8 @@ export class FakeAgentRuntimeAdapter implements AgentRuntimeAdapter {
       nodeId: this.nodeId,
       installationId: this.installationId,
       runtimeKind: this.kind,
-      state: "starting",
+      lifecycleState: "launching",
+      observedState: "starting",
     })
     const result = success(session)
     const reference = runtimeSessionReferenceSchema.parse({
@@ -193,7 +194,7 @@ export class FakeAgentRuntimeAdapter implements AgentRuntimeAdapter {
       nodeId: session.nodeId,
       occurredAt: this.clock.now(),
       type: "lifecycle",
-      state: session.state,
+      state: session.observedState,
     }))
   }
 

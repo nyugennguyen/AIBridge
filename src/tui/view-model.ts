@@ -1,4 +1,5 @@
 import { MINIMUM_TUI_COLUMNS, MINIMUM_TUI_ROWS, type TuiUiState } from "./types.js"
+import { isSessionTerminal } from "../orchestration/transitions.js"
 
 function wrapLines(lines: readonly string[], width: number): string[] {
   const boundedWidth = Math.max(1, width)
@@ -18,7 +19,14 @@ function status(state: TuiUiState): string {
   if (run.result?.outcome === "unknown") return "UNKNOWN"
   if (run.cancellation.state === "confirmed") return "CANCELLED"
   if (run.cancellation.state === "unknown") return "UNKNOWN"
-  if (run.session) return run.session.state.toUpperCase()
+  if (run.session) {
+    // A terminal lifecycle is authoritative and outranks the provider's own
+    // report; otherwise the badge reflects what the provider last observed,
+    // which is what the milestone-1 UX state machine specifies (agent-working,
+    // agent-blocked, agent-unknown).
+    if (isSessionTerminal(run.session.lifecycleState)) return run.session.lifecycleState.toUpperCase()
+    return run.session.observedState.toUpperCase()
+  }
   const proposal = run.currentProposal
   if (proposal?.launchAdmission.state === "unknown") return "UNKNOWN"
   if (proposal?.launchAdmission.state === "failed") return "FAILED"

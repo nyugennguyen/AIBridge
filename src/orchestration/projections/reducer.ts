@@ -2,11 +2,13 @@ import { digestJson } from "../digest.js"
 import type { Digest, Timestamp } from "../identifiers.js"
 import type { OrchestrationEvent } from "../types.js"
 import type { StoredRunEvent } from "../event-store/types.js"
+import { isRunTerminal, isSessionTerminal } from "../transitions.js"
 import type {
   ApprovalProjection,
   ArtifactProjection,
   DispatchProjection,
   ProjectionDispatchState,
+  ProjectionRunState,
   ProjectionSessionState,
   ProjectionTaskState,
   RunProjection,
@@ -84,11 +86,16 @@ export function reduceEvent(
   switch (event.type) {
     case "run.created": {
       const runPayload = event.payload.run
-      const isTerminal = ["completed", "failed", "cancelled"].includes(runPayload.state)
+      const isTerminal = isRunTerminal(runPayload.state)
       nextRun = {
         runId: runPayload.runId,
         projectId: runPayload.projectId,
         state: runPayload.state,
+        // `paused` is a run-level gate recorded on the aggregate, surfaced in the
+        // projection as the derived `paused` state the scheduler consults before
+        // dispatching. It is never a lifecycle state and never drives a
+        // transition through the machine.
+        ...(runPayload.paused ? { state: "paused" as ProjectionRunState } : {}),
         controllerNodeId: event.actor.kind === "node" ? event.actor.nodeId : nextRun.controllerNodeId,
         controllerEpoch: event.controllerEpoch,
         activeLeaseId: nextRun.activeLeaseId,
@@ -120,7 +127,10 @@ export function reduceEvent(
         description: taskPayload.description,
         state: taskState,
         dependencies,
-        failurePolicy: (taskPayload as any).failurePolicy ?? null,
+        // `failurePolicy` is a real field on `taskSchema`; reading it directly is
+        // what makes the scheduler's dependency-failure behaviour driven by the
+        // event log rather than silently falling back to a default.
+        failurePolicy: taskPayload.failurePolicy ?? null,
         currentDispatchId: null,
         dispatchAttempts: 0,
         createdAt: event.occurredAt,
@@ -256,15 +266,17 @@ export function reduceEvent(
       }
 
       const existingSession = nextSessions[sessionPayload.sessionId]
-      const sessionState: ProjectionSessionState =
-        sessionPayload.state === "launching" ? "launching" : "running"
       nextSessions[sessionPayload.sessionId] = {
         sessionId: sessionPayload.sessionId,
         dispatchId: sessionPayload.dispatchId,
         runId: sessionPayload.runId,
         projectId: sessionPayload.projectId,
-        state: sessionState,
-        adapterMetadata: (sessionPayload as any).adapterMetadata ?? null,
+        // `dispatch.started` is itself the lifecycle fact: a dispatch that
+        // started has a session in `running` (or `launching` if the provider
+        // has not yet confirmed). The payload carries it; do not re-derive it.
+        state: sessionPayload.lifecycleState,
+        observedState: sessionPayload.observedState,
+        adapterMetadata: (sessionPayload as { adapterMetadata?: Record<string, unknown> }).adapterMetadata ?? null,
         createdAt: existingSession?.createdAt ?? event.occurredAt,
         updatedAt: event.occurredAt,
         outcome: existingSession?.outcome ?? null,
@@ -286,17 +298,18 @@ export function reduceEvent(
       const sessionPayload = event.payload.session
       const existingSession = nextSessions[sessionPayload.sessionId]
 
-      let mappedState: ProjectionSessionState
-      if (sessionPayload.state === "working") {
-        mappedState = "running"
-      } else if (sessionPayload.state === "starting") {
-        mappedState = "launching"
-      } else {
-        mappedState = sessionPayload.state as ProjectionSessionState
-      }
-
-      const isTerminal = ["completed", "failed", "cancelled", "timed_out"].includes(mappedState)
-      const outcome = isTerminal ? mappedState : (existingSession?.outcome ?? null)
+      // The event already carries the kernel lifecycle, validated by the
+      // aggregate machine when it was recorded. The projection does not
+      // re-derive it from the provider's observation vocabulary — that is the
+      // conflation this split exists to prevent. It only enforces the machine's
+      // terminal-absorbing rule so a late non-terminal observation cannot
+      // resurrect a finished session.
+      const recorded: ProjectionSessionState = sessionPayload.lifecycleState
+      const mappedState: ProjectionSessionState =
+        existingSession !== undefined && isSessionTerminal(existingSession.state) && !isSessionTerminal(recorded)
+          ? existingSession.state
+          : recorded
+      const outcome = isSessionTerminal(mappedState) ? mappedState : (existingSession?.outcome ?? null)
 
       nextSessions[sessionPayload.sessionId] = {
         sessionId: sessionPayload.sessionId,
@@ -304,7 +317,10 @@ export function reduceEvent(
         runId: sessionPayload.runId,
         projectId: sessionPayload.projectId,
         state: mappedState,
-        adapterMetadata: (sessionPayload as any).adapterMetadata ?? existingSession?.adapterMetadata ?? null,
+        observedState: sessionPayload.observedState,
+        adapterMetadata: (sessionPayload as { adapterMetadata?: Record<string, unknown> }).adapterMetadata
+          ?? existingSession?.adapterMetadata
+          ?? null,
         createdAt: existingSession?.createdAt ?? event.occurredAt,
         updatedAt: event.occurredAt,
         outcome,

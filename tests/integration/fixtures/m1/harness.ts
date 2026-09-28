@@ -430,7 +430,8 @@ export class ScriptedRuntime implements AgentRuntimeAdapter {
       nodeId: request.operation.nodeId,
       installationId: request.dispatchEnvelope.installationId,
       runtimeKind: request.dispatchEnvelope.runtimeKind,
-      state: "starting",
+      lifecycleState: "launching",
+      observedState: "starting",
       terminalId: reference.terminalId,
     })
     return ok(this.session)
@@ -465,7 +466,7 @@ export class ScriptedRuntime implements AgentRuntimeAdapter {
 
   async collectResult(): Promise<Result<AgentResult>> { return ok(structuredClone(this.collected)) }
 
-  queueLifecycle(state: RuntimeSession["state"]): void {
+  queueLifecycle(state: RuntimeSession["observedState"]): void {
     this.observations.push(this.event({ type: "lifecycle", state, detail: `fixture ${state}` }))
   }
 
@@ -479,7 +480,7 @@ export class ScriptedRuntime implements AgentRuntimeAdapter {
     this.observations.push(this.event({ type: "result_available", result: this.collected }))
   }
 
-  private event(payload: { type: "lifecycle"; state: RuntimeSession["state"]; detail: string } | { type: "permission_requested"; permission: string; requestId: string } | { type: "result_available"; result: AgentResult }): AgentRuntimeEvent {
+  private event(payload: { type: "lifecycle"; state: RuntimeSession["observedState"]; detail: string } | { type: "permission_requested"; permission: string; requestId: string } | { type: "result_available"; result: AgentResult }): AgentRuntimeEvent {
     if (!this.session) throw new Error("launch a fixture session before queuing observations")
     const base = {
       schemaVersion: 1 as const,

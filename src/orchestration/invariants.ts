@@ -589,7 +589,7 @@ export function validateRunInvariants(run: Run): Result<void> {
 
 export function validateTaskInvariants(task: Task, context?: { runState?: RunState }): Result<void> {
   if (context?.runState !== undefined && isRunTerminal(context.runState)) {
-    if (!isTaskTerminal(task.state as TaskState)) {
+    if (!isTaskTerminal(task.state)) {
       return {
         ok: false,
         error: createContractError(
@@ -621,7 +621,7 @@ export function validateDispatchInvariants(
   }
 
   if (context?.runState !== undefined && isRunTerminal(context.runState)) {
-    if (!isDispatchTerminal(dispatch.state as DispatchState)) {
+    if (!isDispatchTerminal(dispatch.state)) {
       return {
         ok: false,
         error: createContractError(
@@ -648,13 +648,13 @@ export function validateSessionInvariants(
   context?: { runState?: RunState; dispatchState?: DispatchState },
 ): Result<void> {
   if (context?.runState !== undefined && isRunTerminal(context.runState)) {
-    if (!isSessionTerminal(session.state as SessionState)) {
+    if (!isSessionTerminal(session.lifecycleState)) {
       return {
         ok: false,
         error: createContractError(
           "conflict",
           "session.run_terminal",
-          `Session cannot be in non-terminal state '${session.state}' when run is in terminal state '${context.runState}'`,
+          `Session cannot be in non-terminal lifecycle state '${session.lifecycleState}' when run is in terminal state '${context.runState}'`,
         ),
       }
     }

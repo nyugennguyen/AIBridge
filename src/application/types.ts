@@ -29,6 +29,7 @@ import type {
   Rule,
   Run,
   Session,
+  SessionObservedState,
   Task,
 } from "../orchestration/types.js"
 import type { AgentInstallation, AgentResult, NodeContext } from "../runtime/types.js"
@@ -183,7 +184,7 @@ export interface RecoverySummary {
   readonly nodeId: NodeId
   readonly sessionId: SessionId
   readonly terminalId: TerminalId
-  readonly runtimeState: Session["state"]
+  readonly runtimeState: SessionObservedState
   readonly historyAvailable: boolean
   readonly mutationAllowed: boolean
   readonly attachmentMode: "read-only"

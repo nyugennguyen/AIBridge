@@ -50,6 +50,35 @@ export interface CommandStateRule {
 }
 
 export const COMMAND_MATRIX: Readonly<Record<CommandType, CommandStateRule>> = {
+  "run.create": {
+    // A create command is what brings the run stream into existence, so no
+    // prior run state can constrain it. The rule exists to force an explicit
+    // decision here rather than to omit the entry: an exhaustive
+    // `Record<CommandType, ...>` makes adding a command type a compile error
+    // until someone states the states it may act in.
+    allowedRunStates: ["draft"],
+  },
+  "dispatch.approve": {
+    allowedRunStates: ["draft", "active"],
+    allowedDispatchStates: ["proposed"],
+    allowedApprovalStates: ["pending", "approved", "invalidated"],
+    allowedTaskStates: ["ready"],
+  },
+  "dispatch.retry": {
+    // Retry is deliberately NOT gated on the task being `failed` here: the
+    // retryability rule (dependencies, attempt monotonicity) belongs to the
+    // scheduler, and the matrix only constrains which lifecycle states a
+    // command may act in. The run must be non-terminal, and the previous
+    // attempt's dispatch must be terminal so failure history is settled.
+    allowedRunStates: ["draft", "active"],
+    allowedDispatchStates: ["failed", "cancelled", "timed_out", "completed"],
+    allowedTaskStates: ["failed"],
+  },
+  "dispatch.timeout.request": {
+    allowedRunStates: ["draft", "active"],
+    allowedDispatchStates: ["proposed", "approved", "running"],
+    allowedSessionStates: ["launching", "running", "idle"],
+  },
   "run.cancel": {
     allowedRunStates: ["draft", "active"],
   },
@@ -338,6 +367,21 @@ export function validateApprovalDigest(approval: Approval, target: DispatchOrEnv
     }
   }
 
+  // Durable lifecycle check. A digest that still matches is necessary but not
+  // sufficient: once the approval has been recorded as invalidated, it no
+  // longer authorizes anything, even if the envelope happens to digest back to
+  // the recorded value. Otherwise an invalidation could be silently undone.
+  if (approval.state !== "approved") {
+    return {
+      ok: false,
+      error: createContractError(
+        "approval_required",
+        "approval.invalidated",
+        `Approval '${approval.approvalId}' is in state '${approval.state}' and no longer authorizes execution`,
+      ),
+    }
+  }
+
   return { ok: true, value: undefined }
 }
 
@@ -353,6 +397,7 @@ export function assertApprovalDigestBound(approval: Approval, target: DispatchOr
 
 export function deriveApprovalState(approval: Approval, target?: DispatchOrEnvelope): ApprovalState {
   if (approval.decision === "rejected") return "rejected"
+  if (approval.state === "invalidated") return "invalidated"
   if (target !== undefined) {
     const result = validateApprovalDigest(approval, target)
     if (!result.ok) return "invalidated"

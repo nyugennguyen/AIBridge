@@ -1,8 +1,7 @@
-import { digestDispatchEnvelope, digestJson } from "../digest.js"
+import { digestDispatchEnvelope } from "../digest.js"
 import type { DispatchId, TaskId } from "../identifiers.js"
-import type { DispatchEnvelope } from "../types.js"
+import type { Dispatch, DispatchEnvelope } from "../types.js"
 import type {
-  DispatchProjection,
   ProjectionTaskState,
   RunProjectionState,
   TaskProjection,
@@ -414,7 +413,10 @@ export function retryTask(
     `${id}-dispatch-${nextAttempt}`
   ) as DispatchId
 
-  const baseEnvelope = latestDispatch?.envelope
+  // The envelope is `null` on a dispatch projection reconstructed from a bare
+  // `dispatch.finished` event, so an explicit `baseEnvelope` is accepted rather
+  // than treated as "not retryable". It is still an error to have neither.
+  const baseEnvelope = latestDispatch?.envelope ?? options?.baseEnvelope
   if (!baseEnvelope) {
     throw new TaskNotRetryableError(
       id,
@@ -435,7 +437,9 @@ export function retryTask(
     state: "ready",
     currentDispatchId: nextDispatchId,
     dispatchAttempts: nextAttempt,
-    updatedAt: new Date().toISOString(),
+    // Deterministic: the coordinator injects the clock. A wall-clock default
+    // here would make a replayed retry produce a different projection.
+    updatedAt: options?.now ?? task.updatedAt,
   }
 
   return {
@@ -447,71 +451,36 @@ export function retryTask(
   }
 }
 
-function stripUndefined<T>(value: T): T {
-  if (value === null || typeof value !== "object") return value
-  if (Array.isArray(value)) return value.map(stripUndefined) as unknown as T
-  const result: Record<string, unknown> = {}
-  for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
-    if (val !== undefined) {
-      result[key] = stripUndefined(val)
-    }
-  }
-  return result as T
-}
-
 /**
- * Applies a RetryTaskResult directly to a RunProjectionState, returning an updated state.
+ * Builds the `dispatch.proposed` event payload for a retry.
  *
- * Guarantees that ALL historical dispatches (including previous failed attempts)
- * are preserved intact, and the new dispatch attempt is appended with state 'proposed'.
+ * This deliberately does NOT mutate a `RunProjectionState`. The previous
+ * implementation of retry wrote a `proposed` dispatch straight into the
+ * projection, which is exactly the "projections become an alternative source of
+ * truth" failure the Milestone 3 guardrails forbid: the attempt would exist in
+ * the read model with no corresponding event, would not replay, and would be
+ * invisible to every other reader of the stream.
+ *
+ * Retry therefore produces an event. The caller (the dispatch coordinator)
+ * appends it in one transaction with the rest of the command's events, and the
+ * reducer derives the projection — so attempt history is preserved by
+ * construction and full replay equals incremental application.
+ *
+ * The attempt number is strictly greater than every prior attempt for the task,
+ * which is also what keeps the event store's `(dispatchId, attempt)` dispatch
+ * tombstone from rejecting the proposal.
  */
-export function applyRetryToRunState(
+export function buildRetryDispatchProposal(
   runState: RunProjectionState,
   retryResult: RetryTaskResult,
-  now = new Date().toISOString(),
-): RunProjectionState {
-  const newDispatchProjection: DispatchProjection = {
-    dispatchId: retryResult.nextDispatchId,
-    taskId: retryResult.taskId,
-    runId: runState.run.runId,
-    projectId: runState.run.projectId,
-    envelopeDigest: digestDispatchEnvelope(retryResult.dispatchEnvelope),
-    envelope: retryResult.dispatchEnvelope,
-    state: "proposed",
-    approvalId: null,
-    sessionId: null,
-    attempt: retryResult.nextAttempt,
-    createdAt: now,
-    updatedAt: now,
-    outcome: null,
-    summary: null,
-  }
-
-  const nextDispatches: Record<string, DispatchProjection> = {
-    ...runState.dispatches,
-    [retryResult.nextDispatchId]: newDispatchProjection,
-  }
-
-  const nextTasks: Record<string, TaskProjection> = {
-    ...runState.tasks,
-    [retryResult.taskId]: retryResult.updatedTask,
-  }
-
-  const stateWithoutDigest = {
-    run: { ...runState.run, updatedAt: now },
-    tasks: nextTasks,
-    dispatches: nextDispatches,
-    approvals: runState.approvals,
-    sessions: runState.sessions,
-    artifacts: runState.artifacts,
-    lastAppliedSequence: runState.lastAppliedSequence + 1,
-    lastAppliedPosition: runState.lastAppliedPosition,
-  }
-
-  const stateDigest = digestJson(stripUndefined(stateWithoutDigest))
-
+  now: string,
+): Dispatch {
   return {
-    ...stateWithoutDigest,
-    stateDigest,
+    schemaVersion: 1,
+    envelope: retryResult.dispatchEnvelope,
+    envelopeDigest: digestDispatchEnvelope(retryResult.dispatchEnvelope),
+    state: "proposed",
+    createdAt: now,
+    externalReferences: [],
   }
 }

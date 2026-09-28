@@ -187,6 +187,7 @@ function makeApproval(overrides: Partial<Record<string, unknown>> = {}): Approva
     dispatchId: "disp-1",
     envelopeDigest: digestDispatchEnvelope(envelope),
     decision: "approved",
+    state: "approved",
     basis: { kind: "user" },
     actor: { kind: "user", userId: userIdSchema.parse("user-1") },
     decidedAt: "2026-02-02T00:00:00Z",
@@ -1444,6 +1445,7 @@ describe("Digest-bound approval (M3.6)", () => {
     const approval = makeApproval({
       envelopeDigest: digestDispatchEnvelope(makeEnvelope()),
       decision: "rejected",
+      state: "rejected",
     })
     const verification = verifyApproval(approval, envelope)
 

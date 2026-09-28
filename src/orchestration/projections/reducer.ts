@@ -1,8 +1,16 @@
-import { digestJson } from "../digest.js"
+import { digestDispatchEnvelope, digestJson } from "../digest.js"
 import type { Digest, Timestamp } from "../identifiers.js"
-import type { OrchestrationEvent } from "../types.js"
+import { verifyApproval } from "../policy/approval.js"
+import type { Approval, DispatchEnvelope, OrchestrationEvent } from "../types.js"
 import type { StoredRunEvent } from "../event-store/types.js"
-import { isRunTerminal, isSessionTerminal } from "../transitions.js"
+import {
+  RUN_TERMINAL_SET,
+  canTransitionTask,
+  isRunTerminal,
+  isSessionTerminal,
+  transitionApproval,
+  type RunState,
+} from "../transitions.js"
 import type {
   ApprovalProjection,
   ArtifactProjection,
@@ -16,6 +24,66 @@ import type {
   SessionProjection,
   TaskProjection,
 } from "./types.js"
+
+/**
+ * Derives the durable approval lifecycle from the events alone.
+ *
+ * A `dispatch.proposed` for a dispatch that already has an approval is either
+ * the first proposal (nothing to invalidate) or a revision. A revision changes
+ * the envelope digest, so every approval bound to the previous digest stops
+ * binding — this is the Milestone 3 criterion "approval becomes invalid after
+ * any envelope mutation", and deriving it here (rather than trusting an
+ * event's word) is what keeps the read model replayable and stops a projection
+ * from becoming a second source of truth.
+ *
+ * The route is the approval state machine: only a non-terminal approval can be
+ * invalidated, and the verdict comes from `verifyApproval` rather than a
+ * hand-rolled digest comparison.
+ */
+function invalidateApprovalsForEnvelope(
+  approvals: Record<string, ApprovalProjection>,
+  dispatchId: string,
+  envelope: DispatchEnvelope,
+  occurredAt: Timestamp,
+): Record<string, ApprovalProjection> {
+  let changed = false
+  const next: Record<string, ApprovalProjection> = { ...approvals }
+
+  for (const [approvalId, approval] of Object.entries(approvals)) {
+    if (approval.dispatchId !== dispatchId) continue
+
+    // Re-verify against the *record*, not the projection, so the check is the
+    // same one `authorizeDispatch` performs at execution time.
+    const record: Approval = {
+      schemaVersion: 1,
+      approvalId: approval.approvalId,
+      projectId: approval.projectId,
+      runId: approval.runId,
+      dispatchId: approval.dispatchId,
+      envelopeDigest: approval.envelopeDigest,
+      decision: approval.decision,
+      state: approval.state,
+      basis: approval.basis,
+      actor: approval.actor,
+      decidedAt: approval.decidedAt,
+    }
+
+    const verification = verifyApproval(record, envelope)
+    if (verification.state !== "invalidated" || approval.state === "invalidated") continue
+
+    const transitioned = transitionApproval(approval.state, "invalidated")
+    next[approvalId] = {
+      ...approval,
+      state: transitioned,
+      invalidatedReason:
+        verification.reasons[0] ??
+        `Approval '${approvalId}' no longer binds to envelope digest '${verification.computedEnvelopeDigest}'`,
+    }
+    changed = true
+  }
+
+  return changed ? next : approvals
+}
 
 export function stripUndefined<T>(value: T): T {
   if (value === null || typeof value !== "object") return value
@@ -73,7 +141,7 @@ export function reduceEvent(
   const nextDispatches: Record<string, DispatchProjection> = currentState
     ? { ...currentState.dispatches }
     : {}
-  const nextApprovals: Record<string, ApprovalProjection> = currentState
+  let nextApprovals: Record<string, ApprovalProjection> = currentState
     ? { ...currentState.approvals }
     : {}
   const nextSessions: Record<string, SessionProjection> = currentState
@@ -133,6 +201,7 @@ export function reduceEvent(
         failurePolicy: taskPayload.failurePolicy ?? null,
         currentDispatchId: null,
         dispatchAttempts: 0,
+        retryable: false,
         createdAt: event.occurredAt,
         updatedAt: event.occurredAt,
       }
@@ -145,6 +214,20 @@ export function reduceEvent(
       const dispatchPayload = event.payload.dispatch
       const dispatchId = dispatchPayload.envelope.dispatchId
       const taskId = dispatchPayload.envelope.taskId
+
+      // A proposal for a dispatch that already carries an approval is either the
+      // first proposal (nothing to invalidate) or a revision. A revision changes
+      // the envelope digest, and every approval bound to the previous digest
+      // stops binding. That is derived here from the events alone so the read
+      // model agrees with the recorded `approval.invalidated` events a
+      // coordinator writes in the same transaction.
+      nextApprovals = invalidateApprovalsForEnvelope(
+        nextApprovals,
+        dispatchId,
+        dispatchPayload.envelope,
+        event.occurredAt,
+      )
+
       const dispatchProjection: DispatchProjection = {
         dispatchId,
         taskId,
@@ -160,15 +243,33 @@ export function reduceEvent(
         updatedAt: event.occurredAt,
         outcome: null,
         summary: null,
+        cancelRequested: false,
+        timeoutRequested: false,
       }
       nextDispatches[dispatchId] = dispatchProjection
 
       const existingTask = nextTasks[taskId]
       if (existingTask) {
+        // A dispatch proposal means the task is being attempted, so it is `ready`
+        // for that attempt. A task whose previous attempt `failed` is re-opened
+        // explicitly: `failed` is terminal in the lifecycle machine, and retry is
+        // an *evented* decision by the coordinator, never a spontaneous
+        // resurrection. The failed attempt itself is preserved in the dispatch
+        // projection, which is where the plan says failure history lives.
+        const reopens = existingTask.state === "failed"
+        const proposedState: ProjectionTaskState =
+          reopens || existingTask.state === "blocked" || canTransitionTask(existingTask.state, "ready")
+            ? "ready"
+            : existingTask.state
         nextTasks[taskId] = {
           ...existingTask,
+          state: proposedState,
           currentDispatchId: dispatchId,
           dispatchAttempts: Math.max(existingTask.dispatchAttempts + 1, dispatchPayload.envelope.attempt),
+          // A new attempt consumes the task's retry eligibility. A *proposed*
+          // dispatch is not a running task: the task is `ready` until the
+          // dispatch actually starts.
+          retryable: false,
           updatedAt: event.occurredAt,
         }
       } else {
@@ -181,11 +282,20 @@ export function reduceEvent(
           state: "pending",
           dependencies: [],
           failurePolicy: null,
+          retryable: false,
           currentDispatchId: dispatchId,
           dispatchAttempts: dispatchPayload.envelope.attempt,
           createdAt: event.occurredAt,
           updatedAt: event.occurredAt,
         }
+      }
+      // A retry proposal re-opens a run that had already gone terminal on this
+      // task's failure. This is an EXPLICIT, evented decision by the coordinator
+      // (the proposal is a real event in the log), not the reducer deciding on
+      // its own that a failure is recoverable. The failed attempt is preserved
+      // in the dispatch projection, which is where failure history belongs.
+      if (existingTask?.state === "failed" && RUN_TERMINAL_SET.has(nextRun.state as RunState)) {
+        nextRun = { ...nextRun, state: "active" as RunState, completedAt: null, updatedAt: event.occurredAt }
       }
       nextRun = { ...nextRun, updatedAt: event.occurredAt }
       break
@@ -193,16 +303,25 @@ export function reduceEvent(
 
     case "approval.decided": {
       const approvalPayload = event.payload.approval
+      const existingApproval = nextApprovals[approvalPayload.approvalId]
       const approvalProjection: ApprovalProjection = {
         approvalId: approvalPayload.approvalId,
         dispatchId: approvalPayload.dispatchId,
         runId: approvalPayload.runId,
         projectId: approvalPayload.projectId,
         decision: approvalPayload.decision,
+        state: approvalPayload.state,
         envelopeDigest: approvalPayload.envelopeDigest,
         actor: approvalPayload.actor,
+        basis: approvalPayload.basis,
         policyResult: (approvalPayload as any).policyResult ?? (approvalPayload.basis ? { basis: approvalPayload.basis } : null),
         decidedAt: approvalPayload.decidedAt ?? event.occurredAt,
+        // A decision event may be re-recorded for an approval that was already
+        // invalidated. Replaying the decision must not resurrect it: the later
+        // invalidation wins, because the digest it names is the current one.
+        ...(existingApproval?.state === "invalidated" && existingApproval.invalidatedReason !== undefined
+          ? { state: "invalidated" as const, invalidatedReason: existingApproval.invalidatedReason }
+          : {}),
       }
       nextApprovals[approvalPayload.approvalId] = approvalProjection
 
@@ -258,6 +377,7 @@ export function reduceEvent(
           state: "running",
           dependencies: [],
           failurePolicy: null,
+          retryable: false,
           currentDispatchId: sessionPayload.dispatchId,
           dispatchAttempts: 1,
           createdAt: event.occurredAt,
@@ -343,6 +463,10 @@ export function reduceEvent(
           summary: finishedPayload.summary ?? existingDispatch.summary ?? null,
           sessionId,
           updatedAt: event.occurredAt,
+          // The observed outcome supersedes the request flags: a request that
+          // was never answered is no longer pending.
+          cancelRequested: outcome === "cancelled" ? false : existingDispatch.cancelRequested,
+          timeoutRequested: outcome === "timed_out" ? false : existingDispatch.timeoutRequested,
         }
       } else {
         nextDispatches[finishedPayload.dispatchId] = {
@@ -360,6 +484,8 @@ export function reduceEvent(
           updatedAt: event.occurredAt,
           outcome,
           summary: finishedPayload.summary ?? null,
+          cancelRequested: false,
+          timeoutRequested: false,
         }
       }
 
@@ -377,6 +503,9 @@ export function reduceEvent(
         nextTasks[targetTaskId] = {
           ...existingTask,
           state: taskState,
+          // A failed attempt that the plan permits to be retried must not end the
+          // run: a retry adds an attempt rather than erasing the failure.
+          retryable: outcome === "failed" || outcome === "timed_out",
           updatedAt: event.occurredAt,
         }
       }
@@ -395,7 +524,15 @@ export function reduceEvent(
       }
 
       const taskList = Object.values(nextTasks)
-      if (taskList.length > 0) {
+      // `paused` is a derived read-model state, not a lifecycle state, so it is
+      // checked against the machine's terminal set explicitly rather than being
+      // coerced into `RunState`.
+      if (RUN_TERMINAL_SET.has(nextRun.state as RunState)) {
+        // Terminal runs are absorbing. A `dispatch.finished` that arrives after
+        // a cancel must record the dispatch/session outcome it actually
+        // observed, but it must not recompute the run's lifecycle.
+        nextRun = { ...nextRun, updatedAt: event.occurredAt }
+      } else if (taskList.length > 0) {
         const allTerminal = taskList.every((t) => ["completed", "failed", "cancelled", "skipped"].includes(t.state))
         if (allTerminal) {
           const allCompleted = taskList.every((t) => t.state === "completed" || t.state === "skipped")
@@ -469,6 +606,71 @@ export function reduceEvent(
         createdAt: event.occurredAt,
       }
       nextArtifacts[artifactPayload.artifactId] = artifactProjection
+      nextRun = { ...nextRun, updatedAt: event.occurredAt }
+      break
+    }
+
+    case "approval.invalidated": {
+      const invalidated = event.payload
+      const existing = nextApprovals[invalidated.approvalId]
+      if (existing !== undefined) {
+        nextApprovals[invalidated.approvalId] = {
+          ...existing,
+          // Routing through the machine means a re-delivered invalidation for
+          // an already-terminal approval cannot move it anywhere.
+          state: transitionApproval(existing.state, "invalidated"),
+          invalidatedReason: invalidated.reason,
+        }
+      }
+      nextRun = { ...nextRun, updatedAt: event.occurredAt }
+      break
+    }
+
+    case "run.cancelled": {
+      // A run cancel is a controller decision about the kernel's own intent,
+      // and `RUN_TRANSITIONS` already allows `draft|active -> cancelled`, so the
+      // run lifecycle moves now. What this event does NOT claim is that the
+      // runtime terminated anything: each session reaches a terminal lifecycle
+      // only when a `dispatch.finished` reports the observed outcome.
+      //
+      // Reaching a terminal run state is absorbing, so a late
+      // `dispatch.finished` cannot drag the run back to `completed`/`failed`
+      // (see the guard in that case).
+      nextRun = {
+        ...nextRun,
+        state: "cancelled",
+        completedAt: nextRun.completedAt ?? event.occurredAt,
+        updatedAt: event.occurredAt,
+      }
+      break
+    }
+
+    case "dispatch.cancel.requested": {
+      const request = event.payload
+      const existingDispatch = nextDispatches[request.dispatchId]
+      if (existingDispatch !== undefined) {
+        nextDispatches[request.dispatchId] = {
+          ...existingDispatch,
+          // Recorded as a request only. The dispatch stays `running` until a
+          // `dispatch.finished` reports what the runtime actually did.
+          cancelRequested: true,
+          updatedAt: event.occurredAt,
+        }
+      }
+      nextRun = { ...nextRun, updatedAt: event.occurredAt }
+      break
+    }
+
+    case "dispatch.timeout.requested": {
+      const request = event.payload
+      const existingDispatch = nextDispatches[request.dispatchId]
+      if (existingDispatch !== undefined) {
+        nextDispatches[request.dispatchId] = {
+          ...existingDispatch,
+          timeoutRequested: true,
+          updatedAt: event.occurredAt,
+        }
+      }
       nextRun = { ...nextRun, updatedAt: event.occurredAt }
       break
     }

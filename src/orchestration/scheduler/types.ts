@@ -200,6 +200,16 @@ export interface ScheduleResult {
 export interface RetryTaskOptions {
   readonly dispatchId?: DispatchId
   readonly envelopeOverrides?: Partial<DispatchEnvelope>
+  /**
+   * Base envelope for the new attempt when the projection carries no historical
+   * envelope to inherit from — for example a dispatch projection reconstructed
+   * from a bare `dispatch.finished` event. When omitted, the most recent
+   * historical envelope is used; when neither exists the task is not
+   * retryable.
+   */
+  readonly baseEnvelope?: DispatchEnvelope
+  /** Injected clock. Retry must be deterministic, so this is never defaulted to `Date.now()`. */
+  readonly now?: string
 }
 
 export interface RetryTaskResult {

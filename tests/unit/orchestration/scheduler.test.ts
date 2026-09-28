@@ -11,7 +11,8 @@ import type {
   RunProjectionState,
   TaskProjection,
 } from "../../../src/orchestration/projections/types.js"
-import type { DispatchEnvelope, TaskDependency } from "../../../src/orchestration/types.js"
+import type { DispatchEnvelope, OrchestrationEvent, TaskDependency } from "../../../src/orchestration/types.js"
+import { reduceEvent } from "../../../src/orchestration/projections/reducer.js"
 import {
   CycleDetectedError,
   DanglingDependencyError,
@@ -21,7 +22,7 @@ import {
   MissingDependencyError,
   TaskNotFoundError,
   TaskNotRetryableError,
-  applyRetryToRunState,
+  buildRetryDispatchProposal,
   detectCycle,
   evaluateTaskReadiness,
   getDependents,
@@ -42,6 +43,24 @@ import {
 
 const PROJECT_ID = "proj-test" as ProjectId
 const RUN_ID = "run-test" as RunId
+
+function makeEvent(
+  overrides: Partial<OrchestrationEvent> & Pick<OrchestrationEvent, "type" | "sequence">,
+): OrchestrationEvent {
+  return {
+    schemaVersion: 1,
+    eventId: "evt-retry",
+    projectId: PROJECT_ID,
+    runId: RUN_ID,
+    actor: { kind: "system", name: "kernel" },
+    occurredAt: "2026-09-27T00:05:00.000Z",
+    correlationId: "corr-retry",
+    causation: null,
+    controllerEpoch: 1,
+    commandId: "cmd-retry",
+    ...overrides,
+  } as OrchestrationEvent
+}
 
 function makeEnvelope(options: {
   dispatchId: string
@@ -110,6 +129,7 @@ function makeTask(options: {
   dependencies?: { taskId: string, failurePolicy?: "block" | "fail" }[]
   failurePolicy?: "block" | "fail" | null
   dispatchAttempts?: number
+  retryable?: boolean
   currentDispatchId?: string | null
   createdAt?: string
 }): TaskProjection {
@@ -129,6 +149,7 @@ function makeTask(options: {
     failurePolicy: options.failurePolicy ?? null,
     currentDispatchId: (options.currentDispatchId as DispatchId) ?? null,
     dispatchAttempts: options.dispatchAttempts ?? 0,
+    retryable: options.retryable ?? false,
     createdAt: (options.createdAt ?? "2026-09-27T00:00:00.000Z") as any,
     updatedAt: (options.createdAt ?? "2026-09-27T00:00:00.000Z") as any,
   }
@@ -162,6 +183,8 @@ function makeDispatch(options: {
     updatedAt: "2026-09-27T00:00:00.000Z" as any,
     outcome: options.outcome ?? null,
     summary: null,
+    cancelRequested: false,
+    timeoutRequested: false,
   }
 }
 
@@ -684,8 +707,21 @@ describe("Task Graph Scheduler", () => {
       expect(retryResult.dispatchEnvelope.attempt).toBe(2)
       expect(retryResult.dispatchEnvelope.dispatchId).toBe("flaky-task-dispatch-2")
 
-      // Apply retry to run state
-      const updatedRunState = applyRetryToRunState(runState, retryResult)
+      // Retry produces an EVENT, not a projection write. Projecting the event is
+      // the reducer's job; the scheduler must not be a second source of truth.
+      const proposal = buildRetryDispatchProposal(runState, retryResult, "2026-09-27T00:05:00.000Z")
+      expect(proposal.state).toBe("proposed")
+      expect(proposal.envelope.attempt).toBe(2)
+      expect(proposal.envelopeDigest).toBe(digestDispatchEnvelope(retryResult.dispatchEnvelope))
+
+      const updatedRunState = reduceEvent(
+        runState,
+        makeEvent({
+          sequence: runState.lastAppliedSequence + 1,
+          type: "dispatch.proposed",
+          payload: { dispatch: proposal },
+        }),
+      )
 
       // Verify that past dispatch attempt 1 is STILL intact and preserved
       expect(updatedRunState.dispatches["disp-1"]).toBeDefined()

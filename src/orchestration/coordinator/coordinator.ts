@@ -37,6 +37,8 @@ const PLANNED_EVENT_TYPES = new Set([
   "run.created",
   "task.created",
   "run.cancelled",
+  "run.paused",
+  "run.resumed",
   "approval.decided",
   "approval.invalidated",
   "dispatch.proposed",
@@ -132,6 +134,10 @@ export class DispatchCoordinator {
         return this.#createRun(command)
       case "run.cancel":
         return this.#cancelRun(command)
+      case "run.pause":
+        return this.#setPaused(command, true)
+      case "run.resume":
+        return this.#setPaused(command, false)
       case "dispatch.propose":
         return this.#proposeDispatch(command)
       case "dispatch.approve":
@@ -153,6 +159,19 @@ export class DispatchCoordinator {
     const { run, tasks } = command.payload
     if (run.projectId !== command.projectId || run.runId !== command.runId) {
       return fail("conflict", "coordinator.run_scope_mismatch", "The run payload must match the command's project and run identity.")
+    }
+    // A run is created exactly once. Without this precondition a second
+    // `run.create` for an existing `runId` is accepted — a fresh `commandId`
+    // evades the command receipt, and the sequence unique-index only constrains
+    // position, not identity — and the reducer then overwrites `paused`
+    // unconditionally. That let anyone clear the pause gate that protects
+    // imported legacy work, simply by re-emitting the creation event.
+    if (this.#deps.readRun(command.runId) !== undefined) {
+      return fail(
+        "conflict",
+        "coordinator.run_already_exists",
+        `Run '${command.runId}' already exists; a run is created once. Use run.pause/run.resume to change its gate, or run.cancel to end it.`,
+      )
     }
     // A task is an aggregate owned by one project and run. Accepting a task that
     // names a different scope would put another project's work inside this run's
@@ -193,6 +212,49 @@ export class DispatchCoordinator {
     }
     return ok({
       events: [this.#event(command, "run.cancelled", { runId: command.runId, reason: command.payload.reason })],
+      outboxRecords: [],
+    })
+  }
+
+  // --- run.pause / run.resume ---
+
+  /**
+   * Drives the run-level pause gate through events.
+   *
+   * `paused` used to be written exactly once at creation and never cleared, so a
+   * paused run was a permanent tombstone: nothing could ever schedule it again.
+   * It now has an owner. Pausing and resuming are explicit, evented decisions
+   * like every other lifecycle change, which also means no `run.created` can
+   * rewrite the gate after the fact.
+   */
+  #setPaused(
+    command: Extract<OrchestrationCommand, { type: "run.pause" }> | Extract<OrchestrationCommand, { type: "run.resume" }>,
+    paused: boolean,
+  ): CoordinatorResult<Plan> {
+    const state = this.#deps.readRun(command.runId)
+    if (state === undefined) {
+      return fail("validation", "coordinator.run_unknown", `Run '${command.runId}' is not known.`)
+    }
+    const lifecycle: RunState = state.run.state === "paused" ? "active" : state.run.state
+    if (isRunTerminal(lifecycle)) {
+      return fail(
+        "conflict",
+        "coordinator.run_terminal",
+        `Run '${command.runId}' is already '${lifecycle}'; a terminal run can be neither paused nor resumed.`,
+      )
+    }
+    const currentlyPaused = state.run.paused || state.run.state === "paused"
+    if (currentlyPaused === paused) {
+      // Converge to a recorded no-op so a retried pause/resume is harmless.
+      return ok({ events: [], outboxRecords: [] })
+    }
+    return ok({
+      events: [
+        this.#event(command, paused ? "run.paused" : "run.resumed", {
+          runId: command.runId,
+          reason: command.payload.reason,
+        }),
+      ],
       outboxRecords: [],
     })
   }

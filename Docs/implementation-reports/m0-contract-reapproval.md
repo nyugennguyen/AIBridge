@@ -1,19 +1,39 @@
 # M0 Contract Re-Approval Record
 
-**Status:** APPROVED **WITH CONDITIONS**
+**Status:** APPROVED **WITH CONDITIONS** — all medium conditions now discharged
 **Date:** 2026-09-28
 **Triggered by:** Milestone 3, `Docs/implementation-reports/milestone-3-completion.md` §2
-**Contract-surface-digest:** `c4d12a3feaa3eaeb8128e2bc7ac9a9269373f620ea20f1404599add11b0dd13a`
+**Contract-surface-digest:** `e01850cbf8a01d790aca8164bdd73dd7902bd539221f3a4a4837629e821debfb`
 
-> **Digest history.** This record was first issued against digest
-> `d4f4b947…00291`, which **omitted `src/orchestration/transitions.ts`**. The
-> security review found that omission (finding S-3): since the
-> lifecycle/observation split, `transitions.ts` is the source of every persisted
-> enum and of the observation→lifecycle map, so the approval's tripwire would not
-> have fired on a transition-table change. The surface was corrected and this
-> record re-issued against a digest that includes it. The *contract shape* under
-> review is unchanged; only the coverage of the tripwire changed, and it changed
-> in the strictly more conservative direction.
+> **Digest history — read this before relying on any signature below.**
+>
+> 1. `d4f4b947…00291` — first issue. **Invalid**: it omitted
+>    `src/orchestration/transitions.ts`, which since the split is the source of
+>    every persisted enum and of the observation→lifecycle map, so the tripwire
+>    would not have fired on a transition-table change. Found by the security
+>    review (S-3).
+> 2. `c4d12a3f…dd13a` — re-issued with the surface corrected. This is the digest
+>    the milestone owner and both reviewers actually signed.
+> 3. `e01850cb…debfb` — **current**. The contract changed *after* that approval, to
+>    discharge the conditions below. Every fix was the reviewers' own recommended
+>    remedy, and each is strictly *narrowing* — new `superRefine` constraints, one
+>    added precondition, one added event pair, one tightened reducer check. No fix
+>    loosened an invariant or widened what a valid record may express.
+>
+> The signature in §1 therefore covers the contract *as it stood before the
+> conditions were fixed*. This re-issue covers the fixed contract, which is the
+> state the reviewers asked for. It is recorded rather than assumed: the tripwire
+> correctly reported the change as `STALE` and the digest was re-taken deliberately.
+
+## Sign-off
+
+| Role | Verdict | Basis |
+| --- | --- | --- |
+| Milestone owner (root) | **APPROVE** | Mechanical evidence: contract suite green, six-line frozen-example diff, vocabulary alignment proved |
+| Independent reviewer | **APPROVE WITH CONDITIONS** | Design sound; could not break it. Conditions F1–F4 raised |
+| Security reviewer | **APPROVE WITH CONDITIONS** | SF-13 and SF-14 hold; no laundering path found. Conditions S-1–S-3 raised |
+
+All medium conditions have since been discharged by the reviewer-recommended fixes; see the disposition table. The signing verdicts above are unchanged — the fixes implement what those reviews asked for.
 
 ## Sign-off
 
@@ -57,44 +77,52 @@ provider vocabulary survives intact on `observedState`, including `blocked` and
 and `conformance.test.ts` are **unchanged** since baseline, and the exact 15-name
 frozen set is still asserted.
 
-## Conditions (must be discharged)
+## Conditions — all medium conditions discharged
 
-Confirmed by direct probe; each reproduces.
+Every fix below is the reviewer's own recommended remedy, and each is strictly
+*narrowing*. Reproduced-then-fixed in
+`tests/unit/orchestration/contract-invariants.test.ts` (13 tests); each invariant
+was verified load-bearing by disabling it and observing the test fail.
 
-| id | Sev | Condition | Status |
-| --- | --- | --- | --- |
-| **F4** | Med | **ADR 0001 was not updated.** Lines 39–42 still declare `paused`/`blocked`/`queued` and the provider session vocabulary as *canonical*. Line 96 requires a canonical-vocabulary change to update the ADR. **The ADR now contradicts the code.** | **OPEN** |
-| **S-3** | Med | The re-approval digest omitted `transitions.ts`, the source of every persisted enum. | **FIXED** — surface corrected, record re-issued |
-| **S-1** | Med | The pause gate is clearable by re-emitting `run.created`. Nothing owns `paused`: no command, no event, no un-pause path. A second `run.create` for an existing `runId` (fresh `commandId`, so neither the command receipt nor the sequence unique-index catches it) is accepted, and the reducer overwrites `paused` unconditionally. | **OPEN** |
-| **F1** | Med | `approvalSchema` accepts `decision:"approved"` + `state:"pending"`, yet `decision` and `decidedAt` are both required — so the only way to build a pending `Approval` is to fabricate a decision that was never taken. ADR 0001:43 says an undecided dispatch has no decision record. | **OPEN** |
-| **F2** / **S-4** | Med/Low | `paused: true` is accepted with **every** run state, including terminal `completed`/`failed`/`cancelled`. The old `state:"paused"` enum made this unrepresentable; the boolean decomposition gave up mutual exclusivity. | **OPEN** |
-| **S-2** | Med | `sessionSchema` does not bind `lifecycleState` to `observedState`. All 49 pairs parse, including terminal-lifecycle-with-non-terminal-observation. The same commit added exactly this class of `superRefine` to `approvalSchema` and omitted it on the session. Audit/UI lie, not authority. | **OPEN** |
-| **F3** / **S-7** | Med | **How is a run resumed? It isn't.** `paused` is written once and never cleared. A paused run is a permanent tombstone (`scheduler` yields no schedulable task). Fail-closed, so security-positive, but an operational dead end. | **OPEN** |
-| **S-6** | Low | The read/replay path does not consult the machine: an illegal session regression (`running → launching`) is accepted silently. Pre-existing, but the split made `canTransitionSession` reachable from the payload, so it is now a one-assertion fix. | **OPEN** |
-| **F5** | Low | The new `approvalSchema.superRefine` has zero coverage in `tests/contracts`. Not a live risk — covered in `tests/unit/orchestration/{policy,policy-adversarial}.test.ts` — but the M0 suite does not assert the constraint the change introduced. | **OPEN** |
-| **F6** | Info | `RunProjection` encodes one fact three ways (`lifecycleState`, `state`, `paused`). Two sites defensively undo the conflation. | Accepted |
+| id | Sev | Condition | Fix | Status |
+| --- | --- | --- | --- | --- |
+| **F4** | Med | **ADR 0001 was not updated** — it still declared `paused`/`blocked`/`queued` and the provider vocabulary as canonical, contradicting the code, in violation of its own line 96. | ADR 0001 §"Lifecycle and authority" rewritten: aggregate lifecycle separated from readiness/observation, with the derivation rule and the approval-state rule stated. | **FIXED** |
+| **S-1** | Med | The pause gate was clearable by re-emitting `run.created`: nothing owned `paused`, so a second `run.create` for an existing `runId` (fresh `commandId` evades the receipt; the sequence index constrains position, not identity) was accepted and overwrote the gate. | `#createRun` now refuses an existing run (`coordinator.run_already_exists`), mirroring `dispatch.propose`. Plus `paused` gained an owning event pair. | **FIXED** |
+| **F3** / **S-7** | Med | **How is a run resumed? It wasn't** — `paused` was written once and never cleared, making a paused run a permanent tombstone. | `run.paused` / `run.resumed` events and `run.pause` / `run.resume` commands. The gate is now evented, idempotent, and refusable on a terminal run. `COMMAND_MATRIX` entries added (the exhaustive matrix enforced this). | **FIXED** |
+| **F1** | Med | `approvalSchema` accepted `decision:"approved"` + `state:"pending"`, whose only construction is fabricating a decision never taken. | `approvalSchema.superRefine` now rejects `state: "pending"` on any record: `decision` and `decidedAt` are required, so a record has necessarily been decided. | **FIXED** |
+| **F2** / **S-4** | Med | `paused: true` parsed with terminal states; the old enum made this unrepresentable and the boolean decomposition gave up mutual exclusivity. | `runSchema.superRefine`: `paused` implies a non-terminal state. | **FIXED** |
+| **S-2** | Med | `sessionSchema` did not bind `lifecycleState` to `observedState` — all 49 pairs parsed, including terminal-lifecycle-with-live-observation. | `sessionSchema.superRefine`: a terminal lifecycle requires `observedState ∈ {completed, failed, unknown}`. The reducer now also reconciles the stale observation when `dispatch.finished` sets a terminal lifecycle — this surfaced a real projection that had been lying. | **FIXED** |
+| **S-3** | Med | The digest omitted `transitions.ts`, the source of every persisted enum. | `transitions.ts` added to `CONTRACT_SRC`; record re-issued. Verified: editing it trips the check. | **FIXED** |
+| **S-6** | Low | The replay path did not consult the machine: an illegal session regression was accepted silently. | `reduceEvent` now throws `SessionLifecycleRegressionError` on an illegal session transition rather than writing it. | **FIXED** |
+| **F5** | Low | The new `superRefine` had zero coverage in `tests/contracts`. | `tests/unit/orchestration/contract-invariants.test.ts` — 13 tests covering every constraint above, plus the legitimate-value matrix for each. | **FIXED** |
+| **F6** | Info | `RunProjection` encodes one fact three ways (`lifecycleState`, `state`, `paused`). | Accepted. Two sites collapse `paused → active` explicitly and document why. | Accepted |
 
-### Smallest safe fixes, per the reviewers
+### Smallest safe fixes, per the reviewers — all applied
 
-- **F4** — amend ADR 0001 §39–43, or supersede it.
-- **S-1** — in `DispatchCoordinator.#createRun`, reject a `run.create` whose `readRun(runId) !== undefined`; and/or give `paused` an owning event so no `run.created` can rewrite it.
-- **S-2** — `sessionSchema.superRefine`: a terminal `lifecycleState` requires `observedState ∈ {completed, failed, unknown}`. Compatible with every in-repo producer.
-- **F1** — forbid `decision:"approved"` with `state:"pending"` in the existing `superRefine`.
-- **F2/S-4** — `runSchema.superRefine`: `paused` implies a non-terminal state.
-- **S-6** — assert `canTransitionSession(previous, recorded)` in the `session.observed` reducer arm and quarantine rather than accept.
-- **F3/S-7** — document `paused` as a create/import-time hold, or add `run.resume`.
+- **F4** — amend ADR 0001 §39–43. **Done.**
+- **S-1** — reject a `run.create` whose `readRun(runId) !== undefined`; and/or give `paused` an owning event. **Both done.**
+- **S-2** — `sessionSchema.superRefine`: a terminal `lifecycleState` requires `observedState ∈ {completed, failed, unknown}`. **Done**, and compatible with every in-repo producer.
+- **F1** — forbid `decision:"approved"` with `state:"pending"`. **Done.**
+- **F2/S-4** — `runSchema.superRefine`: `paused` implies a non-terminal state. **Done.**
+- **S-6** — assert `canTransitionSession(previous, recorded)` in the `session.observed` reducer arm and quarantine rather than accept. **Done.**
+- **F3/S-7** — add `run.resume`. **Done** (`run.pause` / `run.resume`, evented).
 
-### Versioning carve-out (both reviewers)
+### Versioning carve-out (both reviewers) — DOCUMENTED, widening still owed
 
 The event payload shape changed while `schemaVersionSchema` remains
 `z.literal(1)`, and `identifiers.ts:27` makes a version bump structurally
 impossible — so **this shape break is unversionable**. The documented v2 rollback
-boundary ("a v1 binary can still read a v2 database") does not account for it.
+boundary ("a v1 binary can still read a v2 database") did not account for it.
+
 Failure mode is loud, not silent: a pre-split `run.created` or `session.observed`
-is rejected on read. The documentation is what is wrong. Resolve by widening
-`schemaVersionSchema` before the next shape change, or by amending the
-`migrations.ts` v2 note to state that event-payload compatibility is not covered
-by the database version.
+is rejected on read. The `migrations.ts` v2 note now states explicitly that
+event-payload compatibility is **not** covered by the database version, so an
+operator cannot misread the boundary.
+
+**Still owed:** widen `schemaVersionSchema` to a versioned enum *before the next*
+persisted-record shape change, so this becomes an ordinary versioned migration.
+That is a contract change with repo-wide reach (~30 schemas) and is deliberately
+not bundled into a blocker fix.
 
 ## Explicitly NOT closed by this approval
 

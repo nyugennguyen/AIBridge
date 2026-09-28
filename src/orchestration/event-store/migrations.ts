@@ -63,6 +63,27 @@ export const MIGRATIONS: readonly Migration[] = [
     //              is a manual rollback step and is not performed automatically
     //              because the tombstone table would then lose its uniqueness
     //              guarantee.
+    //
+    // NOT covered by this boundary - EVENT PAYLOAD COMPATIBILITY.
+    //   The database version tracks the *storage layout*, not the shape of the
+    //   domain records inside it. Milestone 3 changed the event payload shape
+    //   (run gained `paused`, task gained `failurePolicy`, session replaced
+    //   `state` with `lifecycleState` + `observedState`) while
+    //   `schemaVersionSchema` remained `z.literal(1)`, so that shape break is
+    //   UNVERSIONABLE under the current contract.
+    //
+    //   The practical consequence: a pre-split event log is NOT readable by
+    //   current code, regardless of the database version, and a current log is
+    //   not readable by pre-split code. The failure is LOUD, not silent - the
+    //   strict schemas reject a pre-split `run.created` or `session.observed` at
+    //   read time - but it is a shape break that the v2 rollback note above does
+    //   not describe, and an operator must not read "a v1 binary can still read
+    //   a v2 database" as covering it.
+    //
+    //   Action for the next shape change: widen `schemaVersionSchema` to a
+    //   versioned enum BEFORE changing a persisted record shape, so this becomes
+    //   an ordinary versioned migration. Flagged by both reviewers of the
+    //   Milestone 3 contract re-approval.
     //   data     - `command_receipts.fingerprint_version` defaults to 1 for
     //              pre-existing receipts, which keeps legacy whole-command
     //              digests resolvable. Rows written after this migration store

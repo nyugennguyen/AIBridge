@@ -36,11 +36,44 @@ The run consistency boundary does not make the controller the owner of worker pr
 
 ## Lifecycle and authority
 
-- Run states: `draft`, `active`, `paused`, `completed`, `failed`, `cancelled`.
-- Task states: `pending`, `blocked`, `ready`, `running`, `completed`, `failed`, `cancelled`.
-- Dispatch states: `proposed`, `approved`, `rejected`, `queued`, `running`, `completed`, `failed`, `timed_out`, `cancelled`.
-- Runtime/session states: `starting`, `idle`, `working`, `blocked`, `completed`, `failed`, `unknown`.
-- Approval decisions: `approved`, `rejected`. An undecided dispatch has no decision record; changing content makes earlier approvals inapplicable.
+> **Amended by Milestone 3** (`24b9aef`, re-approved 2026-09-28). The vocabulary below was
+> conflating two different axes — kernel-owned aggregate lifecycle versus readiness and
+> provider observation — and the persisted contract and the state machine had drifted into
+> non-overlapping sets, so a run persisted as `paused` could not be driven through its
+> lifecycle machine at all. `src/orchestration/transitions.ts` is now the single lifecycle
+> authority and the persisted enums derive from it, so future drift is a compile error.
+> See `Docs/implementation-reports/m0-contract-reapproval.md`.
+
+**Aggregate lifecycle** — the only states an aggregate's own machine governs. Every
+persisted value is drawn from these sets.
+
+- Run: `draft`, `active`, `completed`, `failed`, `cancelled`.
+- Task: `draft`, `pending`, `ready`, `running`, `completed`, `failed`, `cancelled`, `skipped`.
+- Dispatch: `proposed`, `approved`, `rejected`, `running`, `completed`, `failed`, `timed_out`, `cancelled`.
+- Session: `launching`, `running`, `idle`, `completed`, `failed`, `cancelled`, `timed_out`.
+- Approval: `pending`, `approved`, `rejected`, `invalidated`.
+
+**Readiness and provider observation** — not lifecycle, and therefore not persisted as such.
+
+- `paused` is a run-level **gate**, a boolean beside the run's lifecycle state, not a state
+  in its own right. It is owned by the `run.paused` / `run.resumed` events, so no
+  `run.created` can rewrite it after the fact, and it can only be set on work that has not
+  finished. A terminal run can never be paused.
+- `blocked` (task) and `queued` (dispatch) are **derived** read-model values. A task is
+  blocked as a function of its unsatisfied dependencies and `failurePolicy`; a dispatch is
+  queued while it is approved and awaiting a slot. Persisting either would create a second
+  source of truth alongside the graph and the schedule.
+- Provider/session observations are `starting`, `idle`, `working`, `blocked`, `completed`,
+  `failed`, `unknown`, recorded on `Session.observedState`. An observation never advances a
+  lifecycle on its own: `unknown` maps to **no** lifecycle claim, and a terminal lifecycle
+  is absorbing. A terminal lifecycle cannot be paired with a live observation.
+
+**Approval decisions**: `approved` and `rejected`. An undecided dispatch has no decision
+record; changing content makes earlier approvals inapplicable. A decision also carries a
+durable `state` recording whether it is still *binding* — a granted approval whose envelope
+digest no longer matches is `invalidated`. Because `decision` and `decidedAt` are both
+required, an approval record has necessarily been decided, so `pending` is unreachable on
+a record; it describes the absence of one.
 
 These are vocabulary/schema contracts, not a Milestone 0 state-machine implementation. Reliable completion evidence is required before translating a session observation into task success. `idle`, disconnect, timeout, missing metadata, and terminal screen matching never imply success. Callback delivery is a separate compatibility status, not a runtime lifecycle state. Existing terminal sessions survive TUI/controller disconnection; an expired lease prevents new orchestration effects but does not automatically kill processes.
 

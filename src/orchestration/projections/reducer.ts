@@ -5,10 +5,13 @@ import type { Approval, DispatchEnvelope, OrchestrationEvent } from "../types.js
 import type { StoredRunEvent } from "../event-store/types.js"
 import {
   canTransitionTask,
+  canTransitionSession,
   isRunTerminal,
   isSessionTerminal,
   transitionApproval,
   type RunState,
+  type SessionObservedState,
+  type SessionState,
   type TaskState,
 } from "../transitions.js"
 import { deriveDispatchPolicy, unavailableDispatchPolicy } from "./policy-view.js"
@@ -252,6 +255,24 @@ export function computeStateDigest(state: Omit<RunProjectionState, "stateDigest"
  */
 function runLifecycleOf(state: ProjectionRunState): RunState {
   return state === "paused" ? "active" : state
+}
+
+/**
+ * Raised when an event asks a session to move to a lifecycle state the machine
+ * does not allow. Throwing rather than writing keeps a corrupt or hand-edited
+ * log from silently rewinding a session: a projection must never disagree with
+ * the aggregate machine it is a view of.
+ */
+export class SessionLifecycleRegressionError extends Error {
+  readonly from: SessionState
+  readonly to: SessionState
+
+  constructor(from: SessionState, to: SessionState) {
+    super(`Illegal session lifecycle transition '${from}' -> '${to}' in the event log.`)
+    this.name = "SessionLifecycleRegressionError"
+    this.from = from
+    this.to = to
+  }
 }
 
 function getGlobalPosition(event: OrchestrationEvent | StoredRunEvent): number | undefined {  if ("globalPosition" in event && typeof (event as StoredRunEvent).globalPosition === "number") {
@@ -710,10 +731,18 @@ export function reduceEvent(
       // terminal-absorbing rule so a late non-terminal observation cannot
       // resurrect a finished session.
       const recorded: ProjectionSessionState = sessionPayload.lifecycleState
-      const mappedState: ProjectionSessionState =
-        existingSession !== undefined && isSessionTerminal(existingSession.state) && !isSessionTerminal(recorded)
-          ? existingSession.state
-          : recorded
+      // The read/replay path consults the machine, not just its terminal set. A
+      // terminal lifecycle is absorbing, and an ILLEGAL regression (for example
+      // `running -> launching`) is quarantined rather than written, so a corrupt
+      // or hand-edited event log cannot silently rewind a session.
+      let mappedState: ProjectionSessionState = recorded
+      if (existingSession !== undefined) {
+        if (isSessionTerminal(existingSession.state)) {
+          mappedState = isSessionTerminal(recorded) ? recorded : existingSession.state
+        } else if (!canTransitionSession(existingSession.state, recorded)) {
+          throw new SessionLifecycleRegressionError(existingSession.state, recorded)
+        }
+      }
       const outcome = isSessionTerminal(mappedState) ? mappedState : (existingSession?.outcome ?? null)
 
       nextSessions[sessionPayload.sessionId] = {
@@ -834,6 +863,12 @@ export function reduceEvent(
           nextSessions[sessionId] = {
             ...existingSession,
             state: outcome,
+            // A terminal lifecycle cannot keep carrying a live provider report:
+            // `state: "completed"` alongside `observedState: "working"` is the
+            // contradiction `sessionSchema` now refuses, and a projection that
+            // holds it is an audit view that lies. The outcome is the observed
+            // fact here, so it is written to both axes.
+            observedState: outcome === "cancelled" || outcome === "timed_out" ? "unknown" : (outcome as SessionObservedState),
             outcome,
             updatedAt: event.occurredAt,
           }
@@ -961,6 +996,23 @@ export function reduceEvent(
         cancellation: { state: "confirmed", commandId: event.commandId ?? null, reason: request.reason },
         completedAt: nextRun.completedAt ?? event.occurredAt,
         updatedAt: event.occurredAt,
+      }
+      break
+    }
+
+    case "run.paused":
+    case "run.resumed": {
+      // The pause gate now has an owner. It is a run-level hold on work that
+      // has not finished, and a terminal run is absorbing, so this never
+      // revives finished work.
+      const paused = event.type === "run.paused"
+      if (!isRunTerminal(runLifecycleOf(nextRun.state))) {
+        nextRun = {
+          ...nextRun,
+          state: paused ? ("paused" as ProjectionRunState) : (runLifecycleOf(nextRun.state) as RunState),
+          paused,
+          updatedAt: event.occurredAt,
+        }
       }
       break
     }

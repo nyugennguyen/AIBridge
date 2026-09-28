@@ -1,21 +1,26 @@
 import { digestDispatchEnvelope, digestJson } from "../digest.js"
-import type { Digest, Timestamp } from "../identifiers.js"
+import type { CommandId, Digest, DispatchId, Timestamp } from "../identifiers.js"
 import { verifyApproval } from "../policy/approval.js"
 import type { Approval, DispatchEnvelope, OrchestrationEvent } from "../types.js"
 import type { StoredRunEvent } from "../event-store/types.js"
 import {
-  RUN_TERMINAL_SET,
   canTransitionTask,
   isRunTerminal,
   isSessionTerminal,
   transitionApproval,
   type RunState,
+  type TaskState,
 } from "../transitions.js"
+import { deriveDispatchPolicy, unavailableDispatchPolicy } from "./policy-view.js"
 import type {
   ApprovalProjection,
   ArtifactProjection,
+  DispatchAttemptProjection,
+  DispatchPolicyProjection,
   DispatchProjection,
+  ProjectionCancellation,
   ProjectionDispatchState,
+  ProjectionLaunchAdmission,
   ProjectionRunState,
   ProjectionSessionState,
   ProjectionTaskState,
@@ -24,6 +29,130 @@ import type {
   SessionProjection,
   TaskProjection,
 } from "./types.js"
+
+const POLICY_UNAVAILABLE_NO_ENVELOPE =
+  "No dispatch envelope is recorded for this dispatch, so no policy decision can be derived"
+
+/** The digest a projection uses when a dispatch has no envelope of its own. */
+const ZERO_DIGEST = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+
+/** Newest proposal first is *not* what the read model wants; this orders oldest to newest. */
+function compareDispatchRecency(a: DispatchProjection, b: DispatchProjection): number {
+  if (a.createdAt !== b.createdAt) return a.createdAt < b.createdAt ? -1 : 1
+  if (a.attempt !== b.attempt) return a.attempt - b.attempt
+  return a.dispatchId.localeCompare(b.dispatchId)
+}
+
+/**
+ * Derives the run's launch admission from the dispatch projections.
+ *
+ * The only launch outcome the event log records is `dispatch.started`, and the
+ * only thing that authorizes a launch is an `approved` `approval.decided`. Both
+ * are therefore read here rather than invented: a dispatch with a recorded
+ * start is `started`, a dispatch that is approved but has not started is
+ * `pending` (the launch is authorized and unobserved), and anything else is
+ * `not-requested`. The newest proposal wins, because that is the dispatch a
+ * launch command would act on — the TUI's `currentProposal`.
+ */
+export function deriveLaunchAdmission(
+  dispatches: Readonly<Record<string, DispatchProjection>>,
+): ProjectionLaunchAdmission {
+  const ordered = Object.values(dispatches).sort(compareDispatchRecency)
+
+  for (let index = ordered.length - 1; index >= 0; index -= 1) {
+    const dispatch = ordered[index]
+    if (dispatch.startedAt === null || dispatch.sessionId === null) continue
+    return {
+      state: "started",
+      dispatchId: dispatch.dispatchId,
+      approvalId: dispatch.approvalId,
+      commandId: dispatch.startCommandId,
+      sessionId: dispatch.sessionId,
+    }
+  }
+
+  const current = ordered.at(-1)
+  if (current === undefined) {
+    return { state: "not-requested", reason: "No dispatch has been proposed for this run yet" }
+  }
+  if (current.state === "approved" && current.approvalId !== null) {
+    return {
+      state: "pending",
+      dispatchId: current.dispatchId,
+      approvalId: current.approvalId,
+      commandId: current.approvalCommandId,
+    }
+  }
+  return {
+    state: "not-requested",
+    reason: `Dispatch '${current.dispatchId}' (attempt ${current.attempt}) is '${current.lifecycleState}' and has no approved approval to launch`,
+  }
+}
+
+/**
+ * Upserts one attempt record, keyed by `(dispatchId, attempt)`.
+ *
+ * A retry proposes a new attempt number and therefore a new key, so it APPENDS
+ * and the prior attempt's recorded failure survives. Only a re-proposal of the
+ * very same attempt — which the event store's tombstone rejects — rewrites in
+ * place.
+ */
+function upsertAttempt(
+  history: readonly DispatchAttemptProjection[],
+  record: DispatchAttemptProjection,
+): readonly DispatchAttemptProjection[] {
+  const index = history.findIndex(
+    (attempt) => attempt.dispatchId === record.dispatchId && attempt.attempt === record.attempt,
+  )
+  if (index < 0) return [...history, record]
+  const existing = history[index]
+  const next = history.slice()
+  // Facts that only ever accumulate for one attempt are never cleared by a
+  // later event: once an attempt has started or finished, a re-recorded
+  // proposal or decision for the same attempt number cannot un-start or
+  // un-finish it.
+  next[index] = {
+    ...record,
+    sessionId: record.sessionId ?? existing.sessionId,
+    outcome: record.outcome ?? existing.outcome,
+    summary: record.summary ?? existing.summary,
+    startedAt: record.startedAt ?? existing.startedAt,
+    finishedAt: record.finishedAt ?? existing.finishedAt,
+  }
+  return next
+}
+
+function attemptRecord(input: {
+  readonly dispatchId: DispatchId
+  readonly attempt: number
+  readonly state: ProjectionDispatchState
+  readonly outcome: DispatchProjection["outcome"]
+  readonly summary: string | null
+  readonly sessionId: DispatchProjection["sessionId"]
+  readonly approvalId: DispatchProjection["approvalId"]
+  readonly envelopeDigest: Digest
+  readonly policy: DispatchPolicyProjection
+  readonly proposedAt: Timestamp
+  readonly startedAt: Timestamp | null
+  readonly finishedAt: Timestamp | null
+}): DispatchAttemptProjection {
+  return {
+    dispatchId: input.dispatchId,
+    attempt: input.attempt,
+    state: input.state,
+    outcome: input.outcome,
+    summary: input.summary,
+    sessionId: input.sessionId,
+    approvalId: input.approvalId,
+    envelopeDigest: input.envelopeDigest,
+    policyDecision: input.policy.decision,
+    policyDecisionDigest: input.policy.decisionDigest,
+    proposedAt: input.proposedAt,
+    startedAt: input.startedAt,
+    finishedAt: input.finishedAt,
+  }
+}
+
 
 /**
  * Derives the durable approval lifecycle from the events alone.
@@ -101,8 +230,16 @@ export function computeStateDigest(state: Omit<RunProjectionState, "stateDigest"
   return digestJson(stripUndefined(state))
 }
 
-function getGlobalPosition(event: OrchestrationEvent | StoredRunEvent): number | undefined {
-  if ("globalPosition" in event && typeof (event as StoredRunEvent).globalPosition === "number") {
+/**
+ * Collapses the derived `paused` read-model state back to a lifecycle state so
+ * the machine's terminal set can be consulted honestly. `paused` is a run-level
+ * gate, not a lifecycle state, and a paused run is still `active` work.
+ */
+function runLifecycleOf(state: ProjectionRunState): RunState {
+  return state === "paused" ? "active" : state
+}
+
+function getGlobalPosition(event: OrchestrationEvent | StoredRunEvent): number | undefined {  if ("globalPosition" in event && typeof (event as StoredRunEvent).globalPosition === "number") {
     return (event as StoredRunEvent).globalPosition
   }
   return undefined
@@ -126,13 +263,17 @@ export function reduceEvent(
     : {
         runId: event.runId,
         projectId: event.projectId,
+        lifecycleState: "draft",
         state: "draft",
+        paused: false,
         controllerNodeId: event.actor.kind === "node" ? event.actor.nodeId : null,
         controllerEpoch: event.controllerEpoch,
         activeLeaseId: null,
         createdAt: event.occurredAt,
         updatedAt: event.occurredAt,
         completedAt: null,
+        launchAdmission: { state: "not-requested", reason: "No dispatch has been proposed for this run yet" },
+        cancellation: { state: "none" },
       }
 
   const nextTasks: Record<string, TaskProjection> = currentState
@@ -151,6 +292,11 @@ export function reduceEvent(
     ? { ...currentState.artifacts }
     : {}
 
+  // The `commandId` of a cancel request seen in THIS event, carried into the
+  // run's derived cancellation record below. It is fold-local because the
+  // record it feeds is recomputed on every event.
+  let cancelRequestCommandId: CommandId | null = null
+
   switch (event.type) {
     case "run.created": {
       const runPayload = event.payload.run
@@ -158,12 +304,17 @@ export function reduceEvent(
       nextRun = {
         runId: runPayload.runId,
         projectId: runPayload.projectId,
+        // The lifecycle is retained separately from the derived `state` so a
+        // paused run can still say whether it is `draft` or `active`. Keeping
+        // only the derived value made the aggregate unreconstructable.
+        lifecycleState: runPayload.state,
         state: runPayload.state,
         // `paused` is a run-level gate recorded on the aggregate, surfaced in the
         // projection as the derived `paused` state the scheduler consults before
         // dispatching. It is never a lifecycle state and never drives a
         // transition through the machine.
         ...(runPayload.paused ? { state: "paused" as ProjectionRunState } : {}),
+        paused: runPayload.paused,
         controllerNodeId: event.actor.kind === "node" ? event.actor.nodeId : nextRun.controllerNodeId,
         controllerEpoch: event.controllerEpoch,
         activeLeaseId: nextRun.activeLeaseId,
@@ -172,6 +323,10 @@ export function reduceEvent(
         completedAt: isTerminal ? runPayload.updatedAt : null,
         goal: runPayload.goal,
         externalReferences: runPayload.externalReferences,
+        // Admission and cancellation belong to the run, not to the `run.created`
+        // event, so a re-recorded run leaves them where the fold put them.
+        launchAdmission: nextRun.launchAdmission,
+        cancellation: nextRun.cancellation,
       }
       break
     }
@@ -180,9 +335,13 @@ export function reduceEvent(
       const taskPayload = event.payload.task
       const dependencies = taskPayload.dependencies ?? []
       const hasDependencies = dependencies.length > 0
-      let taskState: ProjectionTaskState
+      // `taskSchema.state` is already a kernel `TaskState`, so the recorded
+      // lifecycle is used verbatim; only `draft`/`pending` are refined by the
+      // declared dependencies (a task that depends on something is not yet
+      // draft work).
+      let taskState: TaskState
       if (taskPayload.state && taskPayload.state !== "draft" && taskPayload.state !== "pending") {
-        taskState = taskPayload.state as ProjectionTaskState
+        taskState = taskPayload.state
       } else {
         taskState = hasDependencies ? "pending" : "draft"
       }
@@ -193,14 +352,17 @@ export function reduceEvent(
         projectId: taskPayload.projectId,
         title: taskPayload.title,
         description: taskPayload.description,
+        lifecycleState: taskState,
         state: taskState,
         dependencies,
         // `failurePolicy` is a real field on `taskSchema`; reading it directly is
         // what makes the scheduler's dependency-failure behaviour driven by the
         // event log rather than silently falling back to a default.
         failurePolicy: taskPayload.failurePolicy ?? null,
+        externalReferences: taskPayload.externalReferences ?? [],
         currentDispatchId: null,
         dispatchAttempts: 0,
+        attemptHistory: [],
         retryable: false,
         createdAt: event.occurredAt,
         updatedAt: event.occurredAt,
@@ -228,6 +390,10 @@ export function reduceEvent(
         event.occurredAt,
       )
 
+      const { policy } = deriveDispatchPolicy(dispatchPayload.envelope, POLICY_UNAVAILABLE_NO_ENVELOPE)
+      const dispatchState = (dispatchPayload.state ?? "proposed") as DispatchProjection["lifecycleState"]
+      const createdAt = dispatchPayload.createdAt ?? event.occurredAt
+
       const dispatchProjection: DispatchProjection = {
         dispatchId,
         taskId,
@@ -235,18 +401,43 @@ export function reduceEvent(
         projectId: dispatchPayload.envelope.projectId,
         envelopeDigest: dispatchPayload.envelopeDigest,
         envelope: dispatchPayload.envelope,
-        state: (dispatchPayload.state ?? "proposed") as ProjectionDispatchState,
+        lifecycleState: dispatchState,
+        state: dispatchState,
         approvalId: null,
         sessionId: null,
         attempt: dispatchPayload.envelope.attempt,
-        createdAt: dispatchPayload.createdAt ?? event.occurredAt,
+        createdAt,
         updatedAt: event.occurredAt,
         outcome: null,
         summary: null,
+        externalReferences: dispatchPayload.externalReferences ?? [],
+        policy,
+        approvalCommandId: null,
+        startCommandId: null,
+        startedAt: null,
         cancelRequested: false,
         timeoutRequested: false,
       }
       nextDispatches[dispatchId] = dispatchProjection
+
+      // The attempt record is written for the proposal itself, so the history
+      // exists from the moment the attempt was made — and a retry, which
+      // proposes a higher attempt number, appends a second record instead of
+      // replacing the first.
+      const proposalAttempt = attemptRecord({
+        dispatchId,
+        attempt: dispatchPayload.envelope.attempt,
+        state: dispatchState,
+        outcome: null,
+        summary: null,
+        sessionId: null,
+        approvalId: null,
+        envelopeDigest: dispatchPayload.envelopeDigest,
+        policy,
+        proposedAt: createdAt,
+        startedAt: null,
+        finishedAt: null,
+      })
 
       const existingTask = nextTasks[taskId]
       if (existingTask) {
@@ -257,15 +448,20 @@ export function reduceEvent(
         // resurrection. The failed attempt itself is preserved in the dispatch
         // projection, which is where the plan says failure history lives.
         const reopens = existingTask.state === "failed"
-        const proposedState: ProjectionTaskState =
-          reopens || existingTask.state === "blocked" || canTransitionTask(existingTask.state, "ready")
+        // A derived `blocked` is not a lifecycle state, so readiness for the
+        // attempt is decided from the lifecycle, never from the derived value.
+        const proposedLifecycle: TaskState =
+          reopens || existingTask.state === "blocked" || canTransitionTask(existingTask.lifecycleState, "ready")
             ? "ready"
-            : existingTask.state
+            : existingTask.lifecycleState
+        const proposedState: ProjectionTaskState = proposedLifecycle
         nextTasks[taskId] = {
           ...existingTask,
+          lifecycleState: proposedLifecycle,
           state: proposedState,
           currentDispatchId: dispatchId,
           dispatchAttempts: Math.max(existingTask.dispatchAttempts + 1, dispatchPayload.envelope.attempt),
+          attemptHistory: upsertAttempt(existingTask.attemptHistory, proposalAttempt),
           // A new attempt consumes the task's retry eligibility. A *proposed*
           // dispatch is not a running task: the task is `ready` until the
           // dispatch actually starts.
@@ -279,12 +475,15 @@ export function reduceEvent(
           projectId: dispatchPayload.envelope.projectId,
           title: `Task ${taskId}`,
           description: "",
+          lifecycleState: "pending",
           state: "pending",
           dependencies: [],
           failurePolicy: null,
+          externalReferences: [],
           retryable: false,
           currentDispatchId: dispatchId,
           dispatchAttempts: dispatchPayload.envelope.attempt,
+          attemptHistory: [proposalAttempt],
           createdAt: event.occurredAt,
           updatedAt: event.occurredAt,
         }
@@ -294,7 +493,7 @@ export function reduceEvent(
       // (the proposal is a real event in the log), not the reducer deciding on
       // its own that a failure is recoverable. The failed attempt is preserved
       // in the dispatch projection, which is where failure history belongs.
-      if (existingTask?.state === "failed" && RUN_TERMINAL_SET.has(nextRun.state as RunState)) {
+      if (existingTask?.state === "failed" && isRunTerminal(runLifecycleOf(nextRun.state))) {
         nextRun = { ...nextRun, state: "active" as RunState, completedAt: null, updatedAt: event.occurredAt }
       }
       nextRun = { ...nextRun, updatedAt: event.occurredAt }
@@ -304,6 +503,20 @@ export function reduceEvent(
     case "approval.decided": {
       const approvalPayload = event.payload.approval
       const existingApproval = nextApprovals[approvalPayload.approvalId]
+      const approvedDispatch = nextDispatches[approvalPayload.dispatchId]
+      // The evaluation the decision was taken against is replayed from the
+      // envelope the approval names, so an audit view can show the real
+      // decision, denials and explanation rather than a placeholder. A
+      // re-recorded decision keeps the evaluation already recorded for it: the
+      // same approval id cannot legitimately have been decided against a
+      // different digest.
+      const policyResult =
+        existingApproval?.policyResult ??
+        deriveDispatchPolicy(
+          approvedDispatch?.envelope ?? null,
+          `No dispatch envelope is recorded for dispatch '${approvalPayload.dispatchId}', so the approval's policy evaluation cannot be derived`,
+        ).evaluation
+
       const approvalProjection: ApprovalProjection = {
         approvalId: approvalPayload.approvalId,
         dispatchId: approvalPayload.dispatchId,
@@ -314,7 +527,7 @@ export function reduceEvent(
         envelopeDigest: approvalPayload.envelopeDigest,
         actor: approvalPayload.actor,
         basis: approvalPayload.basis,
-        policyResult: (approvalPayload as any).policyResult ?? (approvalPayload.basis ? { basis: approvalPayload.basis } : null),
+        policyResult,
         decidedAt: approvalPayload.decidedAt ?? event.occurredAt,
         // A decision event may be re-recorded for an approval that was already
         // invalidated. Replaying the decision must not resurrect it: the later
@@ -325,13 +538,42 @@ export function reduceEvent(
       }
       nextApprovals[approvalPayload.approvalId] = approvalProjection
 
-      const existingDispatch = nextDispatches[approvalPayload.dispatchId]
-      if (existingDispatch) {
+      if (approvedDispatch) {
+        const dispatchState: DispatchProjection["lifecycleState"] =
+          approvalPayload.decision === "approved" ? "approved" : "rejected"
         nextDispatches[approvalPayload.dispatchId] = {
-          ...existingDispatch,
-          state: approvalPayload.decision === "approved" ? "approved" : "rejected",
+          ...approvedDispatch,
+          lifecycleState: dispatchState,
+          state: dispatchState,
           approvalId: approvalPayload.approvalId,
+          approvalCommandId: event.commandId ?? approvedDispatch.approvalCommandId,
           updatedAt: event.occurredAt,
+        }
+
+        // The attempt that carries this approval is the dispatch's current
+        // attempt, so the history line can name who authorized it.
+        const task = nextTasks[approvedDispatch.taskId]
+        if (task !== undefined) {
+          nextTasks[approvedDispatch.taskId] = {
+            ...task,
+            attemptHistory: upsertAttempt(
+              task.attemptHistory,
+              attemptRecord({
+                dispatchId: approvedDispatch.dispatchId,
+                attempt: approvedDispatch.attempt,
+                state: dispatchState,
+                outcome: approvedDispatch.outcome,
+                summary: approvedDispatch.summary,
+                sessionId: approvedDispatch.sessionId,
+                approvalId: approvalPayload.approvalId,
+                envelopeDigest: approvedDispatch.envelopeDigest,
+                policy: approvedDispatch.policy,
+                proposedAt: approvedDispatch.createdAt,
+                startedAt: approvedDispatch.startedAt,
+                finishedAt: null,
+              }),
+            ),
+          }
         }
       }
 
@@ -353,18 +595,38 @@ export function reduceEvent(
       if (existingDispatch) {
         nextDispatches[sessionPayload.dispatchId] = {
           ...existingDispatch,
+          lifecycleState: "running",
           state: "running",
           sessionId: sessionPayload.sessionId,
+          startCommandId: event.commandId ?? existingDispatch.startCommandId,
+          startedAt: event.occurredAt,
           updatedAt: event.occurredAt,
         }
       }
+
+      const startedAttempt = attemptRecord({
+        dispatchId: sessionPayload.dispatchId,
+        attempt: existingDispatch?.attempt ?? 1,
+        state: "running",
+        outcome: null,
+        summary: null,
+        sessionId: sessionPayload.sessionId,
+        approvalId: existingDispatch?.approvalId ?? null,
+        envelopeDigest: existingDispatch?.envelopeDigest ?? (ZERO_DIGEST as Digest),
+        policy: existingDispatch?.policy ?? unavailableDispatchPolicy(POLICY_UNAVAILABLE_NO_ENVELOPE),
+        proposedAt: existingDispatch?.createdAt ?? event.occurredAt,
+        startedAt: event.occurredAt,
+        finishedAt: null,
+      })
 
       const existingTask = nextTasks[sessionPayload.taskId]
       if (existingTask) {
         nextTasks[sessionPayload.taskId] = {
           ...existingTask,
+          lifecycleState: "running",
           state: "running",
           currentDispatchId: sessionPayload.dispatchId,
+          attemptHistory: upsertAttempt(existingTask.attemptHistory, startedAttempt),
           updatedAt: event.occurredAt,
         }
       } else {
@@ -374,12 +636,15 @@ export function reduceEvent(
           projectId: sessionPayload.projectId,
           title: `Task ${sessionPayload.taskId}`,
           description: "",
+          lifecycleState: "running",
           state: "running",
           dependencies: [],
           failurePolicy: null,
+          externalReferences: [],
           retryable: false,
           currentDispatchId: sessionPayload.dispatchId,
           dispatchAttempts: 1,
+          attemptHistory: [startedAttempt],
           createdAt: event.occurredAt,
           updatedAt: event.occurredAt,
         }
@@ -396,6 +661,11 @@ export function reduceEvent(
         // has not yet confirmed). The payload carries it; do not re-derive it.
         state: sessionPayload.lifecycleState,
         observedState: sessionPayload.observedState,
+        taskId: sessionPayload.taskId,
+        nodeId: sessionPayload.nodeId,
+        installationId: sessionPayload.installationId,
+        runtimeKind: sessionPayload.runtimeKind,
+        terminalId: sessionPayload.terminalId ?? null,
         adapterMetadata: (sessionPayload as { adapterMetadata?: Record<string, unknown> }).adapterMetadata ?? null,
         createdAt: existingSession?.createdAt ?? event.occurredAt,
         updatedAt: event.occurredAt,
@@ -438,6 +708,14 @@ export function reduceEvent(
         projectId: sessionPayload.projectId,
         state: mappedState,
         observedState: sessionPayload.observedState,
+        // The identity fields are re-read from every observation, so a stream
+        // that begins at a `session.observed` (no `dispatch.started` in the
+        // fold) still yields a reconstructable session.
+        taskId: sessionPayload.taskId,
+        nodeId: sessionPayload.nodeId,
+        installationId: sessionPayload.installationId,
+        runtimeKind: sessionPayload.runtimeKind,
+        terminalId: sessionPayload.terminalId ?? existingSession?.terminalId ?? null,
         adapterMetadata: (sessionPayload as { adapterMetadata?: Record<string, unknown> }).adapterMetadata
           ?? existingSession?.adapterMetadata
           ?? null,
@@ -458,6 +736,7 @@ export function reduceEvent(
       if (existingDispatch) {
         nextDispatches[finishedPayload.dispatchId] = {
           ...existingDispatch,
+          lifecycleState: outcome,
           state: outcome,
           outcome,
           summary: finishedPayload.summary ?? existingDispatch.summary ?? null,
@@ -476,6 +755,7 @@ export function reduceEvent(
           projectId: event.projectId,
           envelopeDigest: "sha256:0000000000000000000000000000000000000000000000000000000000000000" as any,
           envelope: null as any,
+          lifecycleState: outcome,
           state: outcome,
           approvalId: null,
           sessionId,
@@ -484,10 +764,30 @@ export function reduceEvent(
           updatedAt: event.occurredAt,
           outcome,
           summary: finishedPayload.summary ?? null,
+          externalReferences: [],
+          policy: unavailableDispatchPolicy(POLICY_UNAVAILABLE_NO_ENVELOPE),
+          approvalCommandId: null,
+          startCommandId: event.commandId ?? null,
+          startedAt: null,
           cancelRequested: false,
           timeoutRequested: false,
         }
       }
+
+      const finishedAttempt = attemptRecord({
+        dispatchId: finishedPayload.dispatchId,
+        attempt: nextDispatches[finishedPayload.dispatchId].attempt,
+        state: outcome,
+        outcome,
+        summary: finishedPayload.summary ?? null,
+        sessionId,
+        approvalId: nextDispatches[finishedPayload.dispatchId].approvalId,
+        envelopeDigest: nextDispatches[finishedPayload.dispatchId].envelopeDigest,
+        policy: nextDispatches[finishedPayload.dispatchId].policy,
+        proposedAt: nextDispatches[finishedPayload.dispatchId].createdAt,
+        startedAt: nextDispatches[finishedPayload.dispatchId].startedAt,
+        finishedAt: event.occurredAt,
+      })
 
       const targetTaskId = existingDispatch?.taskId ?? Object.values(nextTasks).find((t) => t.currentDispatchId === finishedPayload.dispatchId)?.taskId
       if (targetTaskId && nextTasks[targetTaskId]) {
@@ -502,10 +802,12 @@ export function reduceEvent(
         }
         nextTasks[targetTaskId] = {
           ...existingTask,
+          lifecycleState: taskState,
           state: taskState,
           // A failed attempt that the plan permits to be retried must not end the
           // run: a retry adds an attempt rather than erasing the failure.
           retryable: outcome === "failed" || outcome === "timed_out",
+          attemptHistory: upsertAttempt(existingTask.attemptHistory, finishedAttempt),
           updatedAt: event.occurredAt,
         }
       }
@@ -524,10 +826,9 @@ export function reduceEvent(
       }
 
       const taskList = Object.values(nextTasks)
-      // `paused` is a derived read-model state, not a lifecycle state, so it is
-      // checked against the machine's terminal set explicitly rather than being
-      // coerced into `RunState`.
-      if (RUN_TERMINAL_SET.has(nextRun.state as RunState)) {
+      // `paused` is a derived read-model state, not a lifecycle state, so the
+      // machine's terminal set is consulted with it collapsed away.
+      if (isRunTerminal(runLifecycleOf(nextRun.state))) {
         // Terminal runs are absorbing. A `dispatch.finished` that arrives after
         // a cancel must record the dispatch/session outcome it actually
         // observed, but it must not recompute the run's lifecycle.
@@ -627,6 +928,7 @@ export function reduceEvent(
     }
 
     case "run.cancelled": {
+      const request = event.payload
       // A run cancel is a controller decision about the kernel's own intent,
       // and `RUN_TRANSITIONS` already allows `draft|active -> cancelled`, so the
       // run lifecycle moves now. What this event does NOT claim is that the
@@ -639,6 +941,9 @@ export function reduceEvent(
       nextRun = {
         ...nextRun,
         state: "cancelled",
+        // The cancellation itself is derived from this event, and it is the
+        // controller's DECISION: nothing here claims a runtime terminated.
+        cancellation: { state: "confirmed", commandId: event.commandId ?? null, reason: request.reason },
         completedAt: nextRun.completedAt ?? event.occurredAt,
         updatedAt: event.occurredAt,
       }
@@ -657,6 +962,11 @@ export function reduceEvent(
           updatedAt: event.occurredAt,
         }
       }
+      // A run-level cancel decision outranks a dispatch-level request and is
+      // never downgraded by one; otherwise the run's outstanding cancellation
+      // work is recomputed from the dispatch flags after the switch, so a
+      // request the runtime has since answered stops being outstanding.
+      cancelRequestCommandId = event.commandId ?? cancelRequestCommandId
       nextRun = { ...nextRun, updatedAt: event.occurredAt }
       break
     }
@@ -678,6 +988,34 @@ export function reduceEvent(
     default:
       nextRun = { ...nextRun, updatedAt: event.occurredAt }
       break
+  }
+
+  // --- Derived run facts, reconciled once per event ---
+  //
+  // These are recomputed from the dispatches rather than written at each call
+  // site, so no event handler can leave them stale, and a replay produces
+  // exactly the same values as an incremental update.
+
+  if (nextRun.state !== "paused") {
+    // Every write to `state` other than the derived `paused` IS a lifecycle
+    // write, so this is where the two are reconciled — one place, instead of a
+    // dozen that could drift apart.
+    nextRun = { ...nextRun, lifecycleState: nextRun.state }
+  }
+
+  nextRun = { ...nextRun, launchAdmission: deriveLaunchAdmission(nextDispatches) }
+
+  if (nextRun.cancellation.state !== "confirmed") {
+    const outstanding = Object.values(nextDispatches)
+      .filter((dispatch) => dispatch.cancelRequested)
+      .map((dispatch) => dispatch.dispatchId)
+      .sort((left, right) => left.localeCompare(right))
+    const previousCommandId = nextRun.cancellation.state === "pending" ? nextRun.cancellation.commandId : null
+    const cancellation: ProjectionCancellation =
+      outstanding.length > 0
+        ? { state: "pending", commandId: cancelRequestCommandId ?? previousCommandId, dispatchIds: outstanding }
+        : { state: "none" }
+    nextRun = { ...nextRun, cancellation }
   }
 
   const lastAppliedSequence = Math.max(currentState?.lastAppliedSequence ?? 0, event.sequence)

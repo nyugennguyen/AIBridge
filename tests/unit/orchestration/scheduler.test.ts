@@ -13,6 +13,7 @@ import type {
 } from "../../../src/orchestration/projections/types.js"
 import type { DispatchEnvelope, OrchestrationEvent, TaskDependency } from "../../../src/orchestration/types.js"
 import { reduceEvent } from "../../../src/orchestration/projections/reducer.js"
+import { deriveDispatchPolicy } from "../../../src/orchestration/projections/policy-view.js"
 import {
   CycleDetectedError,
   DanglingDependencyError,
@@ -145,10 +146,13 @@ function makeTask(options: {
     title: `Task ${options.taskId}`,
     description: `Description for ${options.taskId}`,
     state: options.state ?? "draft",
+    lifecycleState: (options.state === undefined || options.state === "blocked" ? "draft" : options.state) as TaskProjection["lifecycleState"],
     dependencies: deps,
     failurePolicy: options.failurePolicy ?? null,
+    externalReferences: [],
     currentDispatchId: (options.currentDispatchId as DispatchId) ?? null,
     dispatchAttempts: options.dispatchAttempts ?? 0,
+    attemptHistory: [],
     retryable: options.retryable ?? false,
     createdAt: (options.createdAt ?? "2026-09-27T00:00:00.000Z") as any,
     updatedAt: (options.createdAt ?? "2026-09-27T00:00:00.000Z") as any,
@@ -176,6 +180,7 @@ function makeDispatch(options: {
     envelopeDigest: digestDispatchEnvelope(envelope),
     envelope,
     state: options.state ?? "proposed",
+    lifecycleState: (options.state === undefined || options.state === "queued" ? "proposed" : options.state) as DispatchProjection["lifecycleState"],
     approvalId: null,
     sessionId: null,
     attempt: options.attempt ?? 1,
@@ -183,6 +188,11 @@ function makeDispatch(options: {
     updatedAt: "2026-09-27T00:00:00.000Z" as any,
     outcome: options.outcome ?? null,
     summary: null,
+    externalReferences: [],
+    policy: deriveDispatchPolicy(envelope, "fixture").policy,
+    approvalCommandId: null,
+    startCommandId: null,
+    startedAt: null,
     cancelRequested: false,
     timeoutRequested: false,
   }
@@ -206,13 +216,17 @@ function makeRunState(
     run: {
       runId: RUN_ID,
       projectId: PROJECT_ID,
+      lifecycleState: "active" as const,
       state: "active" as const,
+      paused: false,
       controllerNodeId: "node-1" as any,
       controllerEpoch: 1,
       activeLeaseId: null,
       createdAt: "2026-09-27T00:00:00.000Z" as any,
       updatedAt: "2026-09-27T00:00:00.000Z" as any,
       completedAt: null,
+      launchAdmission: { state: "not-requested" as const, reason: "fixture" },
+      cancellation: { state: "none" as const },
     },
     tasks: tasksRecord,
     dispatches: dispatchesRecord,

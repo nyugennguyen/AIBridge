@@ -6,6 +6,7 @@ import type { JobManager } from "../jobs/manager.js"
 import type { OpencodeClient } from "../opencode/types.js"
 import type { CallbackReporter } from "../callback/reporter.js"
 import type { TaskGraphSyncer } from "../tasks/types.js"
+import type { LegacyTranslation } from "../orchestration/legacy/translation.js"
 import { registerHealthRoute } from "./routes/health.js"
 import { registerJobsRoute } from "./routes/jobs.js"
 import { registerReportRoute } from "./routes/report.js"
@@ -19,6 +20,18 @@ export interface AppDependencies {
   callbackReporter: CallbackReporter
   monitorSession: (job: JobRecord) => Promise<void>
   taskGraphSyncer: TaskGraphSyncer
+  /**
+   * The orchestration kernel's legacy compatibility seam.
+   *
+   * Optional by design, not by omission: an absent block is the RELEASED
+   * behaviour (the JSON store is the only state), while a present one records
+   * each accepted trigger in the event log before the runtime is launched. Both
+   * modes must serve an identical HTTP contract, so the routes branch only on
+   * whether work was NAMED, never on whether work was silently dropped.
+   */
+  orchestration?: {
+    readonly translation: LegacyTranslation
+  }
 }
 
 export function createApp(dependencies: AppDependencies): FastifyInstance {

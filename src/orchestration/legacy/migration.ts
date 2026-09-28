@@ -1,11 +1,26 @@
 import { createHash } from "node:crypto"
 import { resolve } from "node:path"
-import { ZodError } from "zod"
+import { ZodError, z } from "zod"
 import { digestDispatchEnvelope, digestJson } from "../digest.js"
-import { capabilitySchema } from "../identifiers.js"
 import {
+  capabilitySchema,
+  dispatchIdSchema,
+  epochSchema,
+  installationIdSchema,
+  memoryIdSchema,
+  nodeIdSchema,
+  projectIdSchema,
+  projectPathIdSchema,
+  roleIdSchema,
+  runIdSchema,
+  taskIdSchema,
+  timestampSchema,
+} from "../identifiers.js"
+import {
+  dispatchEnvelopeSchema,
   dispatchSchema,
   memoryRecordSchema,
+  permissionEnvelopeSchema,
   runSchema,
   taskSchema,
 } from "../schemas.js"
@@ -24,6 +39,24 @@ import type {
   LegacyTaskEntry,
   MigrationDiagnostic,
 } from "./types.js"
+
+type LegacyIdKind = "run" | "task" | "dispatch" | "role" | "memory"
+
+/**
+ * The canonical branded id a legacy record derives, keyed by aggregate kind.
+ *
+ * A distributive lookup rather than a union so `derivedId("run", key)`
+ * narrows to `RunId` at the call site: the derivation and the brand it must
+ * satisfy are stated once, and a `runId` can never be handed to a field that
+ * the schema declares as a `taskId`.
+ */
+type LegacyDerivedIds = {
+  run: z.infer<typeof runIdSchema>
+  task: z.infer<typeof taskIdSchema>
+  dispatch: z.infer<typeof dispatchIdSchema>
+  role: z.infer<typeof roleIdSchema>
+  memory: z.infer<typeof memoryIdSchema>
+}
 
 const TASK_HEADING_RE =
   /^## #(\d+)\s+(.+?)(?:\s+\[agent:([^\]]+)\])?(?:\s+\[status:([^\]]+)\])?(?:\s+\[needs:\s*([^\]]+)\])?\s*$/
@@ -98,9 +131,29 @@ function parseLegacyTasks(markdown: string): ParsedTasks {
   return { tasks: parsed.data, diagnostics }
 }
 
-function deterministicId(kind: "run" | "task" | "dispatch" | "role" | "memory", sourceKey: string): string {
+function deterministicId(kind: LegacyIdKind, sourceKey: string): string {
   const hash = createHash("sha256").update(`aibridge-legacy-v1\0${kind}\0${sourceKey}`, "utf8").digest("hex")
   return `legacy.${kind}.${hash.slice(0, 40)}`
+}
+
+/**
+ * The derived id, narrowed to the canonical brand of its aggregate.
+ *
+ * A derived id is opaque text until it passes the very schema that will hold
+ * it, so it is parsed rather than cast: if the derivation ever produced a
+ * string the canonical contract rejects, this throws at the derivation site
+ * instead of surfacing as a confusing mismatch later.
+ */
+const DERIVED_ID_PARSERS = {
+  run: runIdSchema,
+  task: taskIdSchema,
+  dispatch: dispatchIdSchema,
+  role: roleIdSchema,
+  memory: memoryIdSchema,
+} as const
+
+function derivedId<K extends LegacyIdKind>(kind: K, sourceKey: string): LegacyDerivedIds[K] {
+  return DERIVED_ID_PARSERS[kind].parse(deterministicId(kind, sourceKey)) as LegacyDerivedIds[K]
 }
 
 function sourceScopeKey(sourceProfileId: string, legacyNodeId: string, legacyProjectId: string): string {
@@ -147,6 +200,77 @@ function formatIssues(prefix: string, issues: readonly { path: PropertyKey[]; me
   return issues.map((issue) =>
     diagnostic("error", `${prefix}.invalid`, `${prefix} validation failed at ${issue.path.join(".") || "root"}: ${issue.message}`),
   )
+}
+
+const legacyEnvelopeInputSchema = z
+  .object({
+    dispatchId: dispatchIdSchema,
+    projectId: projectIdSchema,
+    runId: runIdSchema,
+    taskId: taskIdSchema,
+    projectPathId: projectPathIdSchema,
+    targetNodeId: nodeIdSchema,
+    installationId: installationIdSchema,
+    runtimeKind: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/),
+    roleId: roleIdSchema,
+    capability: capabilitySchema,
+    prompt: z.string().min(1).max(65_536),
+    timeoutSeconds: z.number().int().positive().max(86_400).safe(),
+    controllerEpoch: epochSchema,
+    createdAt: timestampSchema,
+    permissionEnvelope: permissionEnvelopeSchema,
+  })
+  .strict()
+
+export type LegacyEnvelopeInput = z.infer<typeof legacyEnvelopeInputSchema>
+
+/**
+ * The single construction of a legacy dispatch envelope.
+ *
+ * Both the offline import and the live `/trigger` translation build the
+ * envelope here, so a legacy job produces a byte-identical envelope digest
+ * whether it arrives over HTTP now or is imported from disk later. Two
+ * constructors would produce two digests for one job, and the approval binding
+ * is a digest, so that would silently invalidate every approval.
+ */
+export function buildLegacyDispatchEnvelope(input: LegacyEnvelopeInput) {
+  const parsed = legacyEnvelopeInputSchema.parse(input)
+  const roleSnapshot = {
+    schemaVersion: 1 as const,
+    roleId: parsed.roleId,
+    templateVersion: 1,
+    projectId: parsed.projectId,
+    name: "Legacy compatibility import",
+    purpose: "Preserve one legacy job as inert migration evidence.",
+    instructions: "Do not execute without reconciliation, current authorization, a current lease, and any required fresh approval.",
+    requiredCapabilities: [parsed.capability],
+    preferredRuntimeKinds: [parsed.runtimeKind],
+    contextSelectionPolicyReference: { namespace: "aibridge.migration-policy", id: "legacy-v1-inert" },
+    permissionRestrictions: parsed.permissionEnvelope,
+    author: { kind: "system" as const, name: "legacy-migration" },
+    createdAt: parsed.createdAt,
+  }
+  return dispatchEnvelopeSchema.parse({
+    schemaVersion: 1,
+    dispatchId: parsed.dispatchId,
+    attempt: 1,
+    projectId: parsed.projectId,
+    runId: parsed.runId,
+    taskId: parsed.taskId,
+    targetNodeId: parsed.targetNodeId,
+    installationId: parsed.installationId,
+    runtimeKind: parsed.runtimeKind,
+    projectPathId: parsed.projectPathId,
+    prompt: parsed.prompt,
+    roleSnapshot,
+    ruleSnapshots: [],
+    contextManifest: { references: [], manifestDigest: digestJson({ references: [] }) },
+    requestedCapabilities: [parsed.capability],
+    permissionEnvelope: parsed.permissionEnvelope,
+    dependencies: [],
+    timeoutSeconds: parsed.timeoutSeconds,
+    controllerEpoch: parsed.controllerEpoch,
+  })
 }
 
 function stateFor(status: LegacyJobStatus): {
@@ -439,9 +563,9 @@ function buildLegacyMigrationDryRun(sourceInput: unknown, contextInput: unknown)
 
     const scopeKey = sourceScopeKey(context.sourceProfileId, source.config.agent_id, legacyProject!.id)
     const scopedJobKey = `${scopeKey}\0${job.id}`
-    const runId = deterministicId("run", scopedJobKey)
-    const taskId = deterministicId("task", scopedJobKey)
-    const dispatchId = deterministicId("dispatch", scopedJobKey)
+    const runId = derivedId("run", scopedJobKey)
+    const taskId = derivedId("task", scopedJobKey)
+    const dispatchId = derivedId("dispatch", scopedJobKey)
     const linkedTask = linkedTaskByJob.get(job.id)
     const state = stateFor(job.status)
     const references = linkedTask === undefined
@@ -487,46 +611,23 @@ function buildLegacyMigrationDryRun(sourceInput: unknown, contextInput: unknown)
         capabilities: approvalCapabilities,
       },
     }
-    const roleSnapshot = {
-      schemaVersion: 1 as const,
-      roleId: deterministicId("role", scopedJobKey),
-      templateVersion: 1,
-      projectId: projectMapping.projectId,
-      name: "Legacy compatibility import",
-      purpose: "Preserve one legacy job as inert migration evidence.",
-      instructions: "Do not execute without reconciliation, current authorization, a current lease, and any required fresh approval.",
-      requiredCapabilities: [job.trigger.capability],
-      preferredRuntimeKinds: [targetMapping.runtimeKind],
-      contextSelectionPolicyReference: { namespace: "aibridge.migration-policy", id: "legacy-v1-inert" },
-      permissionRestrictions: permissionEnvelope,
-      author: { kind: "system" as const, name: "legacy-migration" },
-      createdAt: context.importedAt,
-    }
-    const contextManifest = {
-      references: [],
-      manifestDigest: digestJson({ references: [] }),
-    }
-    const envelope = {
-      schemaVersion: 1 as const,
+    const envelope = buildLegacyDispatchEnvelope({
       dispatchId,
-      attempt: 1,
       projectId: projectMapping.projectId,
       runId,
       taskId,
+      projectPathId: projectMapping.projectPathId,
       targetNodeId: targetMapping.nodeId,
       installationId: targetMapping.installationId,
       runtimeKind: targetMapping.runtimeKind,
-      projectPathId: projectMapping.projectPathId,
+      roleId: derivedId("role", scopedJobKey),
+      capability: job.trigger.capability,
       prompt: job.trigger.prompt,
-      roleSnapshot,
-      ruleSnapshots: [],
-      contextManifest,
-      requestedCapabilities: [job.trigger.capability],
-      permissionEnvelope,
-      dependencies: [],
       timeoutSeconds: job.trigger.timeout_seconds,
       controllerEpoch: context.controllerEpoch,
-    }
+      createdAt: context.importedAt,
+      permissionEnvelope,
+    })
     const dispatch = dispatchSchema.parse({
       schemaVersion: 1,
       envelope,
@@ -610,7 +711,7 @@ function buildLegacyMigrationDryRun(sourceInput: unknown, contextInput: unknown)
   const canonicalMemory = memoryProjectMapping === undefined ? [] : [
     ...source.memory.decisions.map((decision) => memoryRecordSchema.parse({
       schemaVersion: 1,
-      memoryId: deterministicId("memory", `${sourceScopeKey(context.sourceProfileId, source.config.agent_id, source.memory.projectId)}\0decision:${decision.id}`),
+      memoryId: derivedId("memory", `${sourceScopeKey(context.sourceProfileId, source.config.agent_id, source.memory.projectId)}\0decision:${decision.id}`),
       projectId: memoryProjectMapping.projectId,
       kind: "decision",
       content: decision.content,
@@ -628,7 +729,7 @@ function buildLegacyMigrationDryRun(sourceInput: unknown, contextInput: unknown)
     })),
     ...source.memory.constraints.map((constraint, index) => memoryRecordSchema.parse({
       schemaVersion: 1,
-      memoryId: deterministicId("memory", `${sourceScopeKey(context.sourceProfileId, source.config.agent_id, source.memory.projectId)}\0constraint:${index}`),
+      memoryId: derivedId("memory", `${sourceScopeKey(context.sourceProfileId, source.config.agent_id, source.memory.projectId)}\0constraint:${index}`),
       projectId: memoryProjectMapping.projectId,
       kind: "constraint",
       content: constraint,
@@ -645,7 +746,7 @@ function buildLegacyMigrationDryRun(sourceInput: unknown, contextInput: unknown)
       const content = handoff.context
       return memoryRecordSchema.parse({
         schemaVersion: 1,
-        memoryId: deterministicId("memory", `${sourceScopeKey(context.sourceProfileId, source.config.agent_id, source.memory.projectId)}\0handoff:${handoff.id}`),
+        memoryId: derivedId("memory", `${sourceScopeKey(context.sourceProfileId, source.config.agent_id, source.memory.projectId)}\0handoff:${handoff.id}`),
         projectId: memoryProjectMapping.projectId,
         kind: "handoff",
         content,
@@ -733,4 +834,50 @@ export function dryRunLegacyMigration(sourceInput: unknown, contextInput: unknow
     }
     throw error
   }
+}
+
+// --- Shared identity derivation -------------------------------------------
+//
+// The live API translation layer in `./translation.ts` must derive exactly the
+// same canonical identity for a legacy job as the offline import above. If the
+// two derived identities independently, one bridge's `/jobs/:id` would point at
+// a different run than an import of the same record, and the correlation the
+// plan requires would be a guess. These are the ONLY exported derivations.
+
+/**
+ * The canonical id for a legacy record, scoped by `sourceKey`.
+ *
+ * `sourceKey` must be a stable, material property of the source record — never
+ * a clock reading and never a random value — because the id is what makes the
+ * mapping reproducible.
+ */
+export function legacyCanonicalId<K extends LegacyIdKind>(kind: K, sourceKey: string): LegacyDerivedIds[K] {
+  return derivedId(kind, sourceKey)
+}
+
+/** The scope within which every legacy identity for one profile/project is derived. */
+export function legacyScopeKey(sourceProfileId: string, legacyLocalAgentId: string, legacyProjectId: string): string {
+  return sourceScopeKey(sourceProfileId, legacyLocalAgentId, legacyProjectId)
+}
+
+/** The durable import key of one legacy job, so re-importing is recognisable. */
+export function legacyImportKey(scopeKey: string, jobId: string): string {
+  return jobImportKey(scopeKey, jobId)
+}
+
+/**
+ * The lifecycle a legacy job status maps to, re-exported so the live layer
+ * derives the same state as an import of the same record. `stateFor` is the
+ * single statement of that mapping; duplicating it is how a `/jobs/:id` view
+ * and an imported run would disagree about whether work is paused.
+ */
+export function legacyLifecycleForStatus(status: LegacyJobStatus): {
+  run: "active" | "completed" | "failed"
+  runPaused: boolean
+  task: "pending" | "ready" | "running" | "completed" | "failed"
+  dispatch: "proposed" | "running" | "completed" | "failed" | "timed_out"
+  disposition: "historical" | "paused"
+  reconcile: boolean
+} {
+  return stateFor(status)
 }

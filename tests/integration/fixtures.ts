@@ -9,7 +9,7 @@ import type { JobStore } from "../../src/jobs/store.js"
 import { CallbackReporter } from "../../src/callback/reporter.js"
 import { JobManager } from "../../src/jobs/manager.js"
 import { JsonFileJobStore } from "../../src/jobs/store.js"
-import { createApp } from "../../src/server/app.js"
+import { createApp, type AppDependencies } from "../../src/server/app.js"
 
 export class InMemoryJobStore implements JobStore {
   private readonly jobs = new Map<string, JobRecord>()
@@ -100,6 +100,12 @@ export interface BuildTestAppOverrides {
   jobManager?: JobManager
   opencodeClient?: FakeOpencodeClient
   taskGraphSyncer?: TaskGraphSyncer
+  /**
+   * Attaches the orchestration kernel to the legacy routes. Omitted by default
+   * so the pre-existing suites keep exercising the RELEASED behaviour; the
+   * compatibility suite passes one to prove the contract is identical either way.
+   */
+  orchestration?: AppDependencies["orchestration"]
 }
 
 export async function buildTestApp(overrides: BuildTestAppOverrides = {}) {
@@ -115,6 +121,7 @@ export async function buildTestApp(overrides: BuildTestAppOverrides = {}) {
     callbackReporter: new CallbackReporter({ attempts: 1, baseDelayMs: 1, fetcher: async () => new Response(null, { status: 200 }) }),
     monitorSession: async () => undefined,
     taskGraphSyncer,
+    ...(overrides.orchestration === undefined ? {} : { orchestration: overrides.orchestration }),
   })
   return { app, config, opencode, taskGraphSyncer, jobManager }
 }

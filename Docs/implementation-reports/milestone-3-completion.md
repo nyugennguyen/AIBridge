@@ -65,6 +65,14 @@ Commit `24b9aef` is marked `refactor(orchestration)!`. A reviewer must re-approv
 
 Rationale: `transitions.ts` and `schemas.ts` held **non-overlapping** vocabularies, so a run persisted as `paused` could not be driven through `transitionRun`, and a session reporting `unknown` produced a projection `transitionSession` rejects. `as TaskState` casts at three call sites hid this from the compiler. These are two different axes — kernel lifecycle versus provider observation — that had been conflated. Persisted enums now **derive** from `transitions.ts`, so future drift is a compile error rather than a cast.
 
+#### How to confirm this re-approval
+
+```bash
+./scripts/m0-contract-signoff.sh          # exit 0 = green, 2 = re-approval needed, 1 = regression
+```
+
+The script runs the M0 contract suite, reports which M0 assertion files were edited since `e39461a`, and prints the exact reviewer-facing diff. Currently it exits `2`: the suite is green, but the assertions were touched, so a reviewer must re-sign rather than inherit M0's approval. A re-approver needs to read only §3 of the script's output — a 6-line change to the frozen examples, which is the entire M0 freeze.
+
 ---
 
 ## 3. Corrections landed outside the nominal task sequence
@@ -204,7 +212,9 @@ Each criterion from plan lines 88–99, with the test that proves it.
 
 ## 8. Known limitations and risks accepted
 
-**R1 — The legacy launch path has no canonical approval (accepted, bounded).** `legacy.runtime.launch` still launches without going through `dispatch.execute`'s approval requirement, because legacy work has no canonical approval to give. The audit converted it from an *unrecorded* effect into a recorded, verifiable artifact and added three tamper tests, but this is a bounding fix, not a closure. Only the route's own checks stand behind it.
+**R1 — The legacy launch path has no canonical approval (accepted, bounded). This is a LIVE INSTANCE OF M0 FINDING F-05, not a new risk.** `legacy.runtime.launch` still launches without going through `dispatch.execute`'s approval requirement, because legacy work has no canonical approval to give. F-05 was accepted by the M0 reviewers as an open High obligation: *"compatibility evidence never becomes canonical authenticated identity or approval authority."* M3 did not close it and must not be read as having done so.
+
+The audit converted the effect from *unrecorded* into a recorded, digest-bound, tamper-checked artifact (5 tests), but that is integrity, not **authenticity** — the same distinction the A1/A2 blockers turned on. Only the route's own checks stand behind it, and those checks are exactly the compatibility evidence F-05 forbids treating as approval authority.
 
 Closing it properly means either giving legacy work a canonical approval — which changes `/trigger` latency and requires an approval UI — or retiring the legacy launch path. **This is an explicit M3.8 decision required at the gate, and it is the one item in this milestone that is not closed.**
 
@@ -261,4 +271,14 @@ The M0 aggregate contract changes in §2 require reviewer re-approval. Until tha
 2. R2 (`COMMAND_MATRIX` unwired) is accepted and scheduled for M4.
 3. The M0 contract re-approval in §2 must be recorded before M4 relies on the new state model.
 
-No blocker or high finding is open. The kernel is **not** authorised for production use until the three conditions above are discharged.
+No blocker or high finding introduced by M3 is open. The kernel is **not** authorised for production use until the three conditions above are discharged.
+
+### M0 re-approval status
+
+`scripts/m0-contract-signoff.sh` (default baseline `e39461a`, the M0 commit) separates the mechanical evidence from the judgement that a human must still make:
+
+- **Mechanical — green:** `tests/contracts/` is **67 pass, 0 fail**. The M0 suite is not regressed.
+- **Re-approval outstanding:** two M0 contract assertion files were edited (`orchestration-schemas.test.ts`, 6 lines; `legacy-migration.test.ts`, 12 lines), and the frozen examples changed by **6 lines across five aggregates**. The script exits `2`, which is the re-approval signal rather than a failure.
+- **Carried-forward findings:** F-01–F-04 and F-07 remain open production obligations untouched by M3. F-06 is partially addressed by the store migrations. **F-05 is live** — see R1.
+
+The script's exit codes are: `0` green and unmodified, `2` re-approval required, `1` the contract suite is red (a regression, not a re-approval).

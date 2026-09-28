@@ -54,9 +54,9 @@ Model assignments are as planned in `Docs/implementation-plans/milestone-3-orche
 | `dispatchSchema` | v1, **breaking** | `queued` removed as a persisted state. |
 | `approvalSchema` | v1, **breaking** | Gains required `state` with a cross-field constraint against `decision`. |
 
-### M0 contract re-approval: APPROVED 2026-09-28
+### M0 contract re-approval: APPROVED WITH CONDITIONS 2026-09-28
 
-Recorded in `Docs/implementation-reports/m0-contract-reapproval.md`, bound to contract-surface-digest `d4f4b947…00291`. Commit `24b9aef` is marked `refactor(orchestration)!`, so the M0 aggregate contracts were put up for re-approval and have been signed off. What was approved:
+Recorded in `Docs/implementation-reports/m0-contract-reapproval.md`, bound to contract-surface-digest `c4d12a3f…dd13a`. Commit `24b9aef` is marked `refactor(orchestration)!`, so the M0 aggregate contracts were put up for re-approval. Three roles signed: milestone owner, independent reviewer, security reviewer. Both reviewers returned **approve with conditions**; neither found a security regression, and both confirmed SF-13 and SF-14 hold under the new shape. What was approved:
 
 1. Five aggregate state vocabularies change shape (table above).
 2. `run` and `task` gain required fields; four persisted states are removed.
@@ -64,6 +64,10 @@ Recorded in `Docs/implementation-reports/m0-contract-reapproval.md`, bound to co
 4. `tests/contracts/legacy-migration.test.ts` was updated to assert the preserved pause semantic through the new `paused` boolean rather than a fake lifecycle state.
 
 **The approval is digest-bound and expires.** `./scripts/m0-contract-signoff.sh` exits `0` while it applies and returns to `2` with a `STALE` notice — naming both digests — if any contract source, frozen example or M0 assertion file changes. A signature cannot silently outlive what it signed. This was verified by editing the contract and observing the approval correctly lapse.
+
+**The first digest was incomplete, and the security review caught it (S-3).** It omitted `src/orchestration/transitions.ts` — which, since this change, is the source of *every* persisted enum (`z.enum(RUN_STATES)` and friends) and of the observation→lifecycle map. The tripwire would not have fired on a transition-table change, which is precisely the change the review exists to catch. Corrected: `transitions.ts` is now in the digest, and editing it was verified to trip the check. The contract shape under review is unchanged; only the tripwire's coverage changed, in the strictly more conservative direction.
+
+**Nine conditions are recorded against the contract shape.** The most significant is **F4: ADR 0001 was not updated.** Its lines 39–42 still declare `paused`/`blocked`/`queued` and the provider session vocabulary as canonical, while line 96 explicitly requires a canonical-vocabulary change to update the ADR. The ADR now contradicts the code — a process failure, not a code one. The others are localised invariant holes, each reproducing: `run.create` can clear `paused` (S-1); `approvalSchema` accepts `decision:"approved"` + `state:"pending"`, the only way to build which is to fabricate a decision never taken (F1); `paused: true` parses with terminal states (F2); `sessionSchema` does not bind `lifecycleState` to `observedState` (S2); and there is no un-pause path, so a paused run is a permanent tombstone (F3). Smallest safe fixes are recorded per condition in the re-approval document. **None of them makes the kernel unsound today** — SF-13 and SF-14 hold, and no laundering path from a provider observation into authority was found.
 
 Rationale: `transitions.ts` and `schemas.ts` held **non-overlapping** vocabularies, so a run persisted as `paused` could not be driven through `transitionRun`, and a session reporting `unknown` produced a projection `transitionSession` rejects. `as TaskState` casts at three call sites hid this from the compiler. These are two different axes — kernel lifecycle versus provider observation — that had been conflated. Persisted enums now **derive** from `transitions.ts`, so future drift is a compile error rather than a cast.
 
@@ -271,15 +275,16 @@ The M0 aggregate contract changes in §2 require reviewer re-approval. Until tha
 
 1. R1 (legacy launch has no canonical approval) is accepted as a bounded risk **only** with an explicit M3.8 decision recorded before M4 begins work on the legacy path.
 2. R2 (`COMMAND_MATRIX` unwired) is accepted and scheduled for M4.
-3. ~~The M0 contract re-approval in §2 must be recorded before M4 relies on the new state model.~~ **DISCHARGED 2026-09-28** — see `Docs/implementation-reports/m0-contract-reapproval.md`.
+3. ~~The M0 contract re-approval in §2 must be recorded before M4 relies on the new state model.~~ **DISCHARGED 2026-09-28** — approved with conditions by all three roles; see `Docs/implementation-reports/m0-contract-reapproval.md`.
 
 Two conditions remain open. The kernel is **not** authorised for production use until both are discharged.
 
-### M0 re-approval status: APPROVED
+### M0 re-approval status: APPROVED WITH CONDITIONS
 
 `scripts/m0-contract-signoff.sh` (default baseline `e39461a`, the M0 commit) separates the mechanical evidence from the judgement a human must still make:
 
 - **Mechanical — green:** `tests/contracts/` is **67 pass, 0 fail**. The M0 suite is not regressed.
-- **Re-approval — granted 2026-09-28**, covering two edited assertion files (`orchestration-schemas.test.ts`, 6 lines; `legacy-migration.test.ts`, 12 lines) and a 6-line change to the frozen examples across five aggregates. Bound to contract-surface-digest `d4f4b947…00291`.
-- **Expiry is enforced:** the script exits `0` while the approval applies and `2` with a `STALE` notice if the contract changes again. Verified by editing the contract and watching it lapse.
-- **Carried-forward findings are untouched by that approval:** F-01–F-04 and F-07 remain open production obligations. F-06 is partially addressed by the store migrations. **F-05 is live** — see R1.
+- **Re-approval — granted 2026-09-28** by all three roles, covering two edited assertion files and a 6-line change to the frozen examples across five aggregates. Bound to contract-surface-digest `c4d12a3f…dd13a`.
+- **Conditions — 9 open**, recorded per condition with the smallest safe fix. None makes the kernel unsound today. The blocking one is **F4 (ADR 0001 not updated)**, which leaves an ADR contradicting the code.
+- **Expiry is enforced:** the script exits `0` while the approval applies and `2` with a `STALE` notice if the contract changes again. Verified by editing `transitions.ts` and watching it lapse.
+- **Carried-forward findings are untouched by that approval:** F-01–F-04 and F-07 remain open production obligations. F-06 is **improved** by the change. **F-05 is live** — see R1; the security reviewer assessed it as *unchanged* by this contract change.

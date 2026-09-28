@@ -96,6 +96,108 @@ export class DuplicateEventError extends EventStoreError {
   }
 }
 
+export class FailedMigrationError extends EventStoreError {
+  readonly version: number
+  readonly migrationName: string
+  override readonly cause?: unknown
+
+  constructor(version: number, migrationName: string, cause: unknown) {
+    super(
+      `Schema migration ${version} ('${migrationName}') failed and was rolled back. ` +
+        `The database is unchanged. Restore from a backup or fix the reported cause before retrying. ` +
+        `Underlying error: ${cause instanceof Error ? cause.message : String(cause)}`,
+      "schema.migration_failed",
+      "internal_failure",
+    )
+    this.name = "FailedMigrationError"
+    this.version = version
+    this.migrationName = migrationName
+    this.cause = cause
+  }
+}
+
+export class IncompleteMigrationHistoryError extends EventStoreError {
+  readonly dbVersion: number
+  readonly missingVersions: readonly number[]
+
+  constructor(dbVersion: number, missingVersions: readonly number[]) {
+    super(
+      `Schema migration history is inconsistent: the database is at version ${dbVersion} but migration(s) ` +
+        `${missingVersions.join(", ")} are not recorded as applied. Refusing to run further migrations; ` +
+        `restore a consistent database or re-apply the missing migrations under an operator procedure.`,
+      "schema.incomplete_migration_history",
+      "internal_failure",
+    )
+    this.name = "IncompleteMigrationHistoryError"
+    this.dbVersion = dbVersion
+    this.missingVersions = missingVersions
+  }
+}
+
+export class DestructiveMigrationNotPermittedError extends EventStoreError {
+  readonly version: number
+  readonly migrationName: string
+
+  constructor(version: number, migrationName: string) {
+    super(
+      `Schema migration ${version} ('${migrationName}') is marked destructive. ` +
+        `Take a consistent backup with SqliteEventStore.backup() before applying it, ` +
+        `then re-run with { allowDestructive: true }.`,
+      "schema.destructive_migration_blocked",
+      "internal_failure",
+    )
+    this.name = "DestructiveMigrationNotPermittedError"
+    this.version = version
+    this.migrationName = migrationName
+  }
+}
+
+export class IncompleteSchemaError extends EventStoreError {
+  readonly missingObjects: readonly { type: string, name: string }[]
+
+  constructor(missingObjects: readonly { type: string, name: string }[]) {
+    super(
+      `Database is missing ${missingObjects.length} required schema object(s): ` +
+        `${missingObjects.map((o) => `${o.type} ${o.name}`).join(", ")}. ` +
+        `The event store is not safe to open; restore a consistent database or run migrations.`,
+      "schema.incomplete",
+      "internal_failure",
+    )
+    this.name = "IncompleteSchemaError"
+    this.missingObjects = missingObjects
+  }
+}
+
+export class DispatchAttemptConflictError extends EventStoreError {
+  readonly runId: string
+  readonly dispatchId: string
+  readonly attempt: number
+  readonly existingDigest: string
+  readonly incomingDigest: string
+
+  constructor(
+    runId: string,
+    dispatchId: string,
+    attempt: number,
+    existingDigest: string,
+    incomingDigest: string
+  ) {
+    super(
+      `Dispatch '${dispatchId}' attempt ${attempt} in run '${runId}' is already proposed with envelope digest ` +
+        `'${existingDigest}'. A dispatch envelope is immutable after proposal; edits must create a new ` +
+        `dispatchId/attempt (or an explicit revision) rather than reusing this one.`,
+      "dispatch.envelope_immutable",
+      "conflict",
+    )
+    this.name = "DispatchAttemptConflictError"
+    this.runId = runId
+    this.dispatchId = dispatchId
+    this.attempt = attempt
+    this.existingDigest = existingDigest
+    this.incomingDigest = incomingDigest
+  }
+}
+
 export class StreamProjectMismatchError extends EventStoreError {
   readonly runId: string
   readonly existingProjectId: string

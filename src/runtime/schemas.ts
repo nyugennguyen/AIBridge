@@ -256,9 +256,14 @@ export const agentRuntimeEventSchema = z.discriminatedUnion("type", [
       nodeId: nodeIdSchema,
       occurredAt: timestampSchema,
       type: z.literal("lifecycle"),
+      // This is the PROVIDER's own report of what its process is doing, not the
+      // kernel lifecycle. `sessionStateSchema` is the observed vocabulary
+      // (starting|idle|working|blocked|completed|failed|unknown); mapping it onto
+      // a dispatch lifecycle is the kernel's job, via
+      // `mapObservedSessionLifecycle`. Keeping the two axes named distinctly is
+      // what stops a `blocked` report from masquerading as a lifecycle state.
       state: sessionStateSchema,
-      detail: boundedTextSchema.optional(),
-      source: observationSourceSchema.optional(),
+      detail: boundedTextSchema.optional(),      source: observationSourceSchema.optional(),
       confidence: observationConfidenceSchema.optional(),
     })
     .strict(),

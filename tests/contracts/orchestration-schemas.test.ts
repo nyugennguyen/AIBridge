@@ -122,6 +122,7 @@ const run = {
   projectId: "project-1",
   goal: "Complete Milestone 0 contracts.",
   state: "active",
+  paused: false,
   createdAt: NOW,
   updatedAt: LATER,
   externalReferences: [reference],
@@ -135,6 +136,7 @@ const task = {
   title: "Build orchestration schemas",
   description: "Implement strict version-one schemas.",
   state: "running",
+  failurePolicy: "block",
   dependencies: [{ taskId: "task-0", failurePolicy: "block" }],
   externalReferences: [reference],
 }
@@ -171,7 +173,8 @@ const session = {
   nodeId: "node-1",
   installationId: "installation-1",
   runtimeKind: "opencode",
-  state: "working",
+  lifecycleState: "running",
+  observedState: "working",
   terminalId: "terminal-1",
 }
 

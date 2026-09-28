@@ -36,8 +36,10 @@ import type {
   OrchestrationEvent,
   Run,
   Session,
+  SessionObservedState,
   Task,
 } from "../orchestration/types.js"
+import { advanceSessionLifecycle } from "../orchestration/transitions.js"
 import {
   agentInstallationSchema,
   agentResponseSchema,
@@ -474,7 +476,14 @@ export class InMemoryLocalApplicationService implements LocalApplicationService 
       return success({ outcome: "unknown", snapshot: this.#snapshot(record), error })
     }
 
-    let session = checked.data.state === "completed" ? sessionSchema.parse({ ...checked.data, state: "unknown" }) : checked.data
+    // A session that claims to be `completed` the instant it was launched is not
+    // credible evidence: we never observed it run. The observation is downgraded
+    // to `unknown` (so reconciliation is required) and the lifecycle stays at
+    // `launching` rather than being advanced by an unverified claim.
+    let session =
+      checked.data.observedState === "completed"
+        ? this.#observeSession(checked.data, "unknown")
+        : checked.data
     if (session.terminalId === undefined) {
       let terminalId
       try {
@@ -560,7 +569,7 @@ export class InMemoryLocalApplicationService implements LocalApplicationService 
     try {
       for await (const observed of this.#deps.runtime.observe(record.session, operation)) {
         if (!observed.ok) {
-          if (uncertainCategory(observed.error)) record.session = sessionSchema.parse({ ...record.session, state: "unknown" })
+          if (uncertainCategory(observed.error)) record.session = this.#observeSession(record.session, "unknown")
           return { ok: false, error: observed.error }
         }
         const checked = agentRuntimeEventSchema.safeParse(observed.value)
@@ -572,7 +581,7 @@ export class InMemoryLocalApplicationService implements LocalApplicationService 
       }
       return success(this.#snapshot(record))
     } catch {
-      record.session = sessionSchema.parse({ ...record.session, state: "unknown" })
+      record.session = this.#observeSession(record.session, "unknown")
       return failure("transient_transport", "application.observation.failed", "Session observation failed; refresh to reconcile without replaying effects.", command.correlationId)
     }
   }
@@ -651,7 +660,7 @@ export class InMemoryLocalApplicationService implements LocalApplicationService 
     } catch {
       const error = normalizeThrown(correlationId, `application.${action}.unknown`, `The ${action} outcome is unknown; reconcile before issuing another control action.`)
       if (action === "cancel") record.cancellation = { state: "unknown", commandId: operationId, error }
-      if (record.session) record.session = sessionSchema.parse({ ...record.session, state: "unknown" })
+      if (record.session) record.session = this.#observeSession(record.session, "unknown")
       return success({ outcome: "unknown", snapshot: this.#snapshot(record), error })
     }
   }
@@ -659,7 +668,7 @@ export class InMemoryLocalApplicationService implements LocalApplicationService 
   #controlResult(record: InternalRun, operationId: CommandId, result: Result<void>): Result<ControlOutcome> {
     if (result.ok) return success({ outcome: "confirmed", snapshot: this.#snapshot(record) })
     const outcome = uncertainCategory(result.error) ? "unknown" : "failed"
-    if (outcome === "unknown" && record.session) record.session = sessionSchema.parse({ ...record.session, state: "unknown" })
+    if (outcome === "unknown" && record.session) record.session = this.#observeSession(record.session, "unknown")
     return success({ outcome, snapshot: this.#snapshot(record), error: result.error })
   }
 
@@ -675,7 +684,7 @@ export class InMemoryLocalApplicationService implements LocalApplicationService 
     try {
       const result = await this.#deps.runtime.collectResult(record.session, operation)
       if (!result.ok) {
-        if (uncertainCategory(result.error)) record.session = sessionSchema.parse({ ...record.session, state: "unknown" })
+        if (uncertainCategory(result.error)) record.session = this.#observeSession(record.session, "unknown")
         return result
       }
       const checked = agentResultSchema.safeParse(result.value)
@@ -683,7 +692,7 @@ export class InMemoryLocalApplicationService implements LocalApplicationService 
       this.#applyResult(record, checked.data, command.operationId, command.correlationId)
       return success({ snapshot: this.#snapshot(record), result: clone(checked.data) })
     } catch {
-      record.session = sessionSchema.parse({ ...record.session, state: "unknown" })
+      record.session = this.#observeSession(record.session, "unknown")
       return failure("transient_transport", "application.result.failed", "Result collection failed; the outcome remains unknown.", command.correlationId)
     }
   }
@@ -740,7 +749,7 @@ export class InMemoryLocalApplicationService implements LocalApplicationService 
           nodeId: reference.data.nodeId,
           sessionId: reference.data.sessionId,
           terminalId: reference.data.terminalId,
-          runtimeState: known?.session?.state ?? "unknown",
+          runtimeState: known?.session?.observedState ?? "unknown",
           historyAvailable: Boolean(known),
           mutationAllowed: Boolean(known),
           attachmentMode: "read-only",
@@ -771,6 +780,7 @@ export class InMemoryLocalApplicationService implements LocalApplicationService 
           projectId: record.draft.projectId,
           goal: fields.value.goal,
           state: "draft",
+          paused: false,
           createdAt: now,
           updatedAt: now,
           externalReferences: [],
@@ -783,6 +793,7 @@ export class InMemoryLocalApplicationService implements LocalApplicationService 
           title: fields.value.taskTitle,
           description: fields.value.taskDescription,
           state: "ready",
+          failurePolicy: "block",
           dependencies: [],
           externalReferences: [],
         })
@@ -1080,13 +1091,31 @@ export class InMemoryLocalApplicationService implements LocalApplicationService 
     }
     if (event.type === "permission_requested") {
       record.pendingRequest = { requestId: event.requestId, permission: event.permission }
-      record.session = sessionSchema.parse({ ...record.session, state: "blocked" })
+      record.session = this.#observeSession(record.session, "blocked")
       return
     }
     if (event.type !== "lifecycle") return
-    const state = event.state === "completed" ? "unknown" : event.state
-    record.session = sessionSchema.parse({ ...record.session, state })
+    // A `completed` report arriving as a bare lifecycle observation is not
+    // evidence of success: a run is only completed by an observed result. It is
+    // recorded as an unknown observation and reconciliation is required.
+    const observed = event.state === "completed" ? "unknown" : event.state
+    record.session = this.#observeSession(record.session, observed)
     this.#appendEvent(record, "session.observed", { session: record.session }, operationId, correlationId)
+  }
+
+  /**
+   * Applies a provider observation to a session, keeping the two axes distinct:
+   * `observedState` records what the provider reported, while `lifecycleState`
+   * is advanced only through the aggregate state machine. An observation that
+   * carries no lifecycle claim (`unknown`) leaves the lifecycle untouched rather
+   * than inventing one.
+   */
+  #observeSession(session: Session, observed: SessionObservedState): Session {
+    return sessionSchema.parse({
+      ...session,
+      observedState: observed,
+      lifecycleState: advanceSessionLifecycle(session.lifecycleState, observed),
+    })
   }
 
   #applyResult(record: InternalRun, result: AgentResult, operationId: CommandId, correlationId: CorrelationId): void {
@@ -1094,12 +1123,14 @@ export class InMemoryLocalApplicationService implements LocalApplicationService 
     record.result = result
     const proposal = record.proposals.at(-1)
     if (result.outcome === "unknown") {
-      record.session = sessionSchema.parse({ ...record.session, state: "unknown" })
+      record.session = this.#observeSession(record.session, "unknown")
       this.#appendEvent(record, "session.observed", { session: record.session }, operationId, correlationId)
       return
     }
     const succeeded = result.outcome === "succeeded"
-    record.session = sessionSchema.parse({ ...record.session, state: succeeded ? "completed" : "failed" })
+    // An observed result is the authoritative completion signal, so the session
+    // lifecycle advances through the machine via the same observation path.
+    record.session = this.#observeSession(record.session, succeeded ? "completed" : "failed")
     record.task = taskSchema.parse({ ...record.task, state: succeeded ? "completed" : "failed" })
     record.run = runSchema.parse({ ...record.run, state: succeeded ? "completed" : "failed", updatedAt: this.#now() })
     if (proposal) proposal.dispatch = dispatchSchema.parse({ ...proposal.dispatch, state: succeeded ? "completed" : "failed" })

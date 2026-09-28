@@ -125,7 +125,8 @@ export class BrokenAgentRuntimeAdapter implements AgentRuntimeAdapter {
         nodeId: "node-contract",
         installationId: "broken-install",
         runtimeKind: this.kind,
-        state: "starting",
+        lifecycleState: "launching",
+        observedState: "starting",
       }),
     }
   }

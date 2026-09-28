@@ -11,16 +11,23 @@ import type {
 import { orchestrationCommandSchema, orchestrationEventSchema } from "../schemas.js"
 import type { Actor, OrchestrationEvent } from "../types.js"
 import {
+  DispatchAttemptConflictError,
   DuplicateEventError,
   FingerprintConflictError,
   SequenceMismatchError,
   SequenceOverflowError,
   StreamProjectMismatchError,
 } from "./errors.js"
-import { runMigrations } from "./migrations.js"
+import { runMigrations, verifySchemaVersion } from "./migrations.js"
+import {
+  CURRENT_COMMAND_FINGERPRINT_VERSION,
+  commandFingerprintMatches,
+  fingerprintCommand,
+} from "./fingerprint.js"
+import { OutboxStore } from "./outbox-store.js"
 import type {
   CommandReceiptRow,
-  OutboxRecordRow,
+  DispatchAttemptTombstoneRow,
   RunEventRow,
   RunStreamRow,
   SnapshotRow,
@@ -34,10 +41,15 @@ import {
 import type {
   AppendCommandOptions,
   AppendResult,
+  ClaimOutboxOptions,
   CommandReceipt,
   CommandReceiptStatus,
+  DispatchAttemptTombstone,
+  OutboxClaim,
+  OutboxFilter,
   OutboxRecord,
-  OutboxRecordStatus,
+  OutboxRecoveryResult,
+  OutboxWriteResult,
   ReadGlobalOptions,
   ReadStreamOptions,
   SnapshotRecord,
@@ -47,11 +59,17 @@ import type {
 
 export class SqliteEventStore {
   readonly driver: SqliteDriver
+  /** Outbox claim/lease/recovery primitives. Storage only, no delivery loop. */
+  readonly outbox: OutboxStore
 
   constructor(driver: SqliteDriver, options?: { skipMigration?: boolean }) {
     this.driver = driver
+    this.outbox = new OutboxStore(driver)
     if (!options?.skipMigration) {
       runMigrations(this.driver)
+      // Post-migration integrity check: fail closed rather than open a database
+      // whose recorded schema version and physical objects disagree.
+      verifySchemaVersion(this.driver)
     }
   }
 
@@ -67,7 +85,14 @@ export class SqliteEventStore {
   append(options: AppendCommandOptions): AppendResult {
     return this.driver.transaction(() => {
       const command = orchestrationCommandSchema.parse(options.command)
-      const commandFingerprint = digestJson(command)
+      // Semantic fingerprint: `commandId`, `issuedAt` and `expiresAt` are
+      // excluded so a legitimate at-least-once retry of an unanswered command
+      // is recognised as a duplicate instead of a fingerprint conflict. Every
+      // other field — including the whole payload, actor, authority scope,
+      // epoch, lease and correlation — still participates, so a mutated command
+      // under a reused commandId keeps conflicting.
+      const fingerprints = fingerprintCommand(command)
+      const commandFingerprint = fingerprints.semantic
 
       const existingReceiptRow = this.driver.get<CommandReceiptRow>(
         "SELECT * FROM command_receipts WHERE project_id = ? AND run_id = ? AND command_id = ?",
@@ -77,7 +102,7 @@ export class SqliteEventStore {
       )
 
       if (existingReceiptRow) {
-        if (existingReceiptRow.command_fingerprint === commandFingerprint) {
+        if (commandFingerprintMatches(existingReceiptRow.command_fingerprint, fingerprints)) {
           const receipt = this.mapCommandReceipt(existingReceiptRow)
           return {
             duplicate: true,
@@ -155,6 +180,7 @@ export class SqliteEventStore {
       const storedEvents: StoredRunEvent[] = []
       for (const ev of processedEvents) {
         const metadata = { actor: ev.actor }
+        this.assertDispatchEnvelopeImmutable(ev)
         try {
           const runRes = this.driver.run(
             `INSERT INTO run_events (
@@ -242,8 +268,8 @@ export class SqliteEventStore {
         `INSERT INTO command_receipts (
           project_id, run_id, command_id, command_fingerprint, command_type,
           issuer_actor_json, status, result_json, error_json,
-          start_sequence, end_sequence, received_at, resolved_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          start_sequence, end_sequence, received_at, resolved_at, fingerprint_version
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         command.projectId,
         command.runId,
         command.commandId,
@@ -256,7 +282,8 @@ export class SqliteEventStore {
         startSequence,
         endSequence,
         now,
-        now
+        now,
+        CURRENT_COMMAND_FINGERPRINT_VERSION
       )
 
       const receipt: CommandReceipt = {
@@ -279,10 +306,24 @@ export class SqliteEventStore {
         for (const outbox of options.outboxRecords) {
           const payloadJson = typeof outbox.payload === "string" ? outbox.payload : JSON.stringify(outbox.payload)
           const digest = outbox.payloadDigest ?? digestJson(outbox.payload)
+          // Scoped from the committing command so a single-run worker can
+          // filter by run without the caller having to restate the scope.
+          const outboxRunId = outbox.runId ?? command.runId
+          const outboxProjectId = outbox.projectId ?? command.projectId
+          const outboxCommandId = outbox.commandId ?? command.commandId
+          if (outbox.projectId !== undefined && outbox.projectId !== command.projectId) {
+            throw new StreamProjectMismatchError(
+              outboxRunId,
+              command.projectId,
+              outbox.projectId
+            )
+          }
           this.driver.run(
             `INSERT INTO outbox_records (
-              outbox_id, destination, payload_json, payload_digest, status, attempts, created_at, last_attempted_at, acknowledged_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              outbox_id, destination, payload_json, payload_digest, status, attempts,
+              created_at, last_attempted_at, acknowledged_at,
+              project_id, run_id, command_id, sequence_start, sequence_end, next_attempt_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             outbox.outboxId,
             outbox.destination,
             payloadJson,
@@ -291,7 +332,13 @@ export class SqliteEventStore {
             outbox.attempts ?? 0,
             outbox.createdAt ?? now,
             null,
-            null
+            null,
+            outboxProjectId,
+            outboxRunId,
+            outboxCommandId,
+            startSequence,
+            endSequence,
+            outbox.nextAttemptAt ?? null
           )
         }
       }
@@ -436,58 +483,82 @@ export class SqliteEventStore {
     }
   }
 
-  getOutboxRecord(outboxId: string): OutboxRecord | undefined {
-    const row = this.driver.get<OutboxRecordRow>(
-      "SELECT * FROM outbox_records WHERE outbox_id = ?",
-      outboxId
-    )
-    if (!row) return undefined
-    return {
-      outboxId: row.outbox_id,
-      destination: row.destination,
-      payloadJson: row.payload_json,
-      payloadDigest: row.payload_digest as Digest,
-      status: row.status as OutboxRecordStatus,
-      attempts: row.attempts,
-      createdAt: row.created_at as Timestamp,
-      lastAttemptedAt: row.last_attempted_at ? (row.last_attempted_at as Timestamp) : undefined,
-      acknowledgedAt: row.acknowledged_at ? (row.acknowledged_at as Timestamp) : undefined,
+  /**
+   * Storage-level guarantee for "Dispatch envelope is immutable after proposal;
+   * edits create a revision/new digest" (Milestone 3 plan, Dispatch and
+   * Approval). A `dispatch.proposed` event burns a `(runId, dispatchId,
+   * attempt)` tombstone inside the same append transaction, so a second
+   * proposal for the same key cannot commit even if a caller reaches the store
+   * directly and bypasses the transition matrix.
+   *
+   * A genuine edit uses a new `dispatchId` or a new `attempt`, which is exactly
+   * the revision path the plan describes.
+   */
+  private assertDispatchEnvelopeImmutable(event: OrchestrationEvent): void {
+    if (event.type !== "dispatch.proposed") return
+
+    const dispatch = (event as any).payload?.dispatch
+    const envelope = dispatch?.envelope
+    if (!envelope || typeof envelope.dispatchId !== "string" || !Number.isInteger(envelope.attempt)) {
+      return
     }
-  }
 
-  listPendingOutbox(limit = 100): OutboxRecord[] {
-    const rows = this.driver.all<OutboxRecordRow>(
-      "SELECT * FROM outbox_records WHERE status = 'pending' ORDER BY created_at ASC LIMIT ?",
-      limit
+    const existing = this.getDispatchAttemptTombstone(
+      event.projectId,
+      event.runId,
+      envelope.dispatchId,
+      envelope.attempt
     )
-    return rows.map((row) => ({
-      outboxId: row.outbox_id,
-      destination: row.destination,
-      payloadJson: row.payload_json,
-      payloadDigest: row.payload_digest as Digest,
-      status: row.status as OutboxRecordStatus,
-      attempts: row.attempts,
-      createdAt: row.created_at as Timestamp,
-      lastAttemptedAt: row.last_attempted_at ? (row.last_attempted_at as Timestamp) : undefined,
-      acknowledgedAt: row.acknowledged_at ? (row.acknowledged_at as Timestamp) : undefined,
-    }))
-  }
 
-  markOutboxAcknowledged(outboxId: string): void {
-    const now = new Date().toISOString()
+    if (existing) {
+      throw new DispatchAttemptConflictError(
+        event.runId,
+        envelope.dispatchId,
+        envelope.attempt,
+        existing.envelopeDigest,
+        dispatch.envelopeDigest ?? "unknown"
+      )
+    }
+
     this.driver.run(
-      "UPDATE outbox_records SET status = 'acknowledged', acknowledged_at = ? WHERE outbox_id = ?",
-      now,
-      outboxId
+      `INSERT INTO dispatch_attempt_tombstones (
+        project_id, run_id, dispatch_id, attempt, envelope_digest, event_id, sequence, proposed_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      event.projectId,
+      event.runId,
+      envelope.dispatchId,
+      envelope.attempt,
+      dispatch.envelopeDigest,
+      event.eventId,
+      event.sequence,
+      event.occurredAt
     )
   }
 
-  async backup(destinationPath: string): Promise<void> {
-    await this.driver.backup(destinationPath)
+  getDispatchAttemptTombstone(
+    projectId: string,
+    runId: string,
+    dispatchId: string,
+    attempt: number
+  ): DispatchAttemptTombstone | undefined {
+    const row = this.driver.get<DispatchAttemptTombstoneRow>(
+      `SELECT * FROM dispatch_attempt_tombstones
+        WHERE project_id = ? AND run_id = ? AND dispatch_id = ? AND attempt = ?`,
+      projectId,
+      runId,
+      dispatchId,
+      attempt
+    )
+    return row ? mapTombstoneRow(row) : undefined
   }
 
-  close(): void {
-    this.driver.close()
+  listDispatchAttemptTombstones(runId: string): DispatchAttemptTombstone[] {
+    return this.driver
+      .all<DispatchAttemptTombstoneRow>(
+        "SELECT * FROM dispatch_attempt_tombstones WHERE run_id = ? ORDER BY dispatch_id ASC, attempt ASC",
+        runId
+      )
+      .map(mapTombstoneRow)
   }
 
   private mapRunEventRow(row: RunEventRow): StoredRunEvent {
@@ -536,5 +607,82 @@ export class SqliteEventStore {
       receivedAt: row.received_at as Timestamp,
       resolvedAt: row.resolved_at ? (row.resolved_at as Timestamp) : undefined,
     }
+  }
+
+  // --- Outbox (delegated to OutboxStore; see ./outbox-store.ts) -------------
+
+  getOutboxRecord(outboxId: string): OutboxRecord | undefined {
+    return this.outbox.getOutboxRecord(outboxId)
+  }
+
+  listOutbox(filter?: OutboxFilter & { limit?: number }): OutboxRecord[] {
+    return this.outbox.listOutbox(filter)
+  }
+
+  listPendingOutbox(limit = 100, filter?: OutboxFilter): OutboxRecord[] {
+    return this.outbox.listPendingOutbox(limit, filter)
+  }
+
+  /**
+   * Atomically move up to `limit` deliverable records to `sending` and extend
+   * their `attempts` counter. See `OutboxStore.claimPendingOutbox`.
+   */
+  claimPendingOutbox(options?: ClaimOutboxOptions): OutboxClaim {
+    return this.outbox.claimPendingOutbox(options)
+  }
+
+  markOutboxSending(
+    outboxId: string,
+    claimToken?: string,
+    options?: { leaseMs?: number, now?: Timestamp }
+  ): OutboxWriteResult {
+    return this.outbox.markOutboxSending(outboxId, claimToken, options)
+  }
+
+  markOutboxFailed(
+    outboxId: string,
+    error: unknown,
+    options?: { claimToken?: string, nextAttemptAt?: Timestamp, now?: Timestamp }
+  ): OutboxWriteResult {
+    return this.outbox.markOutboxFailed(outboxId, error, options)
+  }
+
+  markOutboxAcknowledged(outboxId: string, now?: Timestamp): OutboxWriteResult {
+    return this.outbox.markOutboxAcknowledged(outboxId, now)
+  }
+
+  exhaustOutbox(outboxId: string, error: unknown, options?: { now?: Timestamp }): OutboxWriteResult {
+    return this.outbox.exhaustOutbox(outboxId, error, options)
+  }
+
+  recoverStaleOutbox(
+    options?: { now?: Timestamp, runId?: string, projectId?: string, destination?: string }
+  ): OutboxRecoveryResult {
+    return this.outbox.recoverStaleOutbox(options)
+  }
+
+  countOutbox(filter?: OutboxFilter): number {
+    return this.outbox.countOutbox(filter)
+  }
+
+  async backup(destinationPath: string): Promise<void> {
+    await this.driver.backup(destinationPath)
+  }
+
+  close(): void {
+    this.driver.close()
+  }
+}
+
+function mapTombstoneRow(row: DispatchAttemptTombstoneRow): DispatchAttemptTombstone {
+  return {
+    projectId: row.project_id as ProjectId,
+    runId: row.run_id as RunId,
+    dispatchId: row.dispatch_id,
+    attempt: row.attempt,
+    envelopeDigest: row.envelope_digest as Digest,
+    eventId: row.event_id as EventId,
+    sequence: row.sequence,
+    proposedAt: row.proposed_at as Timestamp,
   }
 }

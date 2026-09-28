@@ -150,31 +150,40 @@ function formatIssues(prefix: string, issues: readonly { path: PropertyKey[]; me
 }
 
 function stateFor(status: LegacyJobStatus): {
-  run: "paused" | "completed" | "failed"
-  task: "pending" | "blocked" | "ready" | "running" | "completed" | "failed"
+  run: "active" | "completed" | "failed"
+  /**
+   * Non-terminal migrated work is PAUSED rather than resumed, so a legacy job is
+   * never silently picked up by the scheduler and launched against a provider
+   * without an explicit operator action. This is a run-level gate, not a
+   * lifecycle state.
+   */
+  runPaused: boolean
+  task: "pending" | "ready" | "running" | "completed" | "failed"
   dispatch: "proposed" | "running" | "completed" | "failed" | "timed_out"
   disposition: "historical" | "paused"
   reconcile: boolean
 } {
   switch (status) {
     case "completed":
-      return { run: "completed", task: "completed", dispatch: "completed", disposition: "historical", reconcile: false }
+      return { run: "completed", runPaused: false, task: "completed", dispatch: "completed", disposition: "historical", reconcile: false }
     case "failed":
-      return { run: "failed", task: "failed", dispatch: "failed", disposition: "historical", reconcile: false }
+      return { run: "failed", runPaused: false, task: "failed", dispatch: "failed", disposition: "historical", reconcile: false }
     case "timed_out":
-      return { run: "failed", task: "failed", dispatch: "timed_out", disposition: "historical", reconcile: false }
+      return { run: "failed", runPaused: false, task: "failed", dispatch: "timed_out", disposition: "historical", reconcile: false }
     case "received":
-      return { run: "paused", task: "pending", dispatch: "proposed", disposition: "paused", reconcile: true }
+      return { run: "active", runPaused: true, task: "pending", dispatch: "proposed", disposition: "paused", reconcile: true }
     case "accepted":
-      return { run: "paused", task: "ready", dispatch: "proposed", disposition: "paused", reconcile: true }
+      return { run: "active", runPaused: true, task: "ready", dispatch: "proposed", disposition: "paused", reconcile: true }
+    // A legacy `blocked` job never ran and is not dependency-gated; its honest
+    // lifecycle is `pending` awaiting a decision, with the run held paused.
     case "blocked":
-      return { run: "paused", task: "blocked", dispatch: "proposed", disposition: "paused", reconcile: true }
+      return { run: "active", runPaused: true, task: "pending", dispatch: "proposed", disposition: "paused", reconcile: true }
     case "session_created":
     case "running":
     case "reporting":
-      return { run: "paused", task: "running", dispatch: "running", disposition: "paused", reconcile: true }
+      return { run: "active", runPaused: true, task: "running", dispatch: "running", disposition: "paused", reconcile: true }
     case "callback_failed":
-      return { run: "paused", task: "blocked", dispatch: "proposed", disposition: "paused", reconcile: true }
+      return { run: "active", runPaused: true, task: "pending", dispatch: "proposed", disposition: "paused", reconcile: true }
   }
 }
 
@@ -444,7 +453,9 @@ function buildLegacyMigrationDryRun(sourceInput: unknown, contextInput: unknown)
       runId,
       projectId: projectMapping.projectId,
       goal: job.trigger.prompt,
-      state: historicalChecksPass ? state.run : "paused",
+      state: historicalChecksPass ? state.run : "active",
+      // Anything that fails its historical checks is never resumed automatically.
+      paused: historicalChecksPass ? state.runPaused : true,
       createdAt: job.createdAt,
       updatedAt: job.updatedAt,
       externalReferences: [jobReference],
@@ -456,7 +467,8 @@ function buildLegacyMigrationDryRun(sourceInput: unknown, contextInput: unknown)
       projectId: projectMapping.projectId,
       title: linkedTask?.title ?? `Legacy job ${job.id}`.slice(0, 256),
       description: job.trigger.prompt,
-      state: historicalChecksPass ? state.task : "blocked",
+      state: historicalChecksPass ? state.task : "pending",
+      failurePolicy: "block",
       dependencies: [],
       externalReferences: references,
     })

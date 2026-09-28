@@ -7,7 +7,6 @@ import type {
   controllerLeaseSchema,
   dispatchEnvelopeSchema,
   dispatchSchema,
-  dispatchStateSchema,
   externalReferenceSchema,
   memoryRecordSchema,
   meshSchema,
@@ -20,13 +19,18 @@ import type {
   roleTemplateSchema,
   ruleSchema,
   runSchema,
-  runStateSchema,
   sessionSchema,
   sessionStateSchema,
   taskDependencySchema,
   taskSchema,
-  taskStateSchema,
 } from "./schemas.js"
+
+// Aggregate lifecycle states are owned by `./transitions.js` and are deliberately
+// NOT re-exported here. Re-exporting the schema-inferred unions shadowed the
+// machine and hid every lifecycle divergence behind a cast at the call site.
+// Import `RunState`, `TaskState`, `DispatchState`, and `SessionState` from
+// `./transitions.js`; import `SessionObservedState` (the provider observation
+// vocabulary) from here.
 
 export type Actor = z.infer<typeof actorSchema>
 export type ExternalReference = z.infer<typeof externalReferenceSchema>
@@ -35,20 +39,17 @@ export type Node = z.infer<typeof nodeSchema>
 export type ProjectPath = z.infer<typeof projectPathSchema>
 export type Project = z.infer<typeof projectSchema>
 export type Run = z.infer<typeof runSchema>
-export type RunState = z.infer<typeof runStateSchema>
 export type TaskDependency = z.infer<typeof taskDependencySchema>
 export type Task = z.infer<typeof taskSchema>
-export type TaskState = z.infer<typeof taskStateSchema>
 export type RoleTemplate = z.infer<typeof roleTemplateSchema>
 export type Rule = z.infer<typeof ruleSchema>
 export type PermissionEnvelope = z.infer<typeof permissionEnvelopeSchema>
 export type ContextManifest = z.infer<typeof contextManifestSchema>
 export type DispatchEnvelope = z.infer<typeof dispatchEnvelopeSchema>
 export type Dispatch = z.infer<typeof dispatchSchema>
-export type DispatchState = z.infer<typeof dispatchStateSchema>
 export type Approval = z.infer<typeof approvalSchema>
 export type Session = z.infer<typeof sessionSchema>
-export type SessionState = z.infer<typeof sessionStateSchema>
+export type SessionObservedState = z.infer<typeof sessionStateSchema>
 export type MemoryRecord = z.infer<typeof memoryRecordSchema>
 export type Artifact = z.infer<typeof artifactSchema>
 export type ControllerLease = z.infer<typeof controllerLeaseSchema>

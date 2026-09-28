@@ -8,6 +8,7 @@
   "nodeId": "node-contract",
   "installationId": "installation-contract",
   "runtimeKind": "contract-fake",
-  "state": "working",
+  "lifecycleState": "running",
+  "observedState": "working",
   "terminalId": "terminal-contract"
 }

@@ -6,6 +6,7 @@
   "title": "Exercise contracts",
   "description": "Parse canonical version-one contract examples.",
   "state": "ready",
+  "failurePolicy": "block",
   "dependencies": [],
   "externalReferences": [
     { "namespace": "legacy.task", "id": "#1" }

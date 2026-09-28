@@ -451,7 +451,8 @@ export class CodexRuntimeAdapter implements AgentRuntimeAdapter {
       nodeId: this.#nodeId,
       installationId: this.#installationId,
       runtimeKind: this.kind,
-      state: "starting",
+      lifecycleState: "launching",
+      observedState: "starting",
     })
 
     const reference = runtimeSessionReferenceSchema.parse({

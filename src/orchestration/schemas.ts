@@ -1,5 +1,12 @@
 import { z } from "zod"
 import {
+  DISPATCH_STATES,
+  RUN_STATES,
+  SESSION_OBSERVED_STATES,
+  SESSION_STATES,
+  TASK_STATES,
+} from "./transitions.js"
+import {
   approvalIdSchema,
   artifactIdSchema,
   capabilitySchema,
@@ -138,7 +145,7 @@ export const projectSchema = z
     })
   })
 
-export const runStateSchema = z.enum(["draft", "active", "paused", "completed", "failed", "cancelled"])
+export const runStateSchema = z.enum(RUN_STATES)
 
 export const runSchema = z
   .object({
@@ -147,6 +154,7 @@ export const runSchema = z
     projectId: projectIdSchema,
     goal: largeTextSchema,
     state: runStateSchema,
+    paused: z.boolean(),
     createdAt: timestampSchema,
     updatedAt: timestampSchema,
     externalReferences: z.array(externalReferenceSchema).max(ARRAY_MAX),
@@ -164,7 +172,9 @@ export const taskDependencySchema = z
   })
   .strict()
 
-export const taskStateSchema = z.enum(["pending", "blocked", "ready", "running", "completed", "failed", "cancelled"])
+export const taskStateSchema = z.enum(TASK_STATES)
+
+export const taskFailurePolicySchema = z.enum(["block", "fail"])
 
 export const taskSchema = z
   .object({
@@ -175,6 +185,7 @@ export const taskSchema = z
     title: shortTextSchema,
     description: largeTextSchema,
     state: taskStateSchema,
+    failurePolicy: taskFailurePolicySchema,
     dependencies: z.array(taskDependencySchema).max(ARRAY_MAX),
     externalReferences: z.array(externalReferenceSchema).max(ARRAY_MAX),
   })
@@ -384,17 +395,7 @@ export const dispatchEnvelopeSchema = z
     })
   })
 
-export const dispatchStateSchema = z.enum([
-  "proposed",
-  "approved",
-  "rejected",
-  "queued",
-  "running",
-  "completed",
-  "failed",
-  "timed_out",
-  "cancelled",
-])
+export const dispatchStateSchema = z.enum(DISPATCH_STATES)
 
 export const dispatchSchema = z
   .object({
@@ -433,7 +434,9 @@ export const approvalSchema = z
   })
   .strict()
 
-export const sessionStateSchema = z.enum(["starting", "idle", "working", "blocked", "completed", "failed", "unknown"])
+export const sessionStateSchema = z.enum(SESSION_OBSERVED_STATES)
+
+export const sessionLifecycleStateSchema = z.enum(SESSION_STATES)
 
 export const sessionSchema = z
   .object({
@@ -446,7 +449,8 @@ export const sessionSchema = z
     nodeId: nodeIdSchema,
     installationId: installationIdSchema,
     runtimeKind: runtimeKindSchema,
-    state: sessionStateSchema,
+    lifecycleState: sessionLifecycleStateSchema,
+    observedState: sessionStateSchema,
     terminalId: terminalIdSchema.optional(),
   })
   .strict()

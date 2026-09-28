@@ -580,8 +580,10 @@ describe("Terminal state immutability and aggregate invariants", () => {
       expect(nonTerminalSessionInTerminalRun.error.code).toBe("session.run_terminal")
     }
 
-    const completedSession = { ...exampleSession, state: "completed" }
-    expect(validateSessionInvariants(completedSession as any, { runState: "completed" }).ok).toBe(true)
+    // The invariant applies to the kernel lifecycle; the provider observation
+    // (`observedState`) never participates in a terminal check.
+    const completedSession = { ...exampleSession, lifecycleState: "completed" as const, observedState: "unknown" as const }
+    expect(validateSessionInvariants(completedSession, { runState: "completed" }).ok).toBe(true)
   })
 
   it("validates approval invariants with dispatch", () => {

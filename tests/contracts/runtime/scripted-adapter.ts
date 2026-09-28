@@ -115,7 +115,8 @@ export class ScriptedAgentRuntimeAdapter implements AgentRuntimeAdapter {
       nodeId: this.nodeId,
       installationId: this.installationId,
       runtimeKind: this.kind,
-      state: "starting",
+      lifecycleState: "launching",
+      observedState: "starting",
     })
 
     this.activeSession = session

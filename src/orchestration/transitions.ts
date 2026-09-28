@@ -113,13 +113,97 @@ export const SESSION_STATE_SET: ReadonlySet<SessionState> = new Set(SESSION_STAT
 export const SESSION_TERMINAL_SET: ReadonlySet<SessionState> = new Set(SESSION_TERMINAL_STATES)
 
 export const SESSION_TRANSITIONS: Readonly<Record<SessionState, readonly SessionState[]>> = {
-  launching: ["running", "failed", "cancelled", "timed_out"],
+  // `launching -> idle` and `launching -> completed` exist because a provider can
+  // legitimately report a session as idle (started, awaiting input) or finished
+  // (fast task, or a lost status event) without the kernel ever observing it
+  // `running`. These transitions were unreachable while callers assigned session
+  // state directly instead of going through this machine; now that they must, the
+  // gaps have to be closed rather than papered over.
+  launching: ["running", "idle", "completed", "failed", "cancelled", "timed_out"],
   running: ["idle", "completed", "failed", "cancelled", "timed_out"],
   idle: ["running", "completed", "failed", "cancelled", "timed_out"],
   completed: [],
   failed: [],
   cancelled: [],
   timed_out: [],
+}
+
+// --- Session provider observation vocabulary ---
+//
+// A provider reports what its process is doing; the kernel records what the
+// dispatch lifecycle is. The two vocabularies are different axes and are never
+// merged: `SessionObservedState` is an observation and never drives lifecycle on
+// its own. Only `mapObservedSessionLifecycle` translates between them.
+
+export const SESSION_OBSERVED_STATES = [
+  "starting",
+  "idle",
+  "working",
+  "blocked",
+  "completed",
+  "failed",
+  "unknown",
+] as const
+export type SessionObservedState = (typeof SESSION_OBSERVED_STATES)[number]
+
+export const SESSION_OBSERVED_STATE_SET: ReadonlySet<string> = new Set(SESSION_OBSERVED_STATES)
+
+export class UnhandledSessionObservationError extends Error {
+  readonly observedState: string
+
+  constructor(observedState: string) {
+    super(
+      `Unhandled session observation '${observedState}': every provider observation must map to a kernel session lifecycle state or explicitly to no lifecycle claim. Known observations: ${SESSION_OBSERVED_STATES.join(", ")}.`,
+    )
+    this.name = "UnhandledSessionObservationError"
+    this.observedState = observedState
+  }
+}
+
+export function isSessionObservedState(value: string): value is SessionObservedState {
+  return SESSION_OBSERVED_STATE_SET.has(value)
+}
+
+/**
+ * Total translation from provider observation vocabulary to kernel session
+ * lifecycle. `unknown` deliberately yields `null`: an observation that carries
+ * no information must not move the lifecycle, and the kernel must never invent
+ * a lifecycle claim from it.
+ *
+ * The switch is exhaustive over the provider vocabulary and throws for anything
+ * outside it, so a new provider state cannot be silently absorbed.
+ */
+export function mapObservedSessionLifecycle(observed: SessionObservedState): SessionState | null {
+  switch (observed) {
+    case "starting":
+      return "launching"
+    case "working":
+      return "running"
+    case "idle":
+      return "idle"
+    case "blocked":
+      return "idle"
+    case "completed":
+      return "completed"
+    case "failed":
+      return "failed"
+    case "unknown":
+      return null
+    default:
+      throw new UnhandledSessionObservationError(observed)
+  }
+}
+
+/**
+ * Applies a provider observation to the kernel session lifecycle, always through
+ * the machine. A terminal lifecycle is absorbing and a lifecycle-less
+ * observation is a no-op, so no observation can corrupt a finished dispatch.
+ */
+export function advanceSessionLifecycle(current: SessionState, observed: SessionObservedState): SessionState {
+  const target = mapObservedSessionLifecycle(observed)
+  if (target === null || target === current) return current
+  if (isSessionTerminal(current)) return current
+  return transitionSession(current, target)
 }
 
 // --- Terminal State Predicates ---
@@ -291,6 +375,64 @@ export function transitionAggregate(entity: AggregateEntity, from: string, to: s
     case "session":
       return transitionSession(from as SessionState, to as SessionState)
   }
+}
+
+// --- Legal-path resolution (projections derive states; the machine validates them) ---
+
+/**
+ * Walks the machine's own transition table breadth-first to find a legal path
+ * from `from` to `to`, applying every hop through the throwing transition
+ * function. A projection may therefore only ever write a state the aggregate
+ * can actually reach, and every intermediate hop is machine-validated.
+ *
+ * When no path exists the direct transition function is invoked so the caller
+ * receives the canonical `InvalidStateTransitionError` (including terminal
+ * immutability) rather than a bespoke error.
+ */
+function resolveThroughMachine<S extends string>(
+  from: S,
+  to: S,
+  table: Readonly<Record<S, readonly S[]>>,
+  step: (from: S, to: S) => S,
+): S {
+  if (from === to) return from
+
+  const queue: S[][] = [[from]]
+  const visited: Set<S> = new Set([from])
+
+  while (queue.length > 0) {
+    const path = queue.shift() as S[]
+    const tail = path[path.length - 1] as S
+    for (const next of table[tail] ?? []) {
+      if (next === to) {
+        let state = from
+        for (const hop of [...path.slice(1), next]) state = step(state, hop)
+        return state
+      }
+      if (!visited.has(next)) {
+        visited.add(next)
+        queue.push([...path, next])
+      }
+    }
+  }
+
+  return step(from, to)
+}
+
+export function resolveRunState(from: RunState, to: RunState): RunState {
+  return resolveThroughMachine(from, to, RUN_TRANSITIONS, transitionRun)
+}
+
+export function resolveTaskState(from: TaskState, to: TaskState): TaskState {
+  return resolveThroughMachine(from, to, TASK_TRANSITIONS, transitionTask)
+}
+
+export function resolveDispatchState(from: DispatchState, to: DispatchState): DispatchState {
+  return resolveThroughMachine(from, to, DISPATCH_TRANSITIONS, transitionDispatch)
+}
+
+export function resolveSessionState(from: SessionState, to: SessionState): SessionState {
+  return resolveThroughMachine(from, to, SESSION_TRANSITIONS, transitionSession)
 }
 
 // --- Result-based Transition Functions ---

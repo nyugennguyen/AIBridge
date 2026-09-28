@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto"
 import { digestDispatchEnvelope, digestJson } from "../orchestration/digest.js"
 import { contractErrorSchema, type ContractError, type Result } from "../orchestration/errors.js"
+import { advanceSessionLifecycle } from "../orchestration/transitions.js"
 import {
   adapterCapabilityReportSchema,
   agentInstallationSchema,
@@ -356,7 +357,8 @@ export class OpencodeRuntimeAdapter implements AgentRuntimeAdapter {
         nodeId: this.#nodeId,
         installationId: this.#installationId,
         runtimeKind: this.kind,
-        state: "starting",
+        lifecycleState: "launching",
+        observedState: "starting",
       })
     } catch {
       return failure("internal_failure", "runtime.launch.session_identity", "A canonical runtime session identity could not be created safely.", request.operation.correlationId)
@@ -583,12 +585,19 @@ export class OpencodeRuntimeAdapter implements AgentRuntimeAdapter {
     source: ObservationSource = "api",
     confidence: ObservationConfidence = "authoritative",
   ): AgentRuntimeEvent {
-    const state = status === "busy" || status === "retry" ? "working" : status === "idle" ? "idle" : "unknown"
-    known.session = runtimeSessionSchema.parse({ ...known.session, state })
+    const observed = status === "busy" || status === "retry" ? "working" : status === "idle" ? "idle" : "unknown"
+    // The provider's status is an OBSERVATION. The kernel lifecycle advances
+    // from it through the aggregate machine only, and an `unknown` status makes
+    // no lifecycle claim at all.
+    known.session = runtimeSessionSchema.parse({
+      ...known.session,
+      observedState: observed,
+      lifecycleState: advanceSessionLifecycle(known.session.lifecycleState, observed),
+    })
     return agentRuntimeEventSchema.parse({
       ...this.#eventScope(known),
       type: "lifecycle",
-      state,
+      state: observed,
       source,
       confidence,
       ...(detail === undefined ? {} : { detail }),

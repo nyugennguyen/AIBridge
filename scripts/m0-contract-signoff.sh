@@ -28,7 +28,7 @@ cd "$(dirname "$0")/.."
 
 BASELINE="${1:-e39461a}"
 APPROVAL_DOC="Docs/implementation-reports/m0-contract-reapproval.md"
-CONTRACT_SRC=(src/orchestration/schemas.ts src/orchestration/types.ts)
+CONTRACT_SRC=(src/orchestration/schemas.ts src/orchestration/types.ts src/orchestration/transitions.ts)
 CONTRACT_TESTS=(
   tests/contracts/orchestration-schemas.test.ts
   tests/contracts/legacy-migration.test.ts
@@ -42,6 +42,12 @@ hr() { printf '%s\n' "----------------------------------------------------------
 
 # Digest of exactly the surface a re-approver judges. Includes the contract
 # source, the frozen examples, and the M0 assertions themselves.
+#
+# `transitions.ts` MUST be in this list. Since the lifecycle/observation split it
+# is the source of every persisted enum (`z.enum(RUN_STATES)` and friends) and of
+# the observation->lifecycle map, so omitting it meant the tripwire would not
+# fire on a transition-table change -- the exact change the review exists to
+# catch. Found by the security review (S-3).
 contract_digest() {
   {
     for f in "${CONTRACT_SRC[@]}"; do printf 'src %s\n' "$(shasum -a 256 "$f" | cut -d' ' -f1)"; done

@@ -1,5 +1,6 @@
 import { z } from "zod"
 import {
+  APPROVAL_STATES,
   DISPATCH_STATES,
   RUN_STATES,
   SESSION_OBSERVED_STATES,
@@ -419,6 +420,8 @@ const approvalBasisSchema = z.discriminatedUnion("kind", [
     .strict(),
 ])
 
+export const approvalStateSchema = z.enum(APPROVAL_STATES)
+
 export const approvalSchema = z
   .object({
     schemaVersion: schemaVersionSchema,
@@ -428,11 +431,37 @@ export const approvalSchema = z
     dispatchId: dispatchIdSchema,
     envelopeDigest: digestSchema,
     decision: z.enum(["approved", "rejected"]),
+    /**
+     * Durable approval lifecycle, owned by `./transitions.js`.
+     *
+     * `decision` records what the actor chose; `state` records whether that
+     * choice is still binding. They are different questions: an `approved`
+     * decision whose envelope digest no longer matches the current dispatch is
+     * still an approval that was granted, but its state is `invalidated`. The
+     * Milestone 3 criterion "approval becomes invalid after any envelope
+     * mutation" is unreachable without this field.
+     *
+     * The pair is constrained so the record can never claim, for example, a
+     * `rejected` decision in state `approved`.
+     */
+    state: approvalStateSchema,
     basis: approvalBasisSchema,
     actor: actorSchema,
     decidedAt: timestampSchema,
   })
   .strict()
+  .superRefine((approval, ctx) => {
+    if (approval.decision === "rejected" && approval.state !== "rejected") {
+      addMismatch(
+        ctx,
+        ["state"],
+        `A rejected approval is terminally 'rejected' and cannot be in state '${approval.state}'`,
+      )
+    }
+    if (approval.decision === "approved" && approval.state === "rejected") {
+      addMismatch(ctx, ["state"], "An approved decision cannot be in the terminal 'rejected' state")
+    }
+  })
 
 export const sessionStateSchema = z.enum(SESSION_OBSERVED_STATES)
 
@@ -562,6 +591,47 @@ export const orchestrationEventSchema = z
     z.object({ ...eventCommonShape, type: z.literal("task.created"), payload: z.object({ task: taskSchema }).strict() }).strict(),
     z.object({ ...eventCommonShape, type: z.literal("dispatch.proposed"), payload: z.object({ dispatch: dispatchSchema }).strict() }).strict(),
     z.object({ ...eventCommonShape, type: z.literal("approval.decided"), payload: z.object({ approval: approvalSchema }).strict() }).strict(),
+    z
+      .object({
+        ...eventCommonShape,
+        type: z.literal("approval.invalidated"),
+        payload: z
+          .object({
+            approvalId: approvalIdSchema,
+            projectId: projectIdSchema,
+            runId: runIdSchema,
+            dispatchId: dispatchIdSchema,
+            envelopeDigest: digestSchema,
+            reason: z.string().min(1).max(4_096),
+          })
+          .strict(),
+      })
+      .strict(),
+    z
+      .object({
+        ...eventCommonShape,
+        type: z.literal("run.cancelled"),
+        payload: z.object({ runId: runIdSchema, reason: textSchema }).strict(),
+      })
+      .strict(),
+    z
+      .object({
+        ...eventCommonShape,
+        type: z.literal("dispatch.cancel.requested"),
+        payload: z
+          .object({ runId: runIdSchema, dispatchId: dispatchIdSchema, reason: textSchema, sessionId: sessionIdSchema.optional() })
+          .strict(),
+      })
+      .strict(),
+    z
+      .object({
+        ...eventCommonShape,
+        type: z.literal("dispatch.timeout.requested"),
+        payload: z
+          .object({ runId: runIdSchema, dispatchId: dispatchIdSchema, reason: textSchema, sessionId: sessionIdSchema.optional() })
+          .strict(),
+      })
+      .strict(),
     z.object({ ...eventCommonShape, type: z.literal("dispatch.started"), payload: z.object({ session: sessionSchema }).strict() }).strict(),
     z
       .object({
@@ -618,6 +688,16 @@ export const orchestrationEventSchema = z
       case "approval.decided":
         compareScope(event.payload.approval.projectId, event.payload.approval.runId)
         break
+      case "approval.invalidated":
+        compareScope(event.payload.projectId, event.payload.runId)
+        break
+      case "run.cancelled":
+      case "dispatch.cancel.requested":
+      case "dispatch.timeout.requested":
+        if (event.payload.runId !== event.runId) {
+          addMismatch(ctx, ["payload", "runId"], "Payload run ID must match event")
+        }
+        break
       case "dispatch.started":
       case "session.observed":
         compareScope(event.payload.session.projectId, event.payload.session.runId)
@@ -672,6 +752,45 @@ export const orchestrationCommandSchema = z
     z
       .object({
         ...commandCommonShape,
+        type: z.literal("run.create"),
+        payload: z
+          .object({
+            run: runSchema,
+            tasks: z.array(taskSchema).max(ARRAY_MAX),
+          })
+          .strict(),
+      })
+      .strict(),
+    z
+      .object({
+        ...commandCommonShape,
+        type: z.literal("dispatch.approve"),
+        payload: z.object({ dispatch: dispatchSchema, approval: approvalSchema }).strict(),
+      })
+      .strict(),
+    z
+      .object({
+        ...commandCommonShape,
+        type: z.literal("dispatch.retry"),
+        payload: z
+          .object({
+            dispatch: dispatchSchema,
+            previousDispatchId: dispatchIdSchema,
+            previousAttempt: positiveSafeIntegerSchema,
+          })
+          .strict(),
+      })
+      .strict(),
+    z
+      .object({
+        ...commandCommonShape,
+        type: z.literal("dispatch.timeout.request"),
+        payload: z.object({ dispatchId: dispatchIdSchema, reason: textSchema }).strict(),
+      })
+      .strict(),
+    z
+      .object({
+        ...commandCommonShape,
         type: z.literal("dispatch.execute"),
         payload: z.object({ dispatch: dispatchSchema, approval: approvalSchema }).strict(),
       })
@@ -705,7 +824,19 @@ export const orchestrationCommandSchema = z
     if (!timestampAfter(command.expiresAt, command.issuedAt)) {
       addMismatch(ctx, ["expiresAt"], "Command expiry must be later than issue time")
     }
-    if (command.type === "dispatch.execute") {
+    if (command.type === "run.create") {
+      const { run, tasks } = command.payload
+      if (run.projectId !== command.projectId) addMismatch(ctx, ["payload", "run", "projectId"], "Run project ID must match command")
+      if (run.runId !== command.runId) addMismatch(ctx, ["payload", "run", "runId"], "Run ID must match command")
+      const taskIds = tasks.map((task) => task.taskId)
+      if (!isUnique(taskIds)) addMismatch(ctx, ["payload", "tasks"], "Created task IDs must be unique")
+      tasks.forEach((task, index) => {
+        if (task.projectId !== command.projectId) addMismatch(ctx, ["payload", "tasks", index, "projectId"], "Task project ID must match command")
+        if (task.runId !== command.runId) addMismatch(ctx, ["payload", "tasks", index, "runId"], "Task run ID must match command")
+      })
+    }
+
+    if (command.type === "dispatch.approve" || command.type === "dispatch.execute") {
       const { dispatch, approval } = command.payload
       const envelope = dispatch.envelope
       if (envelope.projectId !== command.projectId) addMismatch(ctx, ["payload", "dispatch", "envelope", "projectId"], "Dispatch project ID must match command")
@@ -715,6 +846,28 @@ export const orchestrationCommandSchema = z
       if (approval.runId !== command.runId) addMismatch(ctx, ["payload", "approval", "runId"], "Approval run ID must match command")
       if (approval.dispatchId !== envelope.dispatchId) addMismatch(ctx, ["payload", "approval", "dispatchId"], "Approval dispatch ID must match dispatch")
       if (approval.envelopeDigest !== dispatch.envelopeDigest) addMismatch(ctx, ["payload", "approval", "envelopeDigest"], "Approval digest must match dispatch")
+      if (approval.state === "invalidated") {
+        addMismatch(ctx, ["payload", "approval", "state"], "An invalidated approval cannot authorize a command")
+      }
+    }
+
+    if (command.type === "dispatch.execute") {
+      const { approval } = command.payload
       if (approval.decision !== "approved") addMismatch(ctx, ["payload", "approval", "decision"], "Execution requires an approved decision record")
+      if (approval.state !== "approved") addMismatch(ctx, ["payload", "approval", "state"], "Execution requires an approval in state 'approved'")
+    }
+
+    if (command.type === "dispatch.retry") {
+      const { dispatch, previousDispatchId, previousAttempt } = command.payload
+      const envelope = dispatch.envelope
+      if (envelope.projectId !== command.projectId) addMismatch(ctx, ["payload", "dispatch", "envelope", "projectId"], "Dispatch project ID must match command")
+      if (envelope.runId !== command.runId) addMismatch(ctx, ["payload", "dispatch", "envelope", "runId"], "Dispatch run ID must match command")
+      if (envelope.controllerEpoch !== command.controllerEpoch) addMismatch(ctx, ["payload", "dispatch", "envelope", "controllerEpoch"], "Dispatch epoch must match command")
+      if (envelope.dispatchId === previousDispatchId) {
+        addMismatch(ctx, ["payload", "dispatch", "envelope", "dispatchId"], "A retry must propose a new dispatch identity so failure history is preserved")
+      }
+      if (envelope.attempt <= previousAttempt) {
+        addMismatch(ctx, ["payload", "dispatch", "envelope", "attempt"], "A retry must use a strictly greater attempt number")
+      }
     }
   })

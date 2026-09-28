@@ -6,6 +6,7 @@
   "dispatchId": "dispatch-contract",
   "envelopeDigest": "sha256:82607667ee132b0180fcb8e09796b5b399d4967b43a985bf0c8e0382fba8d7dd",
   "decision": "approved",
+  "state": "approved",
   "basis": { "kind": "user" },
   "actor": { "kind": "user", "userId": "user-contract" },
   "decidedAt": "2026-09-17T00:00:30.000Z"

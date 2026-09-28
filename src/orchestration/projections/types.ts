@@ -14,6 +14,7 @@ import type {
 } from "../identifiers.js"
 import type {
   Actor,
+  Approval,
   Artifact,
   DispatchEnvelope,
   ExternalReference,
@@ -64,6 +65,15 @@ export interface TaskProjection {
   readonly failurePolicy: "block" | "fail" | null
   readonly currentDispatchId: DispatchId | null
   readonly dispatchAttempts: number
+  /**
+   * Whether a failed task is still eligible for another attempt. A `failed`
+   * attempt does NOT by itself end the run: the plan states that a retry adds a
+   * dispatch attempt rather than erasing failure history, so a task that failed
+   * but can be retried must not drive the run terminal. This is tracked
+   * explicitly rather than inferred from `dispatchAttempts`, because "how many
+   * attempts so far" and "may it be attempted again" are different questions.
+   */
+  readonly retryable: boolean
   readonly createdAt: Timestamp
   readonly updatedAt: Timestamp
 }
@@ -83,6 +93,14 @@ export interface DispatchProjection {
   readonly updatedAt: Timestamp
   readonly outcome: "completed" | "failed" | "timed_out" | "cancelled" | null
   readonly summary: string | null
+  /**
+   * A cancel/timeout REQUEST has been recorded but the runtime termination
+   * outcome has not yet been observed. Derived from the request events, never
+   * a lifecycle state: the dispatch stays `running` until a `dispatch.finished`
+   * says otherwise.
+   */
+  readonly cancelRequested: boolean
+  readonly timeoutRequested: boolean
 }
 
 export interface ApprovalProjection {
@@ -91,10 +109,25 @@ export interface ApprovalProjection {
   readonly runId: RunId
   readonly projectId: ProjectId
   readonly decision: "approved" | "rejected"
+  /**
+   * Durable approval lifecycle, mirroring the machine in `../transitions.js`.
+   * `decision` is what the actor chose; `state` is whether that choice still
+   * binds. An approval whose envelope was mutated after the decision moves to
+   * `invalidated` and can never again authorize the dispatch.
+   */
+  readonly state: ApprovalState
   readonly envelopeDigest: Digest
   readonly actor: Actor
+  /**
+   * The basis the decision was taken on. Retained so the reducer can rebuild a
+   * full `Approval` record and re-verify it against a later envelope without
+   * inventing a basis.
+   */
+  readonly basis: Approval["basis"]
   readonly policyResult: unknown
   readonly decidedAt: Timestamp
+  /** Recorded only when `state` is `invalidated`, so an audit view can say why. */
+  readonly invalidatedReason?: string
 }
 
 export interface SessionProjection {

@@ -158,6 +158,7 @@ const approval = {
   dispatchId: "dispatch-1",
   envelopeDigest: DIGEST,
   decision: "approved",
+  state: "approved",
   basis: { kind: "rule", ruleId: "rule-1", ruleVersion: 1 },
   actor: { kind: "system", name: "policy-engine" },
   decidedAt: NOW,

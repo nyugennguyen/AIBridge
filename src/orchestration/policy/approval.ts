@@ -91,6 +91,11 @@ export function createApproval(input: CreateApprovalInput): Result<Approval> {
     dispatchId: envelope.dispatchId,
     envelopeDigest,
     decision: input.decision,
+    // A freshly recorded decision is by definition still binding: it was taken
+    // against exactly this envelope digest, which is the same digest the
+    // record carries. Anything that later makes it stop binding is an
+    // invalidation, recorded as such rather than folded in here.
+    state: input.decision === "rejected" ? "rejected" : "approved",
     basis: input.basis,
     actor: input.actor,
     decidedAt: input.decidedAt,

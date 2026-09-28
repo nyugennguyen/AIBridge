@@ -401,6 +401,10 @@ export class InMemoryLocalApplicationService implements LocalApplicationService 
         dispatchId: proposal.dispatch.envelope.dispatchId,
         envelopeDigest: proposal.dispatch.envelopeDigest,
         decision: command.decision,
+        // A decision recorded here is taken against exactly the envelope digest
+        // above, so it starts binding; any later mutation of the envelope is what
+        // moves it to `invalidated`.
+        state: command.decision === "rejected" ? "rejected" : "approved",
         basis: { kind: "user" },
         actor: { kind: "user", userId: userIdSchema.parse(command.userId) },
         decidedAt: this.#now(),

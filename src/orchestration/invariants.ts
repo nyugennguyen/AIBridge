@@ -65,6 +65,16 @@ export const COMMAND_MATRIX: Readonly<Record<CommandType, CommandStateRule>> = {
     allowedRunStates: ["draft", "active"],
     allowedTaskStates: ["ready"],
   },
+  "run.pause": {
+    // A run-level gate on work that has not finished. Pausing a terminal run is
+    // refused by `runSchema` and by the coordinator, so only live states appear.
+    allowedRunStates: ["draft", "active"],
+  },
+  "run.resume": {
+    // Clearing the gate is the only way back to schedulable work, so it is an
+    // explicit evented decision rather than an implicit re-derivation.
+    allowedRunStates: ["draft", "active"],
+  },
   "dispatch.approve": {
     allowedRunStates: ["draft", "active"],
     allowedDispatchStates: ["proposed"],

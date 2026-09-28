@@ -115,12 +115,22 @@ describe("TUI run/audit adapter, from recorded event fixtures", () => {
     })
 
     it("shows sessions with both the kernel lifecycle and the provider observation", () => {
+      // A terminal lifecycle is never paired with a live provider report. The
+      // earlier expectations here asserted exactly that contradiction
+      // (`completed` + `working`), which `sessionSchema` now refuses; the
+      // recorded outcome is the observed fact, so it is written to both axes.
       expect(view.sessions.map((session) => [session.sessionId, session.state, session.observedState])).toEqual([
-        ["sess-a-1", "completed", "working"],
-        ["sess-b-1", "completed", "starting"],
-        ["sess-c-1", "failed", "blocked"],
-        ["sess-c-2", "completed", "working"],
+        ["sess-a-1", "completed", "completed"],
+        ["sess-b-1", "completed", "completed"],
+        ["sess-c-1", "failed", "failed"],
+        ["sess-c-2", "completed", "completed"],
       ])
+      // The invariant itself: no session claims to be finished and still live.
+      for (const session of view.sessions) {
+        if (["completed", "failed", "cancelled", "timed_out"].includes(session.state)) {
+          expect(["completed", "failed", "unknown"]).toContain(session.observedState)
+        }
+      }
       expect(view.sessions[0]).toMatchObject({ nodeId: "node-worker-1", runtimeKind: "opencode", terminalId: "term-release-1" })
     })
 

@@ -6,6 +6,8 @@ import {
   SESSION_OBSERVED_STATES,
   SESSION_STATES,
   TASK_STATES,
+  isRunTerminal,
+  isSessionTerminal,
 } from "./transitions.js"
 import {
   approvalIdSchema,
@@ -161,6 +163,21 @@ export const runSchema = z
     externalReferences: z.array(externalReferenceSchema).max(ARRAY_MAX),
   })
   .strict()
+  .superRefine((run, ctx) => {
+    // `paused` is a run-level GATE on non-terminal work, not a lifecycle state.
+    // Before the split, `state: "paused"` was itself mutually exclusive with the
+    // terminal states, so this combination was unrepresentable. Splitting the
+    // axis into a boolean silently gave that up, so it is restored explicitly
+    // here: pausing finished work is a contradiction, and a terminal run is
+    // absorbing, so it can never be re-opened by a pause.
+    if (run.paused && isRunTerminal(run.state)) {
+      addMismatch(
+        ctx,
+        ["paused"],
+        `A run in terminal state '${run.state}' cannot be paused; pausing gates work that has not finished`,
+      )
+    }
+  })
   .refine((run) => Date.parse(run.updatedAt) >= Date.parse(run.createdAt), {
     path: ["updatedAt"],
     message: "Updated time cannot precede creation time",
@@ -443,6 +460,13 @@ export const approvalSchema = z
      *
      * The pair is constrained so the record can never claim, for example, a
      * `rejected` decision in state `approved`.
+     *
+     * `pending` is additionally unreachable alongside a decision. `decision` and
+     * `decidedAt` are both required, so a record carrying either decision HAS
+     * been decided; the only way to build `decision:"approved", state:"pending"`
+     * is to fabricate a decision that was never taken. ADR 0001 states that "an
+     * undecided dispatch has no decision record", so a pending approval is
+     * represented by the ABSENCE of one, not by a half-populated record.
      */
     state: approvalStateSchema,
     basis: approvalBasisSchema,
@@ -461,11 +485,31 @@ export const approvalSchema = z
     if (approval.decision === "approved" && approval.state === "rejected") {
       addMismatch(ctx, ["state"], "An approved decision cannot be in the terminal 'rejected' state")
     }
+    // `decision` and `decidedAt` are both required, so any Approval record HAS
+    // been decided. `pending` therefore contradicts the record's own existence,
+    // and allowing it would let a caller fabricate an undecided approval that
+    // later reads as a live one. An undecided dispatch has no record at all.
+    if (approval.state === "pending") {
+      addMismatch(
+        ctx,
+        ["state"],
+        "An approval record carries a decision and a decision time, so it cannot be 'pending'; an undecided dispatch has no approval record",
+      )
+    }
   })
 
 export const sessionStateSchema = z.enum(SESSION_OBSERVED_STATES)
 
 export const sessionLifecycleStateSchema = z.enum(SESSION_STATES)
+
+/**
+ * Provider observations compatible with a TERMINAL session lifecycle.
+ *
+ * `unknown` is included because it is the absence of a claim rather than a
+ * competing one, which is exactly what an ambiguous disconnect reports. A
+ * `completed` or `failed` lifecycle agrees with its matching observation.
+ */
+const SESSION_TERMINAL_OBSERVATIONS: ReadonlySet<string> = new Set(["completed", "failed", "unknown"])
 
 export const sessionSchema = z
   .object({
@@ -483,6 +527,22 @@ export const sessionSchema = z
     terminalId: terminalIdSchema.optional(),
   })
   .strict()
+  .superRefine((session, ctx) => {
+    // The two axes are separate, but they are not unconstrained. A finished
+    // session cannot simultaneously be reporting that it is working: that pair
+    // would let an audit view claim a live session and a terminal dispatch at
+    // once. `unknown` is the one observation compatible with a terminal
+    // lifecycle, because it is the absence of a claim rather than a competing
+    // one. The `approvalSchema` constraint added in the same change established
+    // this pattern; omitting it here left the session unconstrained.
+    if (isSessionTerminal(session.lifecycleState) && !SESSION_TERMINAL_OBSERVATIONS.has(session.observedState)) {
+      addMismatch(
+        ctx,
+        ["observedState"],
+        `A session with terminal lifecycle '${session.lifecycleState}' cannot be observed as '${session.observedState}'; a finished session is only compatible with a completed, failed or unknown observation`,
+      )
+    }
+  })
 
 const memoryScopeSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("project") }).strict(),
@@ -611,6 +671,20 @@ export const orchestrationEventSchema = z
       .object({
         ...eventCommonShape,
         type: z.literal("run.cancelled"),
+        payload: z.object({ runId: runIdSchema, reason: textSchema }).strict(),
+      })
+      .strict(),
+    z
+      .object({
+        ...eventCommonShape,
+        type: z.literal("run.paused"),
+        payload: z.object({ runId: runIdSchema, reason: textSchema }).strict(),
+      })
+      .strict(),
+    z
+      .object({
+        ...eventCommonShape,
+        type: z.literal("run.resumed"),
         payload: z.object({ runId: runIdSchema, reason: textSchema }).strict(),
       })
       .strict(),
@@ -759,6 +833,20 @@ export const orchestrationCommandSchema = z
             tasks: z.array(taskSchema).max(ARRAY_MAX),
           })
           .strict(),
+      })
+      .strict(),
+    z
+      .object({
+        ...commandCommonShape,
+        type: z.literal("run.pause"),
+        payload: z.object({ reason: textSchema }).strict(),
+      })
+      .strict(),
+    z
+      .object({
+        ...commandCommonShape,
+        type: z.literal("run.resume"),
+        payload: z.object({ reason: textSchema }).strict(),
       })
       .strict(),
     z

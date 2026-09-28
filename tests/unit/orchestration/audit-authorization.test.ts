@@ -210,7 +210,7 @@ function makeHarness(options: { boundary?: EffectBoundary; seed?: RunProjectionS
     log,
     now: () => NOW,
     newEventId: () => `evt-${++eventSeq}`,
-    readRun: (runId) => (projection.run.runId === runId ? projection : undefined),
+    readRun: (runId) => (projection === null ? undefined : projection.run.runId === runId ? projection : undefined),
     ...(options.boundary === undefined ? {} : { boundary: options.boundary }),
   })
 

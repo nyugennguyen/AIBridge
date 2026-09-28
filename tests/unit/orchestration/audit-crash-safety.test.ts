@@ -193,7 +193,7 @@ function makeDurableHarness() {
     log,
     now: () => NOW,
     newEventId: () => `evt-${receipts.size + 1}`,
-    readRun: (runId) => (projection.run.runId === runId ? projection : undefined),
+    readRun: (runId) => (projection === null ? undefined : projection.run.runId === runId ? projection : undefined),
   })
 
   const foldAll = () => {

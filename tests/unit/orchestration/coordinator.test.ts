@@ -185,7 +185,7 @@ function makeHarness(options: { boundary?: EffectBoundary; seed?: RunProjectionS
     log,
     now: () => NOW,
     newEventId: () => `evt-${++eventSeq}`,
-    readRun: (runId) => (projection.run.runId === runId ? projection : undefined),
+    readRun: (runId) => (projection === null ? undefined : projection.run.runId === runId ? projection : undefined),
     ...(options.boundary === undefined ? {} : { boundary: options.boundary }),
   }
   const coordinator = new DispatchCoordinator(deps)
@@ -497,7 +497,9 @@ describe("Failure boundaries (plan lines 77-86)", () => {
         } as EffectBoundary,
       })
 
-      expect(() => h.coordinator.submit(baseCommand("run.create", { run: makeRun("draft"), tasks: [makeTask()] }))).toThrow(/crash/)
+      // `run.pause` is valid against the seeded run; `run.create` would be
+      // refused by the create-once precondition and never reach the boundary.
+      expect(() => h.coordinator.submit(baseCommand("run.pause", { reason: "operator" }))).toThrow(/crash/)
       // Nothing was recorded, so the same command can be retried cleanly.
       expect(h.calls).toHaveLength(0)
     }
@@ -518,7 +520,7 @@ describe("Failure boundaries (plan lines 77-86)", () => {
         },
       },
     })
-    const command = baseCommand("run.create", { run: makeRun("draft"), tasks: [makeTask()] })
+    const command = baseCommand("run.pause", { reason: "operator" })
     expect(() => h.coordinator.submit(command)).toThrow(/crash after commit/)
 
     // The append DID commit: the event is in the log.

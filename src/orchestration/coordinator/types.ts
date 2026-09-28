@@ -88,6 +88,8 @@ export type CoordinatorResult<T> = { readonly ok: true; readonly value: T } | { 
  */
 export const COMMAND_EVENT_ALLOWLIST: Readonly<Record<string, readonly string[]>> = {
   "run.create": ["run.created", "task.created"],
+  "run.pause": ["run.paused"],
+  "run.resume": ["run.resumed"],
   "dispatch.propose": ["dispatch.proposed"],
   "run.cancel": ["run.cancelled"],
   // A revision is a proposal: the plan states an edited envelope creates a new

@@ -58,6 +58,13 @@ export const COMMAND_MATRIX: Readonly<Record<CommandType, CommandStateRule>> = {
     // until someone states the states it may act in.
     allowedRunStates: ["draft"],
   },
+  "dispatch.propose": {
+    // A first proposal for a task. The run must be live (not terminal) and the
+    // task must be ready, so a dispatch cannot be proposed for work that is
+    // still blocked on its dependencies or for a finished run.
+    allowedRunStates: ["draft", "active"],
+    allowedTaskStates: ["ready"],
+  },
   "dispatch.approve": {
     allowedRunStates: ["draft", "active"],
     allowedDispatchStates: ["proposed"],

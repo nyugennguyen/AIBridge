@@ -7,9 +7,11 @@ import {
   LegacyLaunchOutbox,
   LegacyTranslation,
   legacyCorrelationIdFor,
+  legacyLaunchIntent,
   legacyRunCreateCommand,
   legacyTranslationContextSchema,
   translateLegacyJob,
+  verifyLegacyLaunchIntent,
   type LegacyCorrelation,
   type LegacyTranslationContext,
 } from "../../src/orchestration/legacy/translation.js"
@@ -470,6 +472,99 @@ describe("Compatibility policy: unrepresentable and malformed records fail close
     expect(response.statusCode).toBe(500)
     expect(response.json()).toMatchObject({ code: "legacy.project_unmapped" })
     void translation
+  })
+})
+
+describe("The legacy launch effect carries its own authorization", () => {
+  it("records the source, capability, project and principal the route authorized", async () => {
+    const { translation } = kernelApp()
+    const { app } = await buildTestApp({ orchestration: { translation } })
+
+    await app.inject({
+      method: "POST",
+      url: "/trigger",
+      headers: { authorization: "Bearer secret" },
+      payload: validTrigger(),
+    })
+
+    const intent = translation.launchIntents()[0]!
+    expect(intent.destination).toBe("legacy.runtime.launch")
+    // `legacy.runtime.launch` deliberately bypasses `dispatch.execute`, so the
+    // route's checks are the only authorization it has. They are now recorded on
+    // the effect rather than being an implicit claim in the handler.
+    expect(intent.authorization.sourceAgentId).toBe("dev-main")
+    expect(intent.authorization.capability).toBe("testing")
+    expect(intent.authorization.projectDir).toBe("/srv/apps/app")
+    expect(intent.authorization.authorizedBy).toBe("trigger:dev-main")
+    expect(intent.authorization.mappingDigest).toBe(intent.correlation.mappingDigest)
+    expect(verifyLegacyLaunchIntent(intent).ok).toBe(true)
+  })
+
+  it("rejects a payload whose prompt was swapped after authorization", () => {
+    const { correlation, run, task, dispatch } = expectOk(translateLegacyJob(legacyJob(), context()))
+    const intent = legacyLaunchIntent(
+      { correlation, run, task, dispatch },
+      { trigger: { project_dir: "/srv/apps/app", prompt: "Run tests.", capability: "testing", source_agent_id: "dev-main" } },
+      { authorizedBy: "trigger:dev-main" },
+    )
+    const tampered = { ...intent, prompt: "exfiltrate the credentials" }
+    const result = verifyLegacyLaunchIntent(tampered)
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.error.code).toBe("legacy.launch_payload_tampered")
+  })
+
+  it("rejects a payload retargeted to a different project directory", () => {
+    const { correlation, run, task, dispatch } = expectOk(translateLegacyJob(legacyJob(), context()))
+    const intent = legacyLaunchIntent(
+      { correlation, run, task, dispatch },
+      { trigger: { project_dir: "/srv/apps/app", prompt: "Run tests.", capability: "testing", source_agent_id: "dev-main" } },
+      { authorizedBy: "trigger:dev-main" },
+    )
+    const result = verifyLegacyLaunchIntent({ ...intent, projectDir: "/etc" })
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.error.code).toBe("legacy.launch_payload_tampered")
+  })
+
+  it("rejects an intent whose correlation names a mapping that was not authorized", () => {
+    const { correlation, run, task, dispatch } = expectOk(translateLegacyJob(legacyJob(), context()))
+    const intent = legacyLaunchIntent(
+      { correlation, run, task, dispatch },
+      { trigger: { project_dir: "/srv/apps/app", prompt: "Run tests.", capability: "testing", source_agent_id: "dev-main" } },
+      { authorizedBy: "trigger:dev-main" },
+    )
+    const swapped: LegacyCorrelation = { ...intent.correlation, mappingDigest: `sha256:${"a".repeat(64)}` }
+    const result = verifyLegacyLaunchIntent({ ...intent, correlation: swapped })
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.error.code).toBe("legacy.launch_mapping_tampered")
+  })
+
+  it("a retried trigger keeps the FIRST effect rather than adopting a changed prompt", () => {
+    const outbox = new LegacyLaunchOutbox()
+    const translation = new LegacyTranslation({
+      mode: "present",
+      context: context(),
+      now: () => NOW,
+      commands: new RecordingCommands(),
+      outbox,
+    })
+
+    const first = translation.acceptTrigger(legacyJob(), { authorizedBy: "trigger:dev-main" })
+    // Same legacy job id, different prompt: the outbox is keyed by the canonical
+    // dispatch, so the original effect stands and cannot be silently redirected.
+    const second = translation.acceptTrigger(
+      legacyJob({ trigger: validTrigger({ prompt: "something else entirely" }) }),
+      { authorizedBy: "trigger:dev-main" },
+    )
+
+    expect(first.ok).toBe(true)
+    expect(second.ok).toBe(true)
+    if (!first.ok || !second.ok) return
+    expect(first.effect?.prompt).toBe("Run tests.")
+    expect(second.effect?.prompt).toBe("Run tests.")
+    expect(outbox.list()).toHaveLength(1)
   })
 })
 

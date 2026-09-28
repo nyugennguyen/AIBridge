@@ -507,9 +507,10 @@ describe("TUI run/audit adapter, from recorded event fixtures", () => {
       const rebuilt = await engine.rebuildRun(RUN_ID)
       const folded = fold(events)
       // A stored event carries a global insertion position the raw fixture does
-      // not, so the digests legitimately differ; every other fact is identical,
-      // and the view a TUI renders is position-independent.
-      expect(rebuilt.stateDigest).not.toBe(folded.stateDigest)
+      // not. That cursor is a read-lag report, not part of the run's identity, so
+      // `stateDigest` is the SAME for the replayed and the folded projection: the
+      // digest is a function of the events, not of how they were delivered.
+      expect(rebuilt.stateDigest).toBe(folded.stateDigest)
       expect(withoutStreamPosition(rebuilt)).toEqual(withoutStreamPosition(folded))
       // The view a TUI renders is a pure function of the log, so a restart that
       // rebuilds from SQLite produces exactly the same audit view.

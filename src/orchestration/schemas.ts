@@ -764,6 +764,13 @@ export const orchestrationCommandSchema = z
     z
       .object({
         ...commandCommonShape,
+        type: z.literal("dispatch.propose"),
+        payload: z.object({ dispatch: dispatchSchema }).strict(),
+      })
+      .strict(),
+    z
+      .object({
+        ...commandCommonShape,
         type: z.literal("dispatch.approve"),
         payload: z.object({ dispatch: dispatchSchema, approval: approvalSchema }).strict(),
       })

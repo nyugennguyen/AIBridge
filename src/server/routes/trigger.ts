@@ -56,7 +56,9 @@ export function registerTriggerRoute(app: FastifyInstance, dependencies: AppDepe
         // A blocked job is still ACCEPTED work, so the kernel records it. It
         // maps to a paused draft run with no launch effect: the job must not
         // reach a runtime until its dependencies are satisfied.
-        const blockedAcceptance = dependencies.orchestration?.translation.acceptTrigger(blocked)
+        const blockedAcceptance = dependencies.orchestration?.translation.acceptTrigger(blocked, {
+          authorizedBy: `trigger:${trigger.source_agent_id}`,
+        })
         if (blockedAcceptance !== undefined && !blockedAcceptance.ok) {
           await dependencies.jobManager.markFailed(job.id, blockedAcceptance.error.message)
           return reply.code(500).send({ error: blockedAcceptance.error.message, code: blockedAcceptance.error.code })
@@ -79,7 +81,9 @@ export function registerTriggerRoute(app: FastifyInstance, dependencies: AppDepe
       // accepted intent is recorded FIRST and the runtime launch happens after
       // that append has committed. When no kernel is attached this call is a
       // no-op and the launch proceeds exactly as it did before.
-      const acceptance = dependencies.orchestration?.translation.acceptTrigger(job)
+      const acceptance = dependencies.orchestration?.translation.acceptTrigger(job, {
+        authorizedBy: `trigger:${trigger.source_agent_id}`,
+      })
       if (acceptance !== undefined && !acceptance.ok) {
         // Fail closed: the legacy job exists in the JSON store but the kernel
         // cannot account for it. Reporting 202 here would tell the caller work

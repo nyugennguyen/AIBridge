@@ -70,6 +70,37 @@ export function evaluateTaskReadiness(
   const readiness: Record<string, TaskReadiness> = {}
   const toSkipMap = new Map<string, TaskToSkip>()
 
+  // A PAUSED RUN is a gate, not a lifecycle state. The projection records it (a
+  // legacy import and a dependency-blocked legacy trigger both land paused with
+  // no canonical approval behind them), and nothing else stops the scheduler from
+  // calling their tasks `ready`. Honoured terminal work is still reported as
+  // itself, so pausing does not erase an outcome that already happened.
+  if (runState.run.paused) {
+    for (const taskId of dag.topologicalOrder) {
+      const task = runState.tasks[taskId]
+      if (!task) continue
+      const currentState = task.state
+      const settled =
+        currentState === "completed" ||
+        currentState === "running" ||
+        currentState === "failed" ||
+        currentState === "cancelled" ||
+        currentState === "skipped"
+      readiness[taskId] = {
+        taskId,
+        status: settled ? currentState : "waiting",
+        currentTaskState: currentState,
+        unsatisfiedDependencies: [],
+        failedDependencies: [],
+        failurePolicy: normalizeFailurePolicy(task.failurePolicy, defaultPolicy),
+        reason: settled
+          ? `Task is already in state '${currentState}'`
+          : `Run '${runState.run.runId}' is paused, so no task is schedulable`,
+      }
+    }
+    return readiness
+  }
+
   // Process in topological order so prerequisite failure states cascade downstream
   for (const taskId of dag.topologicalOrder) {
     const task = runState.tasks[taskId]

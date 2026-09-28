@@ -9,6 +9,19 @@ export interface ProjectionEngineOptions {
   readonly store?: SqliteEventStore
 }
 
+/**
+ * Drops the store's global insertion cursor.
+ *
+ * It is present only on events read back from `readStream`, so it reports how
+ * far a reader has consumed the store — never a difference in the run's domain
+ * state. See `computeStateDigest`.
+ */
+function withoutStreamPosition(state: RunProjectionState): Omit<RunProjectionState, "lastAppliedPosition"> {
+  const { lastAppliedPosition: _cursor, ...rest } = state
+  void _cursor
+  return rest
+}
+
 export class ProjectionEngine {
   private readonly store?: SqliteEventStore
   private readonly projections = new Map<string, RunProjectionState>()
@@ -84,8 +97,18 @@ export class ProjectionEngine {
       )
     }
 
-    const incrementalCanonical = canonicalJson(stripUndefined(incremental))
-    const replayedCanonical = canonicalJson(stripUndefined(replayed))
+    // The stream cursor is compared explicitly rather than folded into the
+    // canonical comparison: a projection fed live `OrchestrationEvent`s has no
+    // `globalPosition` on them, so only the STORE read carries it. It is a
+    // reportable read lag, not part of the state's identity.
+    if (incremental.lastAppliedSequence !== replayed.lastAppliedSequence) {
+      throw new Error(
+        `Replay equivalence failure for run ${runId}: incremental applied sequence ${incremental.lastAppliedSequence} !== replayed ${replayed.lastAppliedSequence}`
+      )
+    }
+
+    const incrementalCanonical = canonicalJson(stripUndefined(withoutStreamPosition(incremental)))
+    const replayedCanonical = canonicalJson(stripUndefined(withoutStreamPosition(replayed)))
     if (incrementalCanonical !== replayedCanonical) {
       throw new Error(
         `Replay equivalence byte mismatch for run ${runId}: canonical JSON representations differ`

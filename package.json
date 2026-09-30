@@ -31,6 +31,7 @@
     "release:check": "bun install --frozen-lockfile && bun run build && bun test && bun run typecheck && shellcheck scripts/install.sh && bash -n scripts/install.sh && bun dist/cli.js --help && bun pm pack --dry-run"
   },
   "dependencies": {
+    "@fastify/websocket": "11.3.1",
     "@opencode-ai/sdk": "1.17.7",
     "@opentui/core": "0.5.11",
     "fastify": "5.8.5",

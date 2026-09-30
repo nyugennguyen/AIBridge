@@ -884,7 +884,25 @@ export function reduceEvent(
         // observed, but it must not recompute the run's lifecycle.
         nextRun = { ...nextRun, updatedAt: event.occurredAt }
       } else if (taskList.length > 0) {
-        const allTerminal = taskList.every((t) => ["completed", "failed", "cancelled", "skipped"].includes(t.state))
+        // M4.0. `retryable` is consulted here because the arm above already
+        // records it, and the comment there already states the rule: "a failed
+        // attempt that the plan permits to be retried must not end the run". The
+        // run-termination test ignored that flag, so the rule was a comment rather
+        // than behaviour — a run with one flaky task went `failed` on the first
+        // failed attempt, and because a terminal run is absorbing the failure
+        // became permanent in the read model. That is exactly what the plan's
+        // "a retry ADDS a dispatch attempt rather than erasing failure history"
+        // forbids, and it is why switching COMMAND_MATRIX on at the seam (M4-M)
+        // made `dispatch.retry` unreachable: the matrix's `allowedRunStates:
+        // ["draft", "active"]` was refusing a command whose only purpose is to
+        // follow a failed attempt.
+        //
+        // A `retryable` task is therefore NOT settled, and the run stays live.
+        // What eventually ends the run is a later attempt, or an explicit
+        // `run.cancel` — never the first failed attempt on its own.
+        const allTerminal = taskList.every(
+          (t) => !t.retryable && ["completed", "failed", "cancelled", "skipped"].includes(t.state),
+        )
         if (allTerminal) {
           const allCompleted = taskList.every((t) => t.state === "completed" || t.state === "skipped")
           const allCancelled = taskList.every((t) => t.state === "cancelled")

@@ -16,7 +16,16 @@ export class EventStoreError extends Error {
   }
 }
 
-export class UnsupportedSchemaVersionError extends EventStoreError {
+/**
+ * The DATABASE file's schema version is unsupported.
+ *
+ * Renamed from `UnsupportedSchemaVersionError` at M4.0 so it cannot be confused
+ * with the RECORD version error in `../versioning.ts`. A payload shape change is
+ * answered by a record version bump, never by a migration, so "the database is
+ * too new" and "this record's shape is too new" are genuinely different
+ * failures with different remedies.
+ */
+export class UnsupportedDatabaseVersionError extends EventStoreError {
   readonly dbVersion: number
   readonly supportedVersion: number
 
@@ -26,7 +35,7 @@ export class UnsupportedSchemaVersionError extends EventStoreError {
       "schema.unsupported_version",
       "internal_failure",
     )
-    this.name = "UnsupportedSchemaVersionError"
+    this.name = "UnsupportedDatabaseVersionError"
     this.dbVersion = dbVersion
     this.supportedVersion = supportedVersion
   }

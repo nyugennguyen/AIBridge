@@ -1,6 +1,6 @@
 import type { SqliteDriver } from "./sqlite-driver.js"
 import {
-  CURRENT_SCHEMA_VERSION,
+  CURRENT_DATABASE_VERSION,
   DISPATCH_ENVELOPE_TOMBSTONE_SQL,
   INITIAL_SCHEMA_SQL,
   OUTBOX_LEASE_COLUMNS_SQL,
@@ -13,7 +13,7 @@ import {
   FailedMigrationError,
   IncompleteMigrationHistoryError,
   IncompleteSchemaError,
-  UnsupportedSchemaVersionError,
+  UnsupportedDatabaseVersionError,
 } from "./errors.js"
 
 export interface Migration {
@@ -125,7 +125,7 @@ function readAppliedVersions(driver: SqliteDriver): number[] {
  */
 export function assertMigrationHistoryIsContiguous(
   driver: SqliteDriver,
-  maxKnownVersion: number = CURRENT_SCHEMA_VERSION
+  maxKnownVersion: number = CURRENT_DATABASE_VERSION
 ): void {
   ensureMigrationsTable(driver)
   const applied = readAppliedVersions(driver)
@@ -140,13 +140,13 @@ export function assertMigrationHistoryIsContiguous(
   }
   const unknown = applied.filter((v) => v > maxKnownVersion)
   if (unknown.length > 0) {
-    throw new UnsupportedSchemaVersionError(Math.max(...unknown), maxKnownVersion)
+    throw new UnsupportedDatabaseVersionError(Math.max(...unknown), maxKnownVersion)
   }
 }
 
 export function assertSchemaObjectsPresent(
   driver: SqliteDriver,
-  expectedVersion: number = CURRENT_SCHEMA_VERSION
+  expectedVersion: number = CURRENT_DATABASE_VERSION
 ): void {
   if (expectedVersion < 2) return
   const missing: { type: string, name: string }[] = []
@@ -169,11 +169,11 @@ export function assertSchemaObjectsPresent(
  */
 export function assertSchemaVersionSupported(
   driver: SqliteDriver,
-  expectedVersion: number = CURRENT_SCHEMA_VERSION
+  expectedVersion: number = CURRENT_DATABASE_VERSION
 ): void {
   const currentVersion = getSchemaVersion(driver)
   if (currentVersion > expectedVersion) {
-    throw new UnsupportedSchemaVersionError(currentVersion, expectedVersion)
+    throw new UnsupportedDatabaseVersionError(currentVersion, expectedVersion)
   }
 }
 
@@ -183,13 +183,13 @@ export function runMigrations(
 ): MigrationResult {
   const options: RunMigrationsOptions =
     typeof optionsOrTarget === "number" ? { targetVersion: optionsOrTarget } : (optionsOrTarget ?? {})
-  const targetVersion = options.targetVersion ?? CURRENT_SCHEMA_VERSION
+  const targetVersion = options.targetVersion ?? CURRENT_DATABASE_VERSION
 
   ensureMigrationsTable(driver)
 
   const currentVersion = getSchemaVersion(driver)
   if (currentVersion > targetVersion) {
-    throw new UnsupportedSchemaVersionError(currentVersion, targetVersion)
+    throw new UnsupportedDatabaseVersionError(currentVersion, targetVersion)
   }
 
   assertMigrationHistoryIsContiguous(driver, targetVersion)
@@ -244,7 +244,7 @@ export function runMigrations(
 
 export function verifySchemaVersion(
   driver: SqliteDriver,
-  expectedVersion: number = CURRENT_SCHEMA_VERSION
+  expectedVersion: number = CURRENT_DATABASE_VERSION
 ): void {
   assertSchemaVersionSupported(driver, expectedVersion)
   assertMigrationHistoryIsContiguous(driver, expectedVersion)

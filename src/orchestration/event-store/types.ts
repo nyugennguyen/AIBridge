@@ -116,8 +116,14 @@ export interface ClaimOutboxOptions extends OutboxFilter {
   readonly limit?: number
   /** How long the claim stays valid before `recoverStaleOutbox` may requeue it. */
   readonly leaseMs?: number
-  /** Injectable clock so recovery/backoff is testable without sleeping. */
-  readonly now?: Timestamp
+  /**
+   * The injected clock, REQUIRED.
+   *
+   * Not optional and with no wall-clock default, so a caller cannot stamp a row
+   * with a real instant by forgetting it: the omission the compiler reports is
+   * cheap, and the one that reaches production is not.
+   */
+  readonly now: Timestamp
   /** Injectable token so a caller can correlate a claim across processes. */
   readonly claimToken?: string
 }

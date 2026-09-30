@@ -4,6 +4,7 @@ import { contractErrorSchema } from "../../src/orchestration/errors.js"
 import {
   nodeIdSchema,
   projectIdSchema,
+  SCHEMA_VERSIONS,
   timestampSchema,
   type NodeId,
 } from "../../src/orchestration/identifiers.js"
@@ -274,8 +275,27 @@ describe("version 1 orchestration records", () => {
 
   it("rejects missing, future, and unknown record fields", () => {
     expect(meshSchema.safeParse({ meshId: "mesh-1", displayName: "Mesh", createdAt: NOW }).success).toBe(false)
-    expect(meshSchema.safeParse({ schemaVersion: 2, meshId: "mesh-1", displayName: "Mesh", createdAt: NOW }).success).toBe(false)
+    // M4-V. The supported set is `SCHEMA_VERSIONS` (`identifiers.ts`), not the
+    // single literal it replaced. A version OUTSIDE the set is still rejected
+    // loudly — that is the property this assertion exists to protect. The
+    // in-set second version is covered by "accepts every supported record
+    // version" below, so widening the reader never becomes accepting anything.
+    expect(meshSchema.safeParse({ schemaVersion: 0, meshId: "mesh-1", displayName: "Mesh", createdAt: NOW }).success).toBe(false)
+    expect(meshSchema.safeParse({ schemaVersion: 3, meshId: "mesh-1", displayName: "Mesh", createdAt: NOW }).success).toBe(false)
+    expect(meshSchema.safeParse({ schemaVersion: "1", meshId: "mesh-1", displayName: "Mesh", createdAt: NOW }).success).toBe(false)
     expect(meshSchema.safeParse({ schemaVersion: 1, meshId: "mesh-1", displayName: "Mesh", createdAt: NOW, trusted: true }).success).toBe(false)
+  })
+
+  it("accepts every supported record version and refuses the rest (M4-V)", () => {
+    for (const supported of SCHEMA_VERSIONS) {
+      expect(meshSchema.safeParse({ schemaVersion: supported, meshId: "mesh-1", displayName: "Mesh", createdAt: NOW }).success).toBe(true)
+    }
+    for (const unsupported of [0, 3, 99, -1, 1.5, null, "1", true, undefined]) {
+      expect(
+        meshSchema.safeParse({ schemaVersion: unsupported, meshId: "mesh-1", displayName: "Mesh", createdAt: NOW }).success,
+        `schemaVersion ${JSON.stringify(unsupported)} must be rejected`,
+      ).toBe(false)
+    }
   })
 
   it("enforces bounded strings, arrays, timestamps, and safe counters", () => {
@@ -364,9 +384,27 @@ describe("strict event and command unions", () => {
     expectTypeOf(orchestrationEventSchema.parse(events[0])).toEqualTypeOf<OrchestrationEvent>()
   })
 
+  it("accepts every supported event version and refuses every unsupported one (M4-V)", () => {
+    // The event envelope is the record family every other M4 record is nested
+    // inside, so a version the envelope refuses is a version nothing downstream
+    // can smuggle through either.
+    for (const supported of SCHEMA_VERSIONS) {
+      expect(
+        orchestrationEventSchema.safeParse({ ...eventCommon, schemaVersion: supported, type: "run.created", payload: { run } }).success,
+        `supported schemaVersion ${supported} must be accepted`,
+      ).toBe(true)
+    }
+    for (const unsupported of [0, 3, 99, -1, 1.5, null, "1", true, undefined]) {
+      expect(
+        orchestrationEventSchema.safeParse({ ...eventCommon, schemaVersion: unsupported, type: "run.created", payload: { run } }).success,
+        `schemaVersion ${JSON.stringify(unsupported)} must be rejected`,
+      ).toBe(false)
+    }
+  })
+
   it("rejects generic, mismatched, and wrong-version event payloads", () => {
     expect(orchestrationEventSchema.safeParse({ ...eventCommon, type: "task.created", payload: { arbitrary: true } }).success).toBe(false)
-    expect(orchestrationEventSchema.safeParse({ ...eventCommon, schemaVersion: 2, type: "run.created", payload: { run } }).success).toBe(false)
+    expect(orchestrationEventSchema.safeParse({ ...eventCommon, schemaVersion: 99, type: "run.created", payload: { run } }).success).toBe(false)
     expect(orchestrationEventSchema.safeParse({ ...eventCommon, projectId: "project-other", type: "task.created", payload: { task } }).success).toBe(false)
     expect(orchestrationEventSchema.safeParse({ ...eventCommon, controllerEpoch: 2, type: "controller.lease.changed", payload: { lease } }).success).toBe(false)
   })

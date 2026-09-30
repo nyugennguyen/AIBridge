@@ -324,15 +324,16 @@ describe("AUDIT: crash boundary 7 (during projection update)", () => {
 })
 
 describe("AUDIT: crash boundary 8 (during legacy translation)", () => {
-  it("a legacy trigger that fails to append names no launch effect at all", async () => {
-    // The intent is recorded only AFTER the kernel accepted the intent, so a
-    // translation failure cannot leave an effect owed for a run that does not
-    // exist.
+  it("a legacy trigger that fails to append records nothing and names no destination", async () => {
+    // The append is the only thing `acceptTrigger` does, and it is the FIRST
+    // thing it does. So a translation failure cannot leave a recorded run with
+    // something still owed, let alone a runtime effect: M4-A retired the launch
+    // outbox entirely, so there is no second channel that a crash could leave
+    // half-open. The assertion below is that no export of the legacy layer can
+    // even express a destination anymore.
     const { buildTestApp, validTrigger, InMemoryJobStore } = await import("../../integration/fixtures.js")
     const { JobManager } = await import("../../../src/jobs/manager.js")
-    const { LegacyTranslation, LegacyLaunchOutbox, legacyTranslationContextSchema } = await import(
-      "../../../src/orchestration/legacy/translation.js"
-    )
+    const { LegacyTranslation, legacyTranslationContextSchema } = await import("../../../src/orchestration/legacy/translation.js")
 
     const unmapped = legacyTranslationContextSchema.parse({
       schemaVersion: 1,
@@ -348,13 +349,11 @@ describe("AUDIT: crash boundary 8 (during legacy translation)", () => {
       ],
       projectMappings: [],
     })
-    const outbox = new LegacyLaunchOutbox()
     const translation = new LegacyTranslation({
       mode: "present",
       context: unmapped,
       now: () => "2026-09-28T00:00:00.000Z" as never,
       commands: { submit: () => ({ ok: true as const, value: { events: [], duplicate: false } }) },
-      outbox,
     })
 
     const jobManager = new JobManager(new InMemoryJobStore())
@@ -368,8 +367,24 @@ describe("AUDIT: crash boundary 8 (during legacy translation)", () => {
 
     expect(response.statusCode).toBe(500)
     expect(opencode.createdSessions).toBe(0)
-    // No intent is owed for a run that was never recorded.
-    expect(outbox.list()).toHaveLength(0)
-    expect(translation.launchIntents()).toHaveLength(0)
+    // The recorded module surface holds no launch machinery at all: no
+    // destination constant, no intent builder, no verifier, no outbox, and no
+    // `effect` on what `acceptTrigger` returns. A future contributor who wants
+    // the launch back has to re-add a destination name, which is exactly the
+    // change F-05 says must be an explicit, reviewed decision.
+    const legacyModule = (await import("../../../src/orchestration/legacy/translation.js")) as Record<string, unknown>
+    for (const retired of [
+      "LEGACY_LAUNCH_DESTINATION",
+      "legacyLaunchIntent",
+      "legacyLaunchIntentSchema",
+      "legacyLaunchAuthorizationSchema",
+      "verifyLegacyLaunchIntent",
+      "LegacyLaunchOutbox",
+    ]) {
+      expect(legacyModule[retired]).toBeUndefined()
+    }
+    expect(legacyModule.LegacyTranslation).toBeDefined()
+    expect((legacyModule.LegacyTranslation as { prototype: object }).prototype).not.toHaveProperty("acknowledgeLaunch")
+    expect((legacyModule.LegacyTranslation as { prototype: object }).prototype).not.toHaveProperty("launchIntents")
   })
 })

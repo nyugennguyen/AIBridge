@@ -1,17 +1,17 @@
+import { readFileSync, readdirSync } from "node:fs"
+import { join } from "node:path"
+import { fileURLToPath } from "node:url"
 import { describe, expect, it } from "vitest"
 import { buildTestApp, InMemoryJobStore, validTrigger } from "./fixtures.js"
 import { JobManager } from "../../src/jobs/manager.js"
 import { digestJson } from "../../src/orchestration/digest.js"
 import { correlationIdSchema, installationIdSchema, nodeIdSchema, timestampSchema } from "../../src/orchestration/identifiers.js"
 import {
-  LegacyLaunchOutbox,
   LegacyTranslation,
   legacyCorrelationIdFor,
-  legacyLaunchIntent,
   legacyRunCreateCommand,
   legacyTranslationContextSchema,
   translateLegacyJob,
-  verifyLegacyLaunchIntent,
   type LegacyCorrelation,
   type LegacyTranslationContext,
 } from "../../src/orchestration/legacy/translation.js"
@@ -94,14 +94,68 @@ function legacyJob(overrides: Record<string, unknown> = {}): unknown {
 
 function kernelApp(now: () => typeof NOW = () => NOW) {
   const commands = new RecordingCommands()
-  const outbox = new LegacyLaunchOutbox()
-  const translation = new LegacyTranslation({ mode: "present", context: context(), now, commands, outbox })
-  return { commands, outbox, translation }
+  const translation = new LegacyTranslation({ mode: "present", context: context(), now, commands })
+  return { commands, translation }
 }
 
 function expectOk(result: ReturnType<typeof translateLegacyJob>) {
   if (!result.ok) throw new Error(`${result.error.code}: ${result.error.message}`)
   return result
+}
+
+/**
+ * The names the legacy module exports, as a plain record.
+ *
+ * Deliberately not a typed import: the point is to assert that names are GONE,
+ * and a typed import of a name that no longer exists would not compile, so the
+ * test could never be the thing that proves the retirement. The copy is made
+ * because the assertion is about the module's export surface, and a live module
+ * namespace is a view the test runner is free to hand back in any shape it
+ * likes.
+ */
+async function legacyModuleExports(): Promise<Record<string, unknown>> {
+  const namespace = await import("../../src/orchestration/legacy/translation.js")
+  return Object.fromEntries(Object.keys(namespace).map((key) => [key, (namespace as Record<string, unknown>)[key]]))
+}
+
+/**
+ * The comment-stripped source of a file, line by line.
+ *
+ * The comments in this layer must keep naming what was retired and why — that
+ * record is the whole reason the decision is auditable — so scanning raw text
+ * would either fail on the explanation or force the explanation to be deleted.
+ * Filtering by line shape rather than by a comment regex is deliberate: a regex
+ * scanner has to know where a string literal ends, and a comment-closing token
+ * inside one turns it into a parser that is confidently wrong. This filter cannot
+ * be confused by content, and it fails closed on a trailing comment.
+ */
+function codeLines(source: string): string {
+  return source
+    .split("\n")
+    .filter((line) => {
+      const trimmed = line.trim()
+      return !trimmed.startsWith("//") && !trimmed.startsWith("*") && !trimmed.startsWith("/*")
+    })
+    .join("\n")
+}
+
+/**
+ * Every source file the legacy layer consists of, plus the routes that drive it.
+ *
+ * The routes are included because "no legacy path may name a runtime effect" is a
+ * statement about reachability, not about which directory a string lives in.
+ */
+function legacySourceFiles(): string[] {
+  const root = fileURLToPath(new URL("../../", import.meta.url))
+  const legacyDir = join(root, "src/orchestration/legacy")
+  return [
+    ...readdirSync(legacyDir)
+      .filter((name) => name.endsWith(".ts"))
+      .map((name) => join(legacyDir, name)),
+    join(root, "src/server/routes/trigger.ts"),
+    join(root, "src/server/routes/report.ts"),
+    join(root, "src/server/routes/jobs.ts"),
+  ]
 }
 
 describe("A legacy job maps to a canonical run, task, and dispatch", () => {
@@ -271,19 +325,43 @@ describe("Compatibility policy: kernel present", () => {
     expect(opencode.sentPrompts).toBe(1)
   })
 
-  it("names the runtime launch and only acknowledges it after the runtime accepted", async () => {
-    const { translation, outbox } = kernelApp()
+  it("records the intent and names NO launch effect, so the legacy path cannot reach a runtime", async () => {
+    // M4-A / F-05. This used to assert the opposite: that a
+    // `legacy.runtime.launch` outbox record was minted and acknowledged once the
+    // runtime accepted. The retirement is not a weakening of the contract — the
+    // HTTP response below is byte-for-byte what it always was, and the session is
+    // still created — but the kernel no longer VOUCHES for that session, and
+    // vouching was the finding.
+    const { translation, commands } = kernelApp()
     const { app, opencode } = await buildTestApp({ orchestration: { translation } })
 
-    await app.inject({ method: "POST", url: "/trigger", headers: { authorization: "Bearer secret" }, payload: validTrigger() })
+    const response = await app.inject({
+      method: "POST",
+      url: "/trigger",
+      headers: { authorization: "Bearer secret" },
+      payload: validTrigger(),
+    })
 
-    const intent = translation.launchIntents()[0]!
-    expect(intent.destination).toBe("legacy.runtime.launch")
-    expect(outbox.get(intent.outboxId)?.status).toBe("delivered")
-    // The outbox id is derived from the canonical dispatch, so a redelivery is
-    // recognisable as the same effect rather than a second session.
-    expect(intent.outboxId).toBe(`obx-legacy-launch-${intent.correlation.dispatchId}`)
+    // Byte-identical to the kernel-absent response: retiring the launch effect
+    // changed no field, no status code and no header.
+    expect(response.statusCode).toBe(202)
+    expect(response.json()).toMatchObject({
+      accepted: true,
+      job_id: "job_1",
+      target_agent_id: "test-vps",
+      status: "accepted",
+      opencode_session_id: "ses_1",
+    })
+    expect(Object.keys(response.json()).sort()).toEqual(
+      ["accepted", "job_id", "opencode_session_id", "status", "status_url", "target_agent_id"].sort(),
+    )
+    // The released legacy launch still happens...
     expect(opencode.createdSessions).toBe(1)
+    expect(opencode.sentPrompts).toBe(1)
+    // ...and the kernel recorded exactly one `run.create` and nothing else.
+    expect(commands.submitted).toHaveLength(1)
+    expect(commands.submitted[0]?.type).toBe("run.create")
+    expect(commands.submitted.flatMap((command) => (command.type === "run.create" ? [] : [command.type]))).toEqual([])
   })
 
   it("adds the correlation to /jobs/:id without changing any legacy field", async () => {
@@ -475,98 +553,157 @@ describe("Compatibility policy: unrepresentable and malformed records fail close
   })
 })
 
-describe("The legacy launch effect carries its own authorization", () => {
-  it("records the source, capability, project and principal the route authorized", async () => {
-    const { translation } = kernelApp()
-    const { app } = await buildTestApp({ orchestration: { translation } })
+describe("M4-A / F-05: the legacy launch path is retired", () => {
+  // F-05 was: `legacy.runtime.launch` reached a runtime with no canonical,
+  // recorded, digest-bound approval. The launch intent was digest-bound and
+  // tamper-checked, which is INTEGRITY — it proves nobody edited the payload.
+  // It was not AUTHENTICITY, and a route's bearer token plus source/capability
+  // pair plus allowlist entry plus legacy plan annotation is not an approval.
+  //
+  // The alternative was minting a canonical `approval.decided` for legacy work.
+  // That was rejected: it would make the route's checks INTO the approval, and
+  // put a non-canonical grant inside the very digest chain the approval
+  // invariant protects. So the path is retired instead, and the tests below
+  // exist to make that irreversible-by-accident: a compatibility receipt must
+  // never be able to grow back into a runtime destination.
 
-    await app.inject({
-      method: "POST",
-      url: "/trigger",
-      headers: { authorization: "Bearer secret" },
-      payload: validTrigger(),
-    })
-
-    const intent = translation.launchIntents()[0]!
-    expect(intent.destination).toBe("legacy.runtime.launch")
-    // `legacy.runtime.launch` deliberately bypasses `dispatch.execute`, so the
-    // route's checks are the only authorization it has. They are now recorded on
-    // the effect rather than being an implicit claim in the handler.
-    expect(intent.authorization.sourceAgentId).toBe("dev-main")
-    expect(intent.authorization.capability).toBe("testing")
-    expect(intent.authorization.projectDir).toBe("/srv/apps/app")
-    expect(intent.authorization.authorizedBy).toBe("trigger:dev-main")
-    expect(intent.authorization.mappingDigest).toBe(intent.correlation.mappingDigest)
-    expect(verifyLegacyLaunchIntent(intent).ok).toBe(true)
+  it("has no launch machinery left to reach, in the module surface...", async () => {
+    const legacy = await legacyModuleExports()
+    for (const retired of [
+      "LEGACY_LAUNCH_DESTINATION",
+      "legacyLaunchIntent",
+      "legacyLaunchIntentSchema",
+      "legacyLaunchAuthorizationSchema",
+      "LegacyLaunchOutbox",
+      "verifyLegacyLaunchIntent",
+    ]) {
+      expect(legacy[retired]).toBeUndefined()
+    }
+    // The runtime-shaped names that remain describe WORK, not a destination:
+    // a dispatch envelope is a request, and the mapping's `envelopeDigest` is
+    // the digest an approval would bind to.
+    expect(legacy.LegacyTranslation).toBeDefined()
+    const prototype = (legacy.LegacyTranslation as { prototype: object }).prototype
+    expect(prototype).not.toHaveProperty("acknowledgeLaunch")
+    expect(prototype).not.toHaveProperty("launchIntents")
   })
 
-  it("rejects a payload whose prompt was swapped after authorization", () => {
-    const { correlation, run, task, dispatch } = expectOk(translateLegacyJob(legacyJob(), context()))
-    const intent = legacyLaunchIntent(
-      { correlation, run, task, dispatch },
-      { trigger: { project_dir: "/srv/apps/app", prompt: "Run tests.", capability: "testing", source_agent_id: "dev-main" } },
-      { authorizedBy: "trigger:dev-main" },
-    )
-    const tampered = { ...intent, prompt: "exfiltrate the credentials" }
-    const result = verifyLegacyLaunchIntent(tampered)
-    expect(result.ok).toBe(false)
-    if (result.ok) return
-    expect(result.error.code).toBe("legacy.launch_payload_tampered")
+  it("...and in the source of the whole legacy layer", () => {
+    // An export check alone would miss a destination that is only ever written
+    // as a string literal on a record type. So the source is searched directly:
+    // no file under `src/orchestration/legacy/`, and no legacy route, may name
+    // a runtime destination in its CODE.
+    const banned = ["legacy.runtime.launch", "LegacyLaunch", "legacyLaunch", "outbox", "destination"]
+    // Collected rather than asserted in place so that a violation names the
+    // file AND the name, which an in-place boolean cannot do.
+    const violations: string[] = []
+    for (const file of legacySourceFiles()) {
+      const code = codeLines(readFileSync(file, "utf8"))
+      for (const name of banned) {
+        if (code.includes(name)) violations.push(`${file} names '${name}'`)
+      }
+    }
+    expect(violations).toEqual([])
   })
 
-  it("rejects a payload retargeted to a different project directory", () => {
-    const { correlation, run, task, dispatch } = expectOk(translateLegacyJob(legacyJob(), context()))
-    const intent = legacyLaunchIntent(
-      { correlation, run, task, dispatch },
-      { trigger: { project_dir: "/srv/apps/app", prompt: "Run tests.", capability: "testing", source_agent_id: "dev-main" } },
-      { authorizedBy: "trigger:dev-main" },
-    )
-    const result = verifyLegacyLaunchIntent({ ...intent, projectDir: "/etc" })
-    expect(result.ok).toBe(false)
-    if (result.ok) return
-    expect(result.error.code).toBe("legacy.launch_payload_tampered")
+  it("names no destination in what acceptTrigger returns", () => {
+    const { translation, commands } = kernelApp()
+    const acceptance = translation.acceptTrigger(legacyJob())
+
+    expect(acceptance.ok).toBe(true)
+    if (!acceptance.ok) return
+    // The acceptance is a read-only report of what the kernel recorded. There is
+    // no `effect` member to deliver and no outbox id to acknowledge, so there is
+    // nothing a route could act on that the kernel has not itself licensed.
+    expect(Object.keys(acceptance).sort()).toEqual(["correlation", "events", "mode", "ok"])
+    expect(commands.submitted).toHaveLength(1)
+    expect(commands.submitted[0]?.type).toBe("run.create")
   })
 
-  it("rejects an intent whose correlation names a mapping that was not authorized", () => {
-    const { correlation, run, task, dispatch } = expectOk(translateLegacyJob(legacyJob(), context()))
-    const intent = legacyLaunchIntent(
-      { correlation, run, task, dispatch },
-      { trigger: { project_dir: "/srv/apps/app", prompt: "Run tests.", capability: "testing", source_agent_id: "dev-main" } },
-      { authorizedBy: "trigger:dev-main" },
-    )
-    const swapped: LegacyCorrelation = { ...intent.correlation, mappingDigest: `sha256:${"a".repeat(64)}` }
-    const result = verifyLegacyLaunchIntent({ ...intent, correlation: swapped })
-    expect(result.ok).toBe(false)
-    if (result.ok) return
-    expect(result.error.code).toBe("legacy.launch_mapping_tampered")
+  it("still records the run, task and dispatch, and holds them for a canonical approval", () => {
+    const { translation, commands } = kernelApp()
+    expect(translation.acceptTrigger(legacyJob()).ok).toBe(true)
+
+    const command = commands.submitted[0]!
+    expect(command.type).toBe("run.create")
+    if (command.type !== "run.create") return
+    // Recorded as HELD work: a draft, paused run with a pending task. Nothing can
+    // schedule that — `COMMAND_MATRIX` requires a `ready` task for
+    // `dispatch.propose`, and the task only becomes `ready` once a dispatch is
+    // proposed, which needs an approval first. The launch, if it is wanted, is
+    // an operator's decision.
+    expect(command.payload.run.state).toBe("draft")
+    expect(command.payload.run.paused).toBe(true)
+    expect(command.payload.tasks[0]?.state).toBe("pending")
+    // And the envelope still demands a fresh canonical approval, so a legacy
+    // plan annotation can never stand in for one.
+    const dispatch = translation.correlate(legacyJob())
+    expect(dispatch.ok).toBe(true)
+    if (!dispatch.ok) return
+    expect(dispatch.dispatch.state).toBe("proposed")
+    expect(dispatch.dispatch.envelope.permissionEnvelope.approvalRequirements.capabilities).toEqual(["testing"])
   })
 
-  it("a retried trigger keeps the FIRST effect rather than adopting a changed prompt", () => {
-    const outbox = new LegacyLaunchOutbox()
-    const translation = new LegacyTranslation({
-      mode: "present",
-      context: context(),
-      now: () => NOW,
-      commands: new RecordingCommands(),
-      outbox,
-    })
+  it("converges on a retried trigger: the same run, one command id, no second effect", () => {
+    const { translation, commands } = kernelApp()
 
-    const first = translation.acceptTrigger(legacyJob(), { authorizedBy: "trigger:dev-main" })
-    // Same legacy job id, different prompt: the outbox is keyed by the canonical
-    // dispatch, so the original effect stands and cannot be silently redirected.
-    const second = translation.acceptTrigger(
-      legacyJob({ trigger: validTrigger({ prompt: "something else entirely" }) }),
-      { authorizedBy: "trigger:dev-main" },
-    )
+    const first = translation.acceptTrigger(legacyJob())
+    // Same legacy job, different prompt — the shape of a retried `/trigger`.
+    const second = translation.acceptTrigger(legacyJob({ trigger: validTrigger({ prompt: "something else entirely" }) }))
 
     expect(first.ok).toBe(true)
     expect(second.ok).toBe(true)
     if (!first.ok || !second.ok) return
-    expect(first.effect?.prompt).toBe("Run tests.")
-    expect(second.effect?.prompt).toBe("Run tests.")
-    expect(outbox.list()).toHaveLength(1)
+    // The command id is derived from the canonical run, so the retry is the same
+    // logical command and the store recognises it rather than minting a run.
+    expect(second.correlation?.runId).toBe(first.correlation?.runId)
+    expect(commands.submitted.every((command) => command.commandId === commands.submitted[0]!.commandId)).toBe(true)
+    expect(commands.submitted).toHaveLength(2)
+  })
+
+  it("leaves the /report and /jobs contracts byte-for-byte unchanged", async () => {
+    const { translation, commands } = kernelApp()
+    const { app, jobManager } = await buildTestApp({ orchestration: { translation } })
+    await app.inject({ method: "POST", url: "/trigger", headers: { authorization: "Bearer secret" }, payload: validTrigger() })
+
+    // `/jobs/:id` still answers with the bare legacy record plus the additive
+    // correlation, and adds no field beyond that.
+    const job = await app.inject({ method: "GET", url: "/jobs/job_1" })
+    const stored = await jobManager.getJob("job_1")
+    expect(job.statusCode).toBe(200)
+    expect(job.json().id).toBe(stored.id)
+    expect(job.json().status).toBe(stored.status)
+    expect(job.json().trigger).toEqual(stored.trigger)
+    expect(Object.keys(job.json()).sort()).toEqual(["id", "orchestration", "status", "trigger", ...Object.keys(stored).filter((k) => !["id", "status", "trigger"].includes(k))].sort())
+
+    // A report still unblocks the read model and still submits NO command: an
+    // observation must not be able to authorize anything, and after M4-A it has
+    // no mechanism with which to try.
+    const blocked = await jobManager.createJob(validTrigger({ job_id: "dep_2" }))
+    void blocked
+    const before = commands.submitted.length
+    const report = await app.inject({
+      method: "POST",
+      url: "/report",
+      headers: { authorization: "Bearer secret" },
+      payload: {
+        job_id: "job_1",
+        source_agent_id: "dev-main",
+        target_agent_id: "test-vps",
+        opencode_session_id: "ses_1",
+        status: "completed",
+        summary: "Testing completed.",
+        findings: [],
+        artifacts: [],
+        started_at: "2026-06-15T00:00:00.000Z",
+        completed_at: "2026-06-15T00:01:00.000Z",
+      },
+    })
+    expect(report.statusCode).toBe(202)
+    expect(commands.submitted).toHaveLength(before)
   })
 })
+
 
 describe("The mapping agrees with the offline import of the same record", () => {
   it("derives the same canonical identity from either path", async () => {

@@ -26,6 +26,7 @@ import {
   type Timestamp,
 } from "../identifiers.js"
 import { dispatchSchema, orchestrationCommandSchema, runSchema, taskSchema } from "../schemas.js"
+import type { EffectBoundary } from "../coordinator/types.js"
 import type { Actor, Dispatch, OrchestrationCommand, Run, Task } from "../types.js"
 import {
   buildLegacyDispatchEnvelope,
@@ -58,9 +59,38 @@ import type { LegacyJobRecord } from "./types.js"
  *  2. EXPLICIT PROVENANCE. Derived ids are content hashes and say nothing
  *     about their origin, so every mapping carries a `legacy.job` reference
  *     rather than leaving the link to be inferred.
- *  3. NO EFFECT INSIDE THE TRANSACTION. Mapping is pure; the intent is
- *     recorded by one coordinator append; the runtime launch is a NAMED,
- *     separately delivered outbox effect.
+ *  3. NO EFFECT AT ALL. Mapping is pure and the accepted intent is recorded by
+ *     one coordinator append. There is no launch effect, no outbox and no
+ *     destination — see the M4-A decision below.
+ *
+ * ## M4-A: the legacy launch path is RETIRED (F-05 closed)
+ *
+ * This module used to mint a `legacy.runtime.launch` outbox record and hand
+ * back an `effect` for the route to deliver, carrying the route's own checks
+ * (bearer token, source/capability pair, project allowlist, legacy plan
+ * annotation) as a digest-bound `authorization` block. That was integrity, not
+ * authenticity: a digest proves nobody edited the payload, not that a human
+ * approved *this* work. Threat-model finding F-05 is exactly that gap —
+ * compatibility evidence must never become approval authority.
+ *
+ * The alternative was to mint a canonical `approval.decided` for legacy work.
+ * It is rejected because it would make the route's authorization the approval:
+ * the only "approval" behind it would be a bearer token, a capability pair, an
+ * allowlist entry and an annotation in a legacy JSON record. That is a
+ * laundering of route checks into kernel authority, and it would put a
+ * non-canonical grant inside the very digest chain the approval invariant
+ * exists to protect. The Milestone 3 translation module had already reached this
+ * conclusion in its own words — "the kernel's `dispatch.execute` cannot carry
+ * this effect ... legacy work deliberately has neither" — and simply worked
+ * around it with a second channel. The workaround was the finding.
+ *
+ * So the second channel is gone. A legacy trigger now produces canonical work
+ * that is HELD: a DRAFT, PAUSED run with a PENDING task. Nothing may move it —
+ * `COMMAND_MATRIX` requires a `ready` task before `dispatch.propose` and a live
+ * run before anything else — until an operator records a real approval through
+ * `dispatch.propose` -> `dispatch.approve` -> `dispatch.execute`. If the legacy
+ * launch is wanted, the answer is an operator approving it, not a compatibility
+ * receipt standing in for an approval.
  */
 
 // --- Compatibility policy -------------------------------------------------
@@ -407,196 +437,15 @@ export function legacyCorrelationIdFor(mapping: LegacyJobMapping): CorrelationId
   return correlationIdSchema.parse(`legacy-${mapping.correlation.legacyJobId}`)
 }
 
-// --- Launch outbox --------------------------------------------------------
-
-/**
- * The named runtime effect a legacy launch owes.
- *
- * The kernel's `dispatch.execute` cannot carry this effect: it requires an
- * approved dispatch bound to a live approval, and legacy work deliberately has
- * neither (the plan's approval criteria treat a legacy plan annotation as
- * evidence, not authority). So the legacy launch is expressed as its OWN
- * outbox record instead, keyed by the canonical dispatch id. The outbox id is
- * stable, so a redelivery after a crash is recognisable as the same effect
- * rather than a second session — the plan's "stop if retry can reach a runtime
- * without a stable command/dispatch idempotency key" guard, satisfied for the
- * legacy path too.
- */
-/**
- * What the route actually checked before the job was created, recorded so the
- * launch can be re-verified at the effect boundary.
- */
-export const legacyLaunchAuthorizationSchema = z
-  .object({
-    sourceAgentId: z.string().min(1).max(256),
-    capability: z.string().min(1).max(128),
-    projectDir: z.string().min(1).max(4_096),
-    promptDigest: z.string().regex(digestPattern),
-    /** The authenticated principal the route admitted. */
-    authorizedBy: z.string().min(1).max(256),
-    /** Binds the authorization to the exact canonical mapping it was made for. */
-    mappingDigest: z.string().regex(digestPattern),
-  })
-  .strict()
-
-export type LegacyLaunchAuthorization = z.infer<typeof legacyLaunchAuthorizationSchema>
-
-export const legacyLaunchIntentSchema = z
-  .object({
-    schemaVersion: schemaVersionSchema,
-    outboxId: z.string().min(1).max(256),
-    destination: z.literal("legacy.runtime.launch"),
-    correlation: legacyCorrelationSchema,
-    projectDir: z.string().min(1).max(4_096),
-    prompt: z.string().min(1).max(65_536),
-    /**
-     * The exact facts the route authorized, and a digest over them.
-     *
-     * `legacy.runtime.launch` deliberately does not go through
-     * `dispatch.execute`, because legacy work has no canonical approval. That
-     * makes the ROUTE's authorization the only thing standing between this
-     * intent and a runtime, so the intent carries what was checked rather than
-     * trusting the record alone. The digest binds `projectDir` and `prompt` to
-     * the identity, capability and source that were authorized: a delivery step
-     * that receives a tampered payload (a different directory or prompt) can
-     * detect it before crossing the effect boundary, which is the same
-     * "recheck at the effect boundary" discipline ADR 0003 requires of a worker.
-     */
-    authorization: legacyLaunchAuthorizationSchema,
-    status: z.enum(["pending", "delivered"]),
-  })
-  .strict()
-
-export type LegacyLaunchIntent = z.infer<typeof legacyLaunchIntentSchema>
-
-/** The destination every legacy runtime launch is delivered to. */
-export const LEGACY_LAUNCH_DESTINATION = "legacy.runtime.launch"
-
-/**
- * Builds the launch intent for a mapped legacy job.
- *
- * Named, not performed: the caller records the intent in the same transaction
- * as the aggregate, and a separate delivery step performs it afterwards. That
- * ordering is what keeps the runtime effect out of the event transaction.
- */
-export function legacyLaunchIntent(
-  mapping: LegacyJobMapping,
-  job: {
-    readonly trigger: {
-      readonly project_dir: string
-      readonly prompt: string
-      readonly capability: string
-      readonly source_agent_id: string
-    }
-  },
-  options: { readonly authorizedBy: string },
-): LegacyLaunchIntent {
-  const projectDir = job.trigger.project_dir
-  const prompt = job.trigger.prompt
-  const authorization = legacyLaunchAuthorizationSchema.parse({
-    sourceAgentId: job.trigger.source_agent_id,
-    capability: job.trigger.capability,
-    projectDir,
-    promptDigest: digestJson(prompt),
-    authorizedBy: options.authorizedBy,
-    mappingDigest: mapping.correlation.mappingDigest,
-  })
-  return legacyLaunchIntentSchema.parse({
-    schemaVersion: 1,
-    outboxId: `obx-legacy-launch-${mapping.correlation.dispatchId}`,
-    destination: LEGACY_LAUNCH_DESTINATION,
-    correlation: mapping.correlation,
-    projectDir,
-    prompt,
-    authorization,
-    status: "pending",
-  })
-}
-
-/**
- * Re-checks a launch intent at the effect boundary.
- *
- * The legacy path has no canonical approval, so the route's authorization is the
- * whole authorization story; this makes that checkable by whoever actually
- * performs the launch instead of being an unrecorded claim in the route. A
- * payload whose `projectDir`/`prompt` no longer match the digest that was
- * authorized must not be delivered.
- */
-export function verifyLegacyLaunchIntent(
-  intent: LegacyLaunchIntent,
-): { ok: true; value: LegacyLaunchIntent } | { ok: false; error: LegacyTranslationError } {
-  if (digestJson(intent.prompt) !== intent.authorization.promptDigest) {
-    return fail(
-      "unrepresentable",
-      "legacy.launch_payload_tampered",
-      `Legacy launch '${intent.outboxId}' carries a prompt that does not match the digest authorized at intake.`,
-    )
-  }
-  if (intent.projectDir !== intent.authorization.projectDir) {
-    return fail(
-      "unrepresentable",
-      "legacy.launch_payload_tampered",
-      `Legacy launch '${intent.outboxId}' targets '${intent.projectDir}', which is not the authorized '${intent.authorization.projectDir}'.`,
-    )
-  }
-  if (intent.correlation.mappingDigest !== intent.authorization.mappingDigest) {
-    return fail(
-      "unrepresentable",
-      "legacy.launch_mapping_tampered",
-      `Legacy launch '${intent.outboxId}' names mapping '${intent.correlation.mappingDigest}', which is not the authorized '${intent.authorization.mappingDigest}'.`,
-    )
-  }
-  if (intent.authorization.authorizedBy.length === 0) {
-    return fail(
-      "unrepresentable",
-      "legacy.launch_unattributed",
-      `Legacy launch '${intent.outboxId}' names no authorizing principal.`,
-    )
-  }
-  return { ok: true, value: intent }
-}
-
-/**
- * A durable, idempotent outbox for legacy launch effects.
- *
- * At-least-once by construction: `record` is keyed by `outboxId`, so a retry
- * of the same legacy job is recognisable and cannot launch twice. Delivery is
- * the caller's effect (the opencode client), because an external effect must
- * not be performed by this module.
- */
-export class LegacyLaunchOutbox {
-  readonly #records = new Map<string, LegacyLaunchIntent>()
-
-  /**
-   * Records an intent. Returns the stored record; re-recording the same
-   * `outboxId` is a no-op, which is what makes a retried trigger safe.
-   */
-  record(intent: LegacyLaunchIntent): LegacyLaunchIntent {
-    const existing = this.#records.get(intent.outboxId)
-    if (existing !== undefined) return existing
-    this.#records.set(intent.outboxId, intent)
-    return intent
-  }
-
-  /** Marks an intent delivered; the identity survives so redelivery is visible. */
-  acknowledge(outboxId: string): LegacyLaunchIntent | undefined {
-    const existing = this.#records.get(outboxId)
-    if (existing === undefined) return undefined
-    const acknowledged = legacyLaunchIntentSchema.parse({ ...existing, status: "delivered" })
-    this.#records.set(outboxId, acknowledged)
-    return acknowledged
-  }
-
-  get(outboxId: string): LegacyLaunchIntent | undefined {
-    return this.#records.get(outboxId)
-  }
-
-  list(): readonly LegacyLaunchIntent[] {
-    return [...this.#records.values()]
-  }
-}
-
 // --- Adapter --------------------------------------------------------------
+
+/**
+ * M4-A removed the launch outbox, and with it `LEGACY_LAUNCH_DESTINATION`,
+ * `legacyLaunchIntent`, `verifyLegacyLaunchIntent` and `LegacyLaunchOutbox`.
+ * Nothing replaces them. This module now records an accepted intent and names
+ * no destination at all, because a destination here would be approval
+ * authority by the back door.
+ */
 
 /**
  * The minimal command boundary the adapter needs.
@@ -617,16 +466,17 @@ export type LegacyTranslationMode = z.infer<typeof legacyTranslationModeSchema>
 /**
  * What the legacy route should do after asking the kernel to record a trigger.
  *
- * `effect` is the NAMED runtime launch, never a performed one. The route
- * performs it after the append has committed, which is what keeps the runtime
- * effect outside the event transaction.
+ * There is no `effect` member, and its absence is the M4-A decision rather than
+ * an omission. An acceptance used to carry a NAMED runtime launch for the route
+ * to deliver; that member was the whole of F-05, because a destination reachable
+ * from this record is a destination reachable without a canonical approval. The
+ * remaining fields are all read-only facts about what the kernel recorded.
  */
 export type LegacyTriggerAcceptance =
   | {
       readonly ok: true
       readonly mode: LegacyTranslationMode
       readonly correlation?: LegacyCorrelation
-      readonly effect?: LegacyLaunchIntent
       readonly events: readonly string[]
     }
   | { readonly ok: false; readonly mode: LegacyTranslationMode; readonly error: LegacyTranslationError }
@@ -638,7 +488,16 @@ export interface LegacyTranslationDependencies {
   readonly now: () => Timestamp
   /** Required in `present` mode; absent in `absent` mode. */
   readonly commands?: LegacyCommandSink
-  readonly outbox?: LegacyLaunchOutbox
+  /**
+   * M4-B hook 8, and only hook 8.
+   *
+   * `Pick<EffectBoundary, "duringTranslation">` for the reason the outbox
+   * deliverer states for hooks 5 and 6: the kernel's boundary is one interface
+   * with eight members, and a translation seam that could receive the whole of it
+   * would be able to claim the seven that are not its business. Narrowing it
+   * makes "hook 8 fires here" a compile-time fact rather than a convention.
+   */
+  readonly boundary?: Pick<EffectBoundary, "duringTranslation">
 }
 
 /**
@@ -654,32 +513,55 @@ export class LegacyTranslation {
   readonly #context: LegacyTranslationContext
   readonly #now: () => Timestamp
   readonly #commands: LegacyCommandSink | undefined
-  readonly #outbox: LegacyLaunchOutbox
+  readonly #boundary: Pick<EffectBoundary, "duringTranslation"> | undefined
 
   constructor(dependencies: LegacyTranslationDependencies) {
     this.mode = legacyTranslationModeSchema.parse(dependencies.mode)
     this.#context = legacyTranslationContextSchema.parse(dependencies.context)
     this.#now = dependencies.now
     this.#commands = this.mode === "present" ? dependencies.commands : undefined
-    this.#outbox = dependencies.outbox ?? new LegacyLaunchOutbox()
+    this.#boundary = dependencies.boundary
   }
 
   /**
-   * Records a legacy trigger's accepted intent and names its runtime launch.
+   * Records a legacy trigger's accepted intent, and nothing else.
    *
    * Fails closed: an unrepresentable or malformed job returns a diagnosable
    * error rather than being accepted and quietly ignored. The route turns that
    * into a 5xx instead of a 202, so no caller is told work started when the
    * kernel cannot account for it.
+   *
+   * M4-A: this used to return a named launch effect, and the `authorizedBy`
+   * option existed only to stamp a principal onto it. Both are gone. What
+   * remains is a `run.create` that records a DRAFT, PAUSED run holding a PENDING
+   * task, which is canonical work that is deliberately HELD: nothing in the
+   * kernel can schedule it, because `COMMAND_MATRIX` requires a `ready` task
+   * for `dispatch.propose` and a live run for everything else, until an operator
+   * records a real `approval.decided` and drives the ordinary
+   * `dispatch.propose` -> `dispatch.approve` -> `dispatch.execute` path. A
+   * legacy trigger therefore cannot reach a runtime by any route this module
+   * can influence, and `acceptTrigger` takes no options because there is no
+   * longer an effect boundary at which a principal would mean anything.
    */
-  acceptTrigger(jobInput: unknown, options?: { readonly authorizedBy?: string }): LegacyTriggerAcceptance {
+  acceptTrigger(jobInput: unknown): LegacyTriggerAcceptance {
     if (this.mode === "absent") return { ok: true, mode: "absent", events: [] }
 
     const translated = translateLegacyJob(jobInput, this.#context)
     if (!translated.ok) return { ok: false, mode: "present", error: translated.error }
 
-    // Record the OUTCOME first. A kernel that cannot account for the job must
-    // not then launch it, so the append happens before the effect is named.
+    // M4-B hook 8. Between the mapping existing and the command reaching the
+    // kernel, which is the only window in this file where something is decided
+    // and nothing is committed. A crash here is safe for a reason specific to
+    // translation: `translateLegacyJob` is a PURE function of the legacy bytes
+    // and the context, so the retry recomputes the identical canonical ids and
+    // the coordinator's `commandId` dedupe collapses it onto the same record.
+    // That is what "no duplicate prompt" means at a boundary with no runtime.
+    this.#boundary?.duringTranslation?.(translated.correlation)
+
+    // The one append, and the only thing this method does. There is no second
+    // step: the previous version named a launch here so the route could deliver
+    // it after the commit, and that "so the route could" was the vulnerability —
+    // an effect with its own authorization, outside the approval chain.
     const submitted = this.#commands!.submit(
       legacyRunCreateCommand(
         { correlation: translated.correlation, run: translated.run, task: translated.task, dispatch: translated.dispatch },
@@ -709,26 +591,7 @@ export class LegacyTranslation {
       }
     }
 
-    const record = jobInput as LegacyJobRecord
-    const effect = this.#outbox.record(
-      legacyLaunchIntent(
-        { correlation: translated.correlation, run: translated.run, task: translated.task, dispatch: translated.dispatch },
-        {
-          trigger: {
-            project_dir: record.trigger.project_dir,
-            prompt: record.trigger.prompt,
-            capability: record.trigger.capability,
-            source_agent_id: record.trigger.source_agent_id,
-          },
-        },
-        // The route has authenticated the caller, the source/capability pair and
-        // the project allowlist by this point. Naming the principal makes the
-        // legacy authorization auditable at the effect boundary instead of being
-        // an implicit claim.
-        { authorizedBy: options?.authorizedBy ?? `legacy-bridge:${this.#context.localAgentId}` },
-      ),
-    )
-    return { ok: true, mode: "present", correlation: translated.correlation, effect, events: submitted.value.events }
+    return { ok: true, mode: "present", correlation: translated.correlation, events: submitted.value.events }
   }
 
   /**
@@ -747,23 +610,15 @@ export class LegacyTranslation {
    *
    * A report is an OBSERVATION, not a command: it unblocks the legacy read
    * model, and any canonical state change it implies is a separate decision
-   * requiring its own approval. So this names the launch if one is owed and
-   * never fabricates lifecycle events.
+   * requiring its own approval. So it records the correlation and nothing else,
+   * and never fabricates lifecycle events. (It used to name a launch here too;
+   * see the M4-A note at the top of this file.)
    */
   recordReport(jobInput: unknown): LegacyTriggerAcceptance {
     if (this.mode === "absent") return { ok: true, mode: "absent", events: [] }
     const correlated = this.correlate(jobInput)
     if (!correlated.ok) return { ok: false, mode: "present", error: correlated.error }
     return { ok: true, mode: "present", correlation: correlated.correlation, events: [] }
-  }
-
-  /** Acknowledges a delivered launch effect, making redelivery recognisable. */
-  acknowledgeLaunch(outboxId: string): LegacyLaunchIntent | undefined {
-    return this.#outbox.acknowledge(outboxId)
-  }
-
-  launchIntents(): readonly LegacyLaunchIntent[] {
-    return this.#outbox.list()
   }
 }
 

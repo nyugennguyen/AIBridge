@@ -567,7 +567,12 @@ export class SqliteEventStore {
     const payload = JSON.parse(row.payload_json)
 
     const rawDomainEvent = {
-      schemaVersion: 1 as const,
+      // Read the version the row ACTUALLY carries. This used to be hardcoded to
+      // `1 as const`, which meant a row written at any other version came back
+      // labelled as version 1 — a silent coercion, and the exact failure M4-V
+      // exists to remove. An unreadable version now fails here, loudly, rather
+      // than being relabelled.
+      schemaVersion: row.schema_version,
       eventId: row.event_id,
       sequence: row.sequence,
       projectId: row.project_id,
@@ -626,15 +631,19 @@ export class SqliteEventStore {
   /**
    * Atomically move up to `limit` deliverable records to `sending` and extend
    * their `attempts` counter. See `OutboxStore.claimPendingOutbox`.
+   *
+   * `options` is required because `now` is: the outbox has no ambient clock, and
+   * an optional bag with an optional `now` inside it is the shape that lets one
+   * be forgotten.
    */
-  claimPendingOutbox(options?: ClaimOutboxOptions): OutboxClaim {
+  claimPendingOutbox(options: ClaimOutboxOptions): OutboxClaim {
     return this.outbox.claimPendingOutbox(options)
   }
 
   markOutboxSending(
     outboxId: string,
-    claimToken?: string,
-    options?: { leaseMs?: number, now?: Timestamp }
+    claimToken: string | undefined,
+    options: { leaseMs?: number, now: Timestamp }
   ): OutboxWriteResult {
     return this.outbox.markOutboxSending(outboxId, claimToken, options)
   }
@@ -642,21 +651,21 @@ export class SqliteEventStore {
   markOutboxFailed(
     outboxId: string,
     error: unknown,
-    options?: { claimToken?: string, nextAttemptAt?: Timestamp, now?: Timestamp }
+    options: { claimToken?: string, nextAttemptAt?: Timestamp, now: Timestamp }
   ): OutboxWriteResult {
     return this.outbox.markOutboxFailed(outboxId, error, options)
   }
 
-  markOutboxAcknowledged(outboxId: string, now?: Timestamp): OutboxWriteResult {
+  markOutboxAcknowledged(outboxId: string, now: Timestamp): OutboxWriteResult {
     return this.outbox.markOutboxAcknowledged(outboxId, now)
   }
 
-  exhaustOutbox(outboxId: string, error: unknown, options?: { now?: Timestamp }): OutboxWriteResult {
+  exhaustOutbox(outboxId: string, error: unknown, options: { now: Timestamp }): OutboxWriteResult {
     return this.outbox.exhaustOutbox(outboxId, error, options)
   }
 
   recoverStaleOutbox(
-    options?: { now?: Timestamp, runId?: string, projectId?: string, destination?: string }
+    options: { now: Timestamp, runId?: string, projectId?: string, destination?: string }
   ): OutboxRecoveryResult {
     return this.outbox.recoverStaleOutbox(options)
   }

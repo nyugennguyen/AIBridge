@@ -24,7 +24,83 @@ export const eventIdSchema = z.string().regex(opaqueIdPattern).brand<"EventId">(
 export const commandIdSchema = z.string().regex(opaqueIdPattern).brand<"CommandId">()
 export const correlationIdSchema = z.string().regex(opaqueIdPattern).brand<"CorrelationId">()
 
-export const schemaVersionSchema = z.literal(1)
+/**
+ * The schema versions this build is able to READ.
+ *
+ * M4-V. This used to be `z.literal(1)`, which made a persisted-record shape
+ * change *unversionable*: the only writable value was the only readable one, so
+ * widening the shape had to be a silent in-place overwrite of records the older
+ * binary still claimed to understand. Milestone 3 did exactly that — `run` gained
+ * `paused`, `task` gained `failurePolicy`, `session` replaced `state` with
+ * `lifecycleState` + `observedState` — and the resulting break could not be named,
+ * let alone migrated, because there was no second version to name it with.
+ *
+ * The set is a *reader* capability, not a writer preference: a record at any
+ * listed version is understood, and anything outside the set is rejected loudly
+ * by `schemaVersionSchema` rather than coerced. New records are written at
+ * `CURRENT_SCHEMA_VERSION`; existing records are never rewritten just to move
+ * them up a version, because a version bump must mean "the shape changed", not
+ * "this file was touched".
+ *
+ * Note the database version is deliberately NOT in this list. `runMigrations`'
+ * v1 -> v2 step covers the storage layout only; event-payload compatibility is a
+ * record-version question and is answered here.
+ */
+export const SCHEMA_VERSIONS = [1, 2] as const
+
+export type SupportedSchemaVersion = (typeof SCHEMA_VERSIONS)[number]
+
+/**
+ * Zod 4's `z.enum` accepts only string members, so a numeric version union is
+ * spelled as a union of literals. It is annotated with the narrowed type rather
+ * than left to inference so the two declarations above cannot drift apart: if a
+ * version is added to `SCHEMA_VERSIONS` and not here, this stops compiling.
+ *
+ * The two must also agree at RUNTIME — a version listed as readable but refused
+ * by the schema (or the reverse) would be a silent hole in the version
+ * contract, so `tests/unit/orchestration/versioning.test.ts` asserts both
+ * directions.
+ */
+export const schemaVersionSchema: z.ZodType<SupportedSchemaVersion> = z.union([
+  z.literal(1),
+  z.literal(2),
+])
+
+/**
+ * The version newly written records carry.
+ *
+ * Version 2 is adopted by the Milestone 4 mesh wire families (enrollment,
+ * heartbeat, command envelope, ack, event, lease, reconciliation, terminal
+ * stream), which are new record families rather than shape changes to the frozen
+ * M0 domain aggregates. The M0 domain records keep writing
+ * `FROZEN_DOMAIN_SCHEMA_VERSION`, because their shapes did not change and
+ * restamping them would falsely claim they did.
+ */
+export const CURRENT_SCHEMA_VERSION: SupportedSchemaVersion = 2
+
+/**
+ * The version of the frozen M0 canonical domain aggregates
+ * (`run`, `task`, `dispatch`, `approval`, `session`, `project`, `mesh`, `node`,
+ * `role`, `rule`, `memory`, `artifact`, `controllerLease`, and the
+ * `orchestrationEvent` / `orchestrationCommand` envelopes).
+ *
+ * These shapes are the M0 contract freeze. They are accepted at version 1
+ * forever and are only moved to a new version by a deliberate, re-approved shape
+ * change.
+ */
+export const FROZEN_DOMAIN_SCHEMA_VERSION: SupportedSchemaVersion = 1
+
+/**
+ * A bare version literal, for declaring a record family at exactly one version.
+ *
+ * `version(2)` is `z.literal(2)`, so a family declared with it can never be
+ * satisfied by a record at any other version — which is what lets
+ * `parseVersioned` in `./versioning.js` reject a wrong version loudly instead of
+ * guessing at a shape.
+ */
+export function version<T extends SupportedSchemaVersion>(value: T) {
+  return z.literal(value)
+}
 
 const utcTimestampPattern = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/
 

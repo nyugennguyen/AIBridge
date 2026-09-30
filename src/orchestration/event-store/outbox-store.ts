@@ -16,10 +16,6 @@ const DEFAULT_LEASE_MS = 30_000
 const DEFAULT_CLAIM_LIMIT = 100
 const MAX_ERROR_LENGTH = 2000
 
-export function nowIso(): Timestamp {
-  return new Date().toISOString() as Timestamp
-}
-
 function truncateError(error: unknown): string {
   const message =
     error instanceof Error
@@ -100,6 +96,18 @@ function buildFilterSql(filter: OutboxFilter | undefined): { sql: string, params
  * acknowledgement commits will cause the record to be redelivered after its
  * lease expires. Exactly-once *accepted intent* is provided by the event
  * transaction (unique command receipt + unique outbox delivery key), not here.
+ *
+ * **There is no ambient clock in this module.** Every method that stamps a time
+ * takes it: `now` is REQUIRED rather than optional, and the module exports no
+ * `nowIso` for a caller to fall back on. That is the deliberate choice over the
+ * two easier ones. An optional `now` with a `new Date()` behind it is a default
+ * that defeats the rule it appears to honour — a caller who forgets it gets a
+ * row stamped with a real instant, and nothing fails, so the omission is
+ * invisible until a test that moves a clock by hand quietly asserts against
+ * whatever the wall clock said. And a helper exported "just in case" is one more
+ * thing for the next caller to reach for. Every call site already passed `now`
+ * explicitly, so requiring it removes a path nothing used and makes the
+ * compiler the thing that catches the next mistake.
  */
 export class OutboxStore {
   readonly driver: SqliteDriver
@@ -141,10 +149,10 @@ export class OutboxStore {
    * A controller on a *different* store (a non-authoritative replica) has no
    * claim authority at all — ADR 0004 forbids building one.
    */
-  claimPendingOutbox(options: ClaimOutboxOptions = {}): OutboxClaim {
+  claimPendingOutbox(options: ClaimOutboxOptions): OutboxClaim {
     const limit = options.limit ?? DEFAULT_CLAIM_LIMIT
     const leaseMs = options.leaseMs ?? DEFAULT_LEASE_MS
-    const claimedAt = options.now ?? nowIso()
+    const claimedAt = options.now
     const token = options.claimToken ?? randomUUID()
     const leaseExpiresAt = new Date(Date.parse(claimedAt) + leaseMs).toISOString() as Timestamp
 
@@ -205,10 +213,10 @@ export class OutboxStore {
    */
   markOutboxSending(
     outboxId: string,
-    claimToken?: string,
-    options: { leaseMs?: number, now?: Timestamp } = {}
+    claimToken: string | undefined,
+    options: { leaseMs?: number, now: Timestamp }
   ): OutboxWriteResult {
-    const now = options.now ?? nowIso()
+    const now = options.now
     const leaseMs = options.leaseMs ?? DEFAULT_LEASE_MS
     const leaseExpiresAt = new Date(Date.parse(now) + leaseMs).toISOString() as Timestamp
 
@@ -229,7 +237,7 @@ export class OutboxStore {
     }
   }
 
-  markOutboxAcknowledged(outboxId: string, now: Timestamp = nowIso()): OutboxWriteResult {
+  markOutboxAcknowledged(outboxId: string, now: Timestamp): OutboxWriteResult {
     const changes = this.driver.run(
       `UPDATE outbox_records
           SET status = 'acknowledged', acknowledged_at = ?, claim_token = NULL, lease_expires_at = NULL
@@ -255,9 +263,9 @@ export class OutboxStore {
   markOutboxFailed(
     outboxId: string,
     error: unknown,
-    options: { claimToken?: string, nextAttemptAt?: Timestamp, now?: Timestamp } = {}
+    options: { claimToken?: string, nextAttemptAt?: Timestamp, now: Timestamp }
   ): OutboxWriteResult {
-    const now = options.now ?? nowIso()
+    const now = options.now
     const message = truncateError(error)
     const retrying = options.nextAttemptAt !== undefined
 
@@ -295,9 +303,9 @@ export class OutboxStore {
    * while this call was running is only touched once its lease lapses.
    */
   recoverStaleOutbox(
-    options: { now?: Timestamp, runId?: string, projectId?: string, destination?: string } = {}
+    options: { now: Timestamp, runId?: string, projectId?: string, destination?: string }
   ): OutboxRecoveryResult {
-    const now = options.now ?? nowIso()
+    const now = options.now
     const { sql: filterSql, params: filterParams } = buildFilterSql({
       projectId: options.projectId,
       runId: options.runId,
@@ -353,16 +361,25 @@ export class OutboxStore {
    * Terminal poison-message handling. Records that exceeded `maxAttempts` are
    * moved to `failed` and stop being claimable, but they are never deleted —
    * the outbox is evidence, not a cache.
+   *
+   * `next_attempt_at` is cleared in the SAME statement that sets `status`. The
+   * claim predicate filters on `status = 'pending'`, so a terminal row carrying a
+   * future deadline is not claimable and nothing functional depends on it — which
+   * is exactly why it is the kind of lie that survives: an operator reading the
+   * row sees a retry time, and any scheduler that computes a wake time from that
+   * column wakes for a record that will never be delivered again. A retained row
+   * must say it is terminal in every column that means anything.
    */
   exhaustOutbox(
     outboxId: string,
     error: unknown,
-    options: { now?: Timestamp } = {}
+    options: { now: Timestamp }
   ): OutboxWriteResult {
-    const now = options.now ?? nowIso()
+    const now = options.now
     const changes = this.driver.run(
       `UPDATE outbox_records
-          SET status = 'failed', last_error = ?, failed_at = ?, claim_token = NULL, lease_expires_at = NULL
+          SET status = 'failed', last_error = ?, failed_at = ?,
+              next_attempt_at = NULL, claim_token = NULL, lease_expires_at = NULL
         WHERE outbox_id = ? AND status IN ('pending', 'sending')`,
       truncateError(error),
       now,

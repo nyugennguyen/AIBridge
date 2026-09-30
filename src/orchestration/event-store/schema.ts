@@ -1,4 +1,15 @@
-export const CURRENT_SCHEMA_VERSION = 2
+/**
+ * The DATABASE schema version — the physical storage layout only.
+ *
+ * This is deliberately a different axis from the RECORD schema version in
+ * `../identifiers.ts` (`CURRENT_SCHEMA_VERSION`). The Milestone 3 re-approval
+ * recorded that the documented "a v1 binary can still read a v2 database"
+ * rollback boundary did not account for event-payload compatibility, because a
+ * payload shape changed while the record version stayed a literal. A payload
+ * shape change is therefore answered by a RECORD version bump, never by a
+ * migration here, and the two constants must not be conflated.
+ */
+export const CURRENT_DATABASE_VERSION = 2
 
 export const SCHEMA_MIGRATIONS_TABLE_SQL = `
 CREATE TABLE IF NOT EXISTS schema_migrations (

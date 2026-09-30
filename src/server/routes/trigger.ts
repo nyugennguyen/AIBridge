@@ -54,11 +54,9 @@ export function registerTriggerRoute(app: FastifyInstance, dependencies: AppDepe
         const blocked = await dependencies.jobManager.markBlocked(job.id, dependencyReferences)
 
         // A blocked job is still ACCEPTED work, so the kernel records it. It
-        // maps to a paused draft run with no launch effect: the job must not
+        // maps to a paused draft run and names no launch effect: the job must not
         // reach a runtime until its dependencies are satisfied.
-        const blockedAcceptance = dependencies.orchestration?.translation.acceptTrigger(blocked, {
-          authorizedBy: `trigger:${trigger.source_agent_id}`,
-        })
+        const blockedAcceptance = dependencies.orchestration?.translation.acceptTrigger(blocked)
         if (blockedAcceptance !== undefined && !blockedAcceptance.ok) {
           await dependencies.jobManager.markFailed(job.id, blockedAcceptance.error.message)
           return reply.code(500).send({ error: blockedAcceptance.error.message, code: blockedAcceptance.error.code })
@@ -77,13 +75,20 @@ export function registerTriggerRoute(app: FastifyInstance, dependencies: AppDepe
         )
       }
 
-      // The kernel's event transaction must contain no external effect, so the
-      // accepted intent is recorded FIRST and the runtime launch happens after
-      // that append has committed. When no kernel is attached this call is a
-      // no-op and the launch proceeds exactly as it did before.
-      const acceptance = dependencies.orchestration?.translation.acceptTrigger(job, {
-        authorizedBy: `trigger:${trigger.source_agent_id}`,
-      })
+      // M4-A. The kernel is asked to record the accepted intent FIRST, and that
+      // is all it is asked to do. It returns no launch effect, so there is
+      // nothing here to acknowledge and nothing the kernel has vouched for: the
+      // `createSession`/`sendPromptAsync` pair below is the RELEASED legacy
+      // behaviour, authorized by this route's own bearer, source/capability,
+      // allowlist and plan-review checks. It is deliberately not canonical work,
+      // which is why the recorded run stays a DRAFT+PAUSED run holding a PENDING
+      // task — the canonical record honestly shows that nothing canonical is
+      // running, and if this work is to run canonically an operator must approve
+      // it through `dispatch.propose` -> `dispatch.approve` -> `dispatch.execute`.
+      // Before M4-A this call returned a named `legacy.runtime.launch` outbox
+      // record carrying the route's checks as an `authorization` block, which
+      // was threat-model finding F-05: integrity standing in for authenticity.
+      const acceptance = dependencies.orchestration?.translation.acceptTrigger(job)
       if (acceptance !== undefined && !acceptance.ok) {
         // Fail closed: the legacy job exists in the JSON store but the kernel
         // cannot account for it. Reporting 202 here would tell the caller work
@@ -97,13 +102,6 @@ export function registerTriggerRoute(app: FastifyInstance, dependencies: AppDepe
       await dependencies.jobManager.attachSession(job.id, session.id)
       await dependencies.opencodeClient.sendPromptAsync(session.id, triggerData.prompt, triggerData.project_dir)
       const running = await dependencies.jobManager.markRunning(job.id)
-
-      // The effect is acknowledged only once the runtime actually accepted it,
-      // so a crash between the append and the launch leaves a PENDING intent
-      // that a redelivery can recognise rather than a lost job.
-      if (acceptance?.effect !== undefined) {
-        dependencies.orchestration?.translation.acknowledgeLaunch(acceptance.effect.outboxId)
-      }
 
       await dependencies.taskGraphSyncer.syncJobToTask(resolvedTaskId, "running", {
         Job: job.id,

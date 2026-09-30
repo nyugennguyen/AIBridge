@@ -9,7 +9,7 @@ import {
   FingerprintConflictError,
   SequenceMismatchError,
   StreamProjectMismatchError,
-  UnsupportedSchemaVersionError,
+  UnsupportedDatabaseVersionError,
 } from "../../../src/orchestration/event-store/errors.js"
 import { SqliteEventStore } from "../../../src/orchestration/event-store/event-store.js"
 import {
@@ -17,7 +17,7 @@ import {
   openInMemoryDriver,
   type SqliteDriver,
 } from "../../../src/orchestration/event-store/sqlite-driver.js"
-import { CURRENT_SCHEMA_VERSION } from "../../../src/orchestration/event-store/schema.js"
+import { CURRENT_DATABASE_VERSION } from "../../../src/orchestration/event-store/schema.js"
 
 function makeCommand(options: {
   commandId: string
@@ -364,7 +364,7 @@ describe("SqliteEventStore", () => {
         new SqliteEventStore(d)
 
         // Inject future version into schema_migrations
-        const futureVersion = CURRENT_SCHEMA_VERSION + 1
+        const futureVersion = CURRENT_DATABASE_VERSION + 1
         d.run(
           "INSERT INTO schema_migrations (version, applied_at, name) VALUES (?, ?, ?)",
           futureVersion,
@@ -380,15 +380,15 @@ describe("SqliteEventStore", () => {
       try {
         expect(() => {
           new SqliteEventStore(reopenDriver)
-        }).toThrow(UnsupportedSchemaVersionError)
+        }).toThrow(UnsupportedDatabaseVersionError)
 
         try {
           new SqliteEventStore(reopenDriver)
         } catch (err: any) {
-          expect(err).toBeInstanceOf(UnsupportedSchemaVersionError)
+          expect(err).toBeInstanceOf(UnsupportedDatabaseVersionError)
           expect(err.code).toBe("schema.unsupported_version")
-          expect(err.dbVersion).toBe(CURRENT_SCHEMA_VERSION + 1)
-          expect(err.supportedVersion).toBe(CURRENT_SCHEMA_VERSION)
+          expect(err.dbVersion).toBe(CURRENT_DATABASE_VERSION + 1)
+          expect(err.supportedVersion).toBe(CURRENT_DATABASE_VERSION)
           expect(err.toContractError().category).toBe("internal_failure")
         }
       } finally {
@@ -472,11 +472,16 @@ describe("SqliteEventStore", () => {
       expect(pending[0].destination).toBe("worker-node-1")
       expect(pending[0].status).toBe("pending")
 
-      store.markOutboxAcknowledged("out-1")
+      // The instant is supplied rather than defaulted. `markOutboxAcknowledged`
+      // has no wall-clock fallback, which is the point of the change that made
+      // `now` required: a test that asserted `toBeDefined()` on an ambient
+      // timestamp was asserting that a clock exists, not that the store wrote
+      // the one it was handed.
+      store.markOutboxAcknowledged("out-1", "2026-09-17T00:00:30.000Z")
 
       const updated = store.getOutboxRecord("out-1")
       expect(updated?.status).toBe("acknowledged")
-      expect(updated?.acknowledgedAt).toBeDefined()
+      expect(updated?.acknowledgedAt).toBe("2026-09-17T00:00:30.000Z")
       expect(store.listPendingOutbox()).toHaveLength(0)
     })
   })

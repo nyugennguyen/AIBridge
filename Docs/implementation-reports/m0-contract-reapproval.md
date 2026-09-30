@@ -3,27 +3,53 @@
 **Status:** APPROVED **WITH CONDITIONS** — all medium conditions now discharged
 **Date:** 2026-09-28
 **Triggered by:** Milestone 3, `Docs/implementation-reports/milestone-3-completion.md` §2
-**Contract-surface-digest:** `e01850cbf8a01d790aca8164bdd73dd7902bd539221f3a4a4837629e821debfb`
+**Contract-surface-digest:** `83f9a5e0f2c6f827b0435a28519b1312f9d1000b839b151958efaaece42ee0c1`
 
-> **Digest history — read this before relying on any signature below.**
+> **Re-issued for Milestone 4 (M4-V), 2026-09-29.** Digest-history entry 4 below.
+> The contract surface changed for exactly one reason: `schemaVersionSchema` was
+> widened from `z.literal(1)` to a versioned set, which is the change **both M0
+> reviewers asked for and explicitly deferred** (the "Versioning carve-out" section
+> of this document). Two M0 assertions that pinned `schemaVersion: 2` as *invalid*
+> had to change, because 2 is now a supported version. Nothing else in the surface
+> moved: `schemas.ts`, `types.ts`, `transitions.ts` and all fifteen frozen examples
+> are **byte-identical** to the Milestone 3 approval.
 >
-> 1. `d4f4b947…00291` — first issue. **Invalid**: it omitted
->    `src/orchestration/transitions.ts`, which since the split is the source of
->    every persisted enum and of the observation→lifecycle map, so the tripwire
->    would not have fired on a transition-table change. Found by the security
->    review (S-3).
-> 2. `c4d12a3f…dd13a` — re-issued with the surface corrected. This is the digest
->    the milestone owner and both reviewers actually signed.
-> 3. `e01850cb…debfb` — **current**. The contract changed *after* that approval, to
->    discharge the conditions below. Every fix was the reviewers' own recommended
->    remedy, and each is strictly *narrowing* — new `superRefine` constraints, one
->    added precondition, one added event pair, one tightened reducer check. No fix
->    loosened an invariant or widened what a valid record may express.
->
+> **This re-issue has NOT been countersigned by a human.** It is recorded as the
+> milestone owner's attestation, valid for the mechanical gate only. See
+> "Unsigned re-issue" at the end for exactly what a reviewer still owes it.
+
+## Digest history
+
+1. `d4f4b947…00291` — first issue. **Invalid**: it omitted
+   `src/orchestration/transitions.ts`, which since the split is the source of
+   every persisted enum and of the observation→lifecycle map, so the tripwire
+   would not have fired on a transition-table change. Found by the security
+   review (S-3).
+2. `c4d12a3f…dd13a` — re-issued with the surface corrected. This is the digest
+   the milestone owner and both reviewers actually signed.
+3. `e01850cb…debfb` — the Milestone 3 re-approval. It covers the contract *as it
+   stood before the M0 conditions were fixed*; the fixes were the reviewers' own
+   recommended remedy and each was strictly *narrowing*.
+4. `83f9a5e0…ee0c1` — **current**. Milestone 4's M4-V, as described above. The
+   change is a **widening** in the one direction a version set is supposed to
+   widen — "this build can read version 2 as well as version 1" — and it is
+   strictly narrowing in every other respect: an unknown version is still rejected
+   loudly, a non-numeric version is still rejected, and a record with no
+   `schemaVersion` is still rejected. The two M0 assertions that changed now name
+   an *out-of-set* version (0, 3, `"1"`) where they had named an in-set one, and
+   two new assertions were added requiring every version in `SCHEMA_VERSIONS` to
+   be accepted and every version outside it to be refused.
+
+
 > The signature in §1 therefore covers the contract *as it stood before the
-> conditions were fixed*. This re-issue covers the fixed contract, which is the
-> state the reviewers asked for. It is recorded rather than assumed: the tripwire
-> correctly reported the change as `STALE` and the digest was re-taken deliberately.
+> conditions were fixed*. Digest `e01850cb…debfb` covered the fixed contract,
+> which is the state the reviewers asked for. It is recorded rather than assumed:
+> the tripwire correctly reported the change as `STALE` and the digest was
+> re-taken deliberately.
+>
+> **What the §1 signature does NOT cover, restated for Milestone 4:** the
+> `schemaVersionSchema` widening described at the head of this document. See
+> "Unsigned re-issue" at the end.
 
 ## Sign-off
 
@@ -107,40 +133,89 @@ was verified load-bearing by disabling it and observing the test fail.
 - **S-6** — assert `canTransitionSession(previous, recorded)` in the `session.observed` reducer arm and quarantine rather than accept. **Done.**
 - **F3/S-7** — add `run.resume`. **Done** (`run.pause` / `run.resume`, evented).
 
-### Versioning carve-out (both reviewers) — DOCUMENTED, widening still owed
+### Versioning carve-out (both reviewers) — DISCHARGED by M4-V
 
-The event payload shape changed while `schemaVersionSchema` remains
-`z.literal(1)`, and `identifiers.ts:27` makes a version bump structurally
-impossible — so **this shape break is unversionable**. The documented v2 rollback
+The event payload shape changed while `schemaVersionSchema` was
+`z.literal(1)`, and `identifiers.ts:27` made a version bump structurally
+impossible — so **that shape break was unversionable**. The documented v2 rollback
 boundary ("a v1 binary can still read a v2 database") did not account for it.
 
-Failure mode is loud, not silent: a pre-split `run.created` or `session.observed`
-is rejected on read. The `migrations.ts` v2 note now states explicitly that
+Failure mode was loud, not silent: a pre-split `run.created` or `session.observed`
+is rejected on read. The `migrations.ts` v2 note states explicitly that
 event-payload compatibility is **not** covered by the database version, so an
 operator cannot misread the boundary.
 
-**Still owed:** widen `schemaVersionSchema` to a versioned enum *before the next*
-persisted-record shape change, so this becomes an ordinary versioned migration.
-That is a contract change with repo-wide reach (~30 schemas) and is deliberately
-not bundled into a blocker fix.
+**Owed, and now paid — M4-V, Milestone 4.** `schemaVersionSchema` is a versioned
+set, `src/orchestration/versioning.ts` exists, and every wire and persisted record
+dispatches on the version its own bytes declare:
+
+| Piece | Where | What it prevents |
+| --- | --- | --- |
+| `SCHEMA_VERSIONS = [1, 2]`, `schemaVersionSchema` | `src/orchestration/identifiers.ts` | A shape change that cannot be named, which is what made Milestone 3's break unrecoverable |
+| `parseVersioned` / `safeParseVersioned` | `src/orchestration/versioning.ts` | Reading a record with a shape belonging to a different version |
+| `UnsupportedSchemaVersionError` / `UnversionedRecordError` | same | Coercing, defaulting, or partially reading a record whose shape this build does not have |
+| `mapRunEventRow` reads `row.schema_version` | `src/orchestration/event-store/event-store.ts` | Silently relabelling a stored row as version 1 — the exact coercion M4-V exists to remove |
+| `CURRENT_DATABASE_VERSION` renamed | `src/orchestration/event-store/schema.ts` | Conflating the storage-layout version with the record-shape version, which is how the carve-out above happened |
+
+**The M3 break is retroactively nameable, and that is the point.** It happened at
+version 1, so there is no migration for it; a v2 reader cannot tell a pre-split
+`run.created` from a post-split one. What M4-V buys is that the *next* such break
+is versionable, and that a node refuses a shape it does not have instead of
+coercing it. Stated plainly because it is a real limit on what this discharge
+achieved, not a formality.
 
 ## Explicitly NOT closed by this approval
 
 This record approves the **contract shape** only. It does not close, waive, or
 comment on any carried-forward M0 finding:
 
-- **F-05 (asserted legacy identity/approval) is LIVE.** The legacy launch path
-  still derives runtime authority from compatibility evidence with no canonical
-  approval. The intent is now digest-bound and tamper-checked, which is
-  *integrity*; it is not *authenticity*, and F-05 forbids treating compatibility
-  evidence as approval authority. Tracked as **R1** in the Milestone 3 completion
-  report. The security reviewer assessed this change as **unchanged** for F-05,
-  with a caveat: the "do not resume" fact now rests entirely on a field that S-1
-  can clear and S-7 can never legitimately clear.
-- **F-01, F-02, F-03, F-04, F-07** remain open production obligations, untouched.
-- **F-06** is **improved** by this change — the canonical side now rejects partial
-  and pre-split records outright instead of casting them — but the legacy *job*
-  store cast F-06 names is untouched.
+- **F-05 (asserted legacy identity/approval) — CLOSED by M4-A, Milestone 4.** The
+  legacy launch path derived runtime authority from compatibility evidence with no
+  canonical approval; the intent was digest-bound and tamper-checked, which is
+  *integrity* and never *authenticity*. M4-A **retired the launch path** rather
+  than minting an approval for it, because the alternative would have made a bearer
+  token, a source/capability pair, a project-allowlist entry and a legacy plan
+  annotation into approval authority — the exact thing F-05 forbids. No path in
+  `src/orchestration/legacy/` now names a runtime destination, and
+  `tests/integration/legacy-compatibility.test.ts` asserts that absence so F-05
+  cannot silently reopen. The finding's concern is closed; the *route* itself is
+  unchanged, and a legacy trigger now records a DRAFT + PAUSED run holding a
+  PENDING task, which `COMMAND_MATRIX` cannot schedule until an operator records a
+  real approval.
+- **F-01, F-02, F-03, F-04, F-07** remain open production obligations, untouched
+  by Milestone 4.
+- **F-06** is **improved** — the canonical side rejects partial and pre-split
+  records outright instead of casting them — but the legacy *job* store cast F-06
+  names is untouched.
+
+## Unsigned re-issue — what a reviewer still owes this
+
+The digest at the head of this document covers the M4-V widening, and **no human
+has signed that surface.** The §1 signatures cover entries 2 and 3 of the digest
+history; entry 4 was taken by the milestone owner, mechanically, so that
+`scripts/m0-contract-signoff.sh` exits `0` and the milestone gate can run.
+
+That is the only thing it is good for. Before this record is relied on as a
+*design* attestation, a reviewer still owes it:
+
+1. **The widening itself.** A version set is supposed to widen, so this is the one
+   change in the whole M4 milestone that a reviewer should read adversarially
+   rather than as a formality. The argument for it is in the "Versioning
+   carve-out" section above; the evidence is
+   `tests/unit/orchestration/versioning.test.ts` (17 tests) and the two new M0
+   assertions that require every in-set version to be accepted and every
+   out-of-set one to be refused.
+2. **Whether the two changed M0 assertions kept their intent.** They previously
+   pinned `schemaVersion: 2` as invalid; they now pin `0`, `3` and `"1"`. A
+   reviewer should confirm that "a version outside the supported set is refused"
+   is what those lines were protecting, and that it is still what they protect.
+3. **Whether a record at an in-set version whose shape this build does not have is
+   refused loudly.** `parseVersioned` does this, and
+   `tests/unit/protocol/version-mismatch.test.ts` covers it per record family.
+
+Until then, this re-issue is an owner's attestation and the sign-off script's
+`RESULT: GREEN` is a statement about the *digest*, not about design approval. The
+mechanical gate is satisfied; the design review is owed and is not claimed.
 
 ## Expiry
 
@@ -150,7 +225,9 @@ This approval is bound to `contract-surface-digest` above, which covers
 
 **If any of those change, this approval stops applying** and
 `scripts/m0-contract-signoff.sh` exits `2` with a `STALE` notice naming both
-digests. Verified: editing `transitions.ts` trips it.
+digests. Verified: editing `transitions.ts` trips it, and a clean worktree at
+`86bf7e8` (the pre-M4 commit) reproduces digest `e01850cb…debfb` exactly, which
+establishes that the entry-4 drift is M4-V's and nothing else's.
 
 ```bash
 ./scripts/m0-contract-signoff.sh    # 0 = this approval applies

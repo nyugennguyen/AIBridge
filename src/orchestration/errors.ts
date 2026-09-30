@@ -1,5 +1,5 @@
 import { z } from "zod"
-import { correlationIdSchema, schemaVersionSchema } from "./identifiers.js"
+import { correlationIdSchema, FROZEN_DOMAIN_SCHEMA_VERSION, schemaVersionSchema } from "./identifiers.js"
 
 export const errorCategorySchema = z.enum([
   "validation",
@@ -49,7 +49,9 @@ export function createContractError(
   correlationId?: string,
 ): ContractError {
   return contractErrorSchema.parse({
-    schemaVersion: 1,
+    // A `ContractError` is a frozen M0 domain record; it is written at the
+    // domain version and only moves with a deliberate, re-approved change.
+    schemaVersion: FROZEN_DOMAIN_SCHEMA_VERSION,
     category,
     code,
     message,

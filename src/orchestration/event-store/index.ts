@@ -8,7 +8,7 @@ export {
 } from "./sqlite-driver.js"
 
 export {
-  CURRENT_SCHEMA_VERSION,
+  CURRENT_DATABASE_VERSION,
   SCHEMA_MIGRATIONS_TABLE_SQL,
   INITIAL_SCHEMA_SQL,
   DISPATCH_ENVELOPE_TOMBSTONE_SQL,
@@ -40,7 +40,7 @@ export {
 
 export {
   EventStoreError,
-  UnsupportedSchemaVersionError,
+  UnsupportedDatabaseVersionError,
   FailedMigrationError,
   IncompleteMigrationHistoryError,
   DestructiveMigrationNotPermittedError,
@@ -65,7 +65,6 @@ export {
 export {
   OutboxStore,
   mapOutboxRow,
-  nowIso,
 } from "./outbox-store.js"
 
 export {

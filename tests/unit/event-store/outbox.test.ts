@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
+import { readFileSync } from "node:fs"
+import { join } from "node:path"
 import { SqliteEventStore } from "../../../src/orchestration/event-store/event-store.js"
 import {
   DuplicateEventError,
@@ -438,6 +440,31 @@ describeEachBackend("B7: outbox claim/lease/recovery primitives", (backend: Back
       // The record is retained as evidence, never deleted.
       expect(store.getOutboxRecord("out-1")).toBeDefined()
     })
+
+    it("clears the retry deadline on the terminal row, so it does not still read as scheduled", () => {
+      // The retained row carries `next_attempt_at` from its last retryable failure,
+      // and the claim predicate ignores it (it filters on `status = 'pending'`), so
+      // nothing functional depends on clearing it — which is exactly why a row
+      // that still reads as "scheduled for T0" survives review. An operator reading
+      // it is told there is a retry coming, and a scheduler computing a wake time
+      // from the column wakes for a record that will never be delivered again.
+      seedOutbox(store, [{ outboxId: "out-1", destination: "node-a" }])
+      store.claimPendingOutbox({ now: T0, leaseMs: 30_000, limit: 1 })
+      store.markOutboxFailed("out-1", new Error("transient"), { nextAttemptAt: T1, now: T0 })
+      expect(store.getOutboxRecord("out-1")?.nextAttemptAt).toBe(T1)
+
+      const res = store.exhaustOutbox("out-1", new Error("max attempts reached"), { now: T2 })
+      expect(res.changed).toBe(true)
+      expect(res.record?.status).toBe("failed")
+      // Asserted on the RETURNED record and on a fresh read, because the write
+      // and the row a caller is handed are two things and only the second one is
+      // what an operator sees.
+      expect(res.record?.nextAttemptAt).toBeUndefined()
+      expect(store.getOutboxRecord("out-1")?.nextAttemptAt).toBeUndefined()
+      // Every other time column is still there: a terminal row that says nothing
+      // about when it failed is not more honest, it is just less useful.
+      expect(store.getOutboxRecord("out-1")?.failedAt).toBe(T2)
+    })
   })
 
   describe("atomicity with the event transaction", () => {
@@ -467,5 +494,47 @@ describeEachBackend("B7: outbox claim/lease/recovery primitives", (backend: Back
       expect(store.getCommandReceipt("project-alpha", "run-101", "cmd-rollback")).toBeUndefined()
       expect(store.countOutbox()).toBe(1)
     })
+  })
+})
+
+/**
+ * The outbox has NO ambient clock, asserted over the source rather than over a
+ * return value.
+ *
+ * Outside `describeEachBackend` on purpose: this claim is about the module, not
+ * about a database, and it must keep holding on a runtime where the driver does
+ * not load and every behavioural test above is skipped.
+ *
+ * The failure it prevents is silent in the way that matters. A `nowIso()` helper
+ * with a wall clock behind it looks like a convenience and is a hole: a caller who
+ * forgets `now` gets a row stamped with a real instant, nothing throws, and the
+ * omission only surfaces when a test that moves a clock by hand asserts against
+ * whatever the wall clock said — which is a different failure, in a different
+ * file, with a message about the wrong thing.
+ */
+describe("the outbox store reads no clock of its own", () => {
+  // Comments are stripped first, and that is not a formality: this file's own
+  // module doc explains the rule in prose, and a naive scan would fail on the
+  // explanation of the guardrail rather than on a violation of it.
+  const code = readFileSync(join(import.meta.dirname, "../../../src/orchestration/event-store/outbox-store.ts"), "utf8")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/\/\/.*$/gm, "")
+
+  it("exports no nowIso and calls no Date constructor", () => {
+    expect(code).not.toMatch(/\bnowIso\b/)
+    expect(code).not.toMatch(/new Date\(\)/)
+  })
+
+  it("requires `now` at every method that stamps a time", () => {
+    // `options.now` is required in `ClaimOutboxOptions` and in each inline option
+    // bag; a `now?:` anywhere in this module would reopen the same hole behind the
+    // first one.
+    expect(code).not.toMatch(/now\?:\s*Timestamp/)
+    expect(code).not.toMatch(/= nowIso\(\)/)
+    // The ONE `options.now ??` left is the claim's readiness predicate falling back
+    // to the caller's own `readyAt` filter — a filter, not a clock. Asserted
+    // exactly, because "no `??` at all" would have had to delete a correct line.
+    expect(code.match(/options\.now \?\? /g) ?? []).toEqual(["options.now ?? "])
+    expect(code).toMatch(/readyAt: options\.now \?\? options\.readyAt/)
   })
 })

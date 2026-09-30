@@ -2,6 +2,7 @@ import { digestDispatchEnvelope } from "../digest.js"
 import { sessionIdSchema } from "../identifiers.js"
 import { createContractError } from "../errors.js"
 import { verifyApproval } from "../policy/approval.js"
+import { validateCommandStateByType, type AggregateStateContext } from "../invariants.js"
 import { canTransitionDispatch, canTransitionRun, isRunTerminal, isDispatchTerminal, isApprovalTerminal, type RunState, type DispatchState } from "../transitions.js"
 import type { Approval, Dispatch, OrchestrationCommand, OrchestrationEvent, Run, Session, Task } from "../types.js"
 import type { EventInput, OutboxRecordInput } from "../event-store/types.js"
@@ -67,6 +68,18 @@ export class DispatchCoordinator {
    * Submits a command. Idempotent by `commandId`: a duplicate returns the
    * originally recorded outcome and performs no second append, so a retried
    * command can never launch a second session or submit a second prompt.
+   *
+   * Authorization order is load-bearing (M4-M):
+   *
+   *   1. `COMMAND_EVENT_ALLOWLIST` — a programming-error guard, throws.
+   *   2. `COMMAND_MATRIX`          — the state preconditions, refuses.
+   *   3. the command's own domain preconditions, resolved against the RECORDED
+   *      log rather than against the payload.
+   *
+   * The matrix is consulted before planning so that EVERY command type reaches
+   * it, including the session commands the coordinator does not yet implement —
+   * a matrix entry that only some command types can reach is a matrix that will
+   * silently rot back into decoration.
    */
   submit(command: OrchestrationCommand): CoordinatorResult<{ readonly events: readonly string[]; readonly duplicate: boolean }> {
     this.#deps.boundary?.beforeValidate?.(command)
@@ -76,6 +89,36 @@ export class DispatchCoordinator {
     }
 
     this.#deps.boundary?.afterValidate?.(command)
+
+    const unlicensed = this.#assertMatrixLicensed(command)
+    if (unlicensed !== undefined) {
+      // The matrix refuses. Two things can still be true, and the distinction
+      // decides which error the caller sees.
+      const wouldDo = this.#plan(command)
+
+      // (a) The command performs no transition and names no effect at all — a
+      // retried `run.cancel` of an already-finished run, a repeated pause of an
+      // already-paused run. There is nothing for the matrix to have licensed, so
+      // the no-op stands. This matters on a mesh: at-least-once redelivery is
+      // the normal case, and answering it with a conflict would turn a retried
+      // cancel into an operator-visible failure.
+      if (wouldDo.ok && wouldDo.value.events.length === 0 && wouldDo.value.outboxRecords.length === 0) {
+        // fall through to the converged no-op
+      } else if (!wouldDo.ok) {
+        // (b) The coordinator has its own, more specific reason — an unknown run,
+        // an approval that is not recorded, a retry of a live attempt. The matrix
+        // refusal is still binding and the command is still refused, but the
+        // caller gets the error that actually explains the problem instead of a
+        // generic state-precondition one.
+        return wouldDo as CoordinatorResult<never>
+      } else {
+        // (c) The coordinator WOULD have planned a real transition. This is the
+        // case the matrix exists for: nothing else here refuses it, so the
+        // matrix's state precondition is the only thing standing between the
+        // command and the log.
+        return unlicensed
+      }
+    }
 
     const planned = this.#plan(command)
     if (!planned.ok) return planned as CoordinatorResult<never>
@@ -105,6 +148,104 @@ export class DispatchCoordinator {
       events: appended.duplicate ? [] : planned.value.events.map((event) => event.type),
       duplicate: appended.duplicate,
     })
+  }
+
+  /**
+   * The `COMMAND_MATRIX` gate (M4-M). Returns a refusal, or `undefined` when the
+   * matrix licenses the command in the state the RECORDED log is actually in.
+   *
+   * The context is built from `readRun` — the projection rebuilt by replaying the
+   * event log — and never from the command payload. A payload is a claim about
+   * what the state is; the projection is the record of what it is. That is the
+   * same discipline `#executeDispatch` already applies to approvals, and it is
+   * the reason this gate cannot be bypassed by constructing a self-consistent
+   * command.
+   */
+  #assertMatrixLicensed(command: OrchestrationCommand): CoordinatorResult<never> | undefined {
+    const context = this.#matrixContext(command)
+    const result = validateCommandStateByType(command.type, context)
+    if (result.ok) return undefined
+    return fail(result.error.category as never, result.error.code, result.error.message)
+  }
+
+  /**
+   * The aggregate states this command would act in, read from the recorded log.
+   *
+   * A field is left `undefined` when the command does not name that aggregate, or
+   * when the aggregate is not in the log. `undefined` means "this dimension does
+   * not constrain the command"; the coordinator's own preconditions then refuse
+   * an unknown run, dispatch, or task with a precise error. That is deliberate:
+   * inventing a state for something the log has never heard of would let an
+   * unknown aggregate slip past the gate as though it were a known one.
+   */
+  #matrixContext(command: OrchestrationCommand): AggregateStateContext {
+    const context: AggregateStateContext = {}
+    const state = this.#deps.readRun(command.runId)
+    if (state === undefined) return context
+    // `lifecycleState`, never the derived `state`: a projection may report a run
+    // as `paused` or a dispatch as `queued`, and the matrix speaks the kernel
+    // lifecycle vocabulary from `../transitions.js`.
+    context.runState = state.run.lifecycleState
+
+    const taskOf = (taskId: string | undefined) =>
+      taskId === undefined ? undefined : state.tasks[taskId]?.lifecycleState
+    const sessionOf = (sessionId: string | undefined) =>
+      sessionId === undefined ? undefined : state.sessions[sessionId]?.state
+
+    switch (command.type) {
+      case "dispatch.propose": {
+        context.taskState = taskOf(command.payload.dispatch.envelope.taskId)
+        break
+      }
+      case "dispatch.approve": {
+        const target = command.payload.dispatch.envelope.dispatchId
+        const recorded = state.dispatches[target]
+        context.dispatchState = recorded?.lifecycleState
+        context.taskState = taskOf(command.payload.dispatch.envelope.taskId)
+        // The payload approval is the record this command CREATES, so its state
+        // is the result. What the matrix is given instead is the approval the
+        // log already recorded for this dispatch, if any.
+        const prior = Object.values(state.approvals).find(
+          (approval) => approval.dispatchId === target && approval.envelopeDigest !== command.payload.approval.envelopeDigest,
+        )
+        context.approvalState = prior?.state
+        break
+      }
+      case "dispatch.retry": {
+        context.dispatchState = state.dispatches[command.payload.previousDispatchId]?.lifecycleState
+        context.taskState = taskOf(command.payload.dispatch.envelope.taskId)
+        break
+      }
+      case "dispatch.execute": {
+        const target = command.payload.dispatch.envelope.dispatchId
+        context.dispatchState = state.dispatches[target]?.lifecycleState
+        context.taskState = taskOf(command.payload.dispatch.envelope.taskId)
+        // Deliberately the RECORDED approval's state, never the payload's: the
+        // payload's approval is a pointer, and a pointer may claim anything.
+        context.approvalState = state.approvals[command.payload.approval.approvalId]?.state
+        break
+      }
+      case "dispatch.timeout.request": {
+        const recorded = state.dispatches[command.payload.dispatchId]
+        context.dispatchState = recorded?.lifecycleState
+        const session = Object.values(state.sessions).find((candidate) => candidate.dispatchId === command.payload.dispatchId)
+        context.sessionState = session?.state
+        break
+      }
+      case "session.prompt":
+      case "session.respond":
+      case "session.interrupt":
+      case "session.terminate": {
+        context.sessionState = sessionOf(command.payload.sessionId)
+        break
+      }
+      case "run.create":
+      case "run.pause":
+      case "run.resume":
+      case "run.cancel":
+        break
+    }
+    return context
   }
 
   /**

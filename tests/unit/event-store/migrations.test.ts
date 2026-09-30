@@ -7,10 +7,10 @@ import {
   FailedMigrationError,
   IncompleteMigrationHistoryError,
   IncompleteSchemaError,
-  UnsupportedSchemaVersionError,
+  UnsupportedDatabaseVersionError,
 } from "../../../src/orchestration/event-store/errors.js"
 import {
-  CURRENT_SCHEMA_VERSION,
+  CURRENT_DATABASE_VERSION,
   INITIAL_SCHEMA_SQL,
   MIGRATIONS,
   REQUIRED_V2_OBJECTS,
@@ -358,13 +358,13 @@ describeEachBackend("Migration v1 -> v2", (backend: Backend) => {
       "from_the_future"
     )
 
-    expect(() => new SqliteEventStore(driver)).toThrow(UnsupportedSchemaVersionError)
+    expect(() => new SqliteEventStore(driver)).toThrow(UnsupportedDatabaseVersionError)
     try {
       new SqliteEventStore(driver)
     } catch (err: any) {
       expect(err.code).toBe("schema.unsupported_version")
       expect(err.dbVersion).toBe(99)
-      expect(err.supportedVersion).toBe(CURRENT_SCHEMA_VERSION)
+      expect(err.supportedVersion).toBe(CURRENT_DATABASE_VERSION)
     }
   })
 

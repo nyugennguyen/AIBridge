@@ -7,7 +7,7 @@ import {
   fingerprintCommand,
 } from "../../../src/orchestration/event-store/fingerprint.js"
 import {
-  CURRENT_SCHEMA_VERSION,
+  CURRENT_DATABASE_VERSION,
   INITIAL_SCHEMA_SQL,
   SCHEMA_MIGRATIONS_TABLE_SQL,
 } from "../../../src/orchestration/event-store/schema.js"
@@ -298,7 +298,7 @@ describe("B8: duplicate-command idempotency across transport-envelope fields", (
   })
 
   it("current schema version is 2", () => {
-    expect(CURRENT_SCHEMA_VERSION).toBe(2)
+    expect(CURRENT_DATABASE_VERSION).toBe(2)
     const row = driver.get<{ max_version: number }>("SELECT MAX(version) as max_version FROM schema_migrations")
     expect(row?.max_version).toBe(2)
   })

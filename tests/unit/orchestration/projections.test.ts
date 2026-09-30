@@ -1075,6 +1075,319 @@ describe("Projection Reducer and Projection Engine", () => {
       expect(state.run.state).toBe("completed")
     })
 
+    it("does not end the run while a task is still retryable, and settles it on the next attempt", () => {
+      // Regression for the defect M4-M surfaced. `dispatch.finished` already
+      // recorded `retryable: true` on a failed attempt and already said in a
+      // comment that such an attempt "must not end the run", but the
+      // run-termination test consulted task STATE alone. So a run whose only
+      // task failed once went `failed` — and because a terminal run is
+      // absorbing, `dispatch.retry` was then unlicensed at the command seam
+      // (`COMMAND_MATRIX` requires a non-terminal run), making "a retry ADDS a
+      // dispatch attempt rather than erasing failure history" unreachable.
+      let state: RunProjectionState | null = null
+
+      const runEvt = makeEvent({
+        schemaVersion: 1,
+        eventId: "evt-rt-1",
+        sequence: 1,
+        projectId: PROJECT_ID,
+        runId: RUN_ID,
+        actor: { kind: "node", nodeId: "node-test" },
+        occurredAt: "2026-09-17T00:00:01.000Z",
+        correlationId: "corr-1",
+        causation: null,
+        controllerEpoch: 1,
+        type: "run.created",
+        payload: {
+          run: {
+            schemaVersion: 1,
+            runId: RUN_ID,
+            projectId: PROJECT_ID,
+            goal: "Retryable failure",
+            state: "draft",
+            paused: false,
+            createdAt: "2026-09-17T00:00:01.000Z",
+            updatedAt: "2026-09-17T00:00:01.000Z",
+            externalReferences: [],
+          },
+        },
+      })
+      const taskEvt = makeEvent({
+        schemaVersion: 1,
+        eventId: "evt-rt-2",
+        sequence: 2,
+        projectId: PROJECT_ID,
+        runId: RUN_ID,
+        actor: { kind: "node", nodeId: "node-test" },
+        occurredAt: "2026-09-17T00:00:02.000Z",
+        correlationId: "corr-1",
+        causation: null,
+        controllerEpoch: 1,
+        type: "task.created",
+        payload: {
+          task: {
+            schemaVersion: 1,
+            taskId: "task-rt",
+            runId: RUN_ID,
+            projectId: PROJECT_ID,
+            title: "Retryable task",
+            description: "Fails once",
+            failurePolicy: "block",
+            state: "pending",
+            dependencies: [],
+            externalReferences: [],
+          },
+        },
+      })
+      const env1 = makeEnvelope({ dispatchId: "disp-rt-1", taskId: "task-rt", attempt: 1 })
+      const prop1 = makeEvent({
+        schemaVersion: 1,
+        eventId: "evt-rt-3",
+        sequence: 3,
+        projectId: PROJECT_ID,
+        runId: RUN_ID,
+        actor: { kind: "node", nodeId: "node-test" },
+        occurredAt: "2026-09-17T00:00:03.000Z",
+        correlationId: "corr-1",
+        causation: null,
+        controllerEpoch: 1,
+        type: "dispatch.proposed",
+        payload: {
+          dispatch: {
+            schemaVersion: 1,
+            envelope: env1,
+            envelopeDigest: "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+            state: "proposed",
+            createdAt: "2026-09-17T00:00:03.000Z",
+            externalReferences: [],
+          },
+        },
+      })
+      const start1 = makeEvent({
+        schemaVersion: 1,
+        eventId: "evt-rt-3b",
+        sequence: 4,
+        projectId: PROJECT_ID,
+        runId: RUN_ID,
+        actor: { kind: "node", nodeId: "node-test" },
+        occurredAt: "2026-09-17T00:00:04.000Z",
+        correlationId: "corr-1",
+        causation: null,
+        controllerEpoch: 1,
+        type: "dispatch.started",
+        payload: {
+          session: {
+            schemaVersion: 1,
+            sessionId: "sess-rt-1",
+            projectId: PROJECT_ID,
+            runId: RUN_ID,
+            taskId: "task-rt",
+            dispatchId: "disp-rt-1",
+            nodeId: "node-test",
+            installationId: "install-test",
+            runtimeKind: "contract-fake",
+            lifecycleState: "running",
+            observedState: "working",
+          },
+        },
+      })
+      const fin1 = makeEvent({
+        schemaVersion: 1,
+        eventId: "evt-rt-4",
+        sequence: 5,
+        projectId: PROJECT_ID,
+        runId: RUN_ID,
+        actor: { kind: "node", nodeId: "node-test" },
+        occurredAt: "2026-09-17T00:00:04.000Z",
+        correlationId: "corr-1",
+        causation: null,
+        controllerEpoch: 1,
+        type: "dispatch.finished",
+        payload: { dispatchId: "disp-rt-1", outcome: "failed", summary: "transient" },
+      })
+
+      state = reduceEvent(state, runEvt)
+      state = reduceEvent(state, taskEvt)
+      state = reduceEvent(state, prop1)
+      state = reduceEvent(state, start1)
+      state = reduceEvent(state, fin1)
+
+      // The failure is recorded in full; nothing is erased.
+      expect(state.dispatches["disp-rt-1"].state).toBe("failed")
+      expect(state.tasks["task-rt"].state).toBe("failed")
+      expect(state.tasks["task-rt"].retryable).toBe(true)
+      expect(state.tasks["task-rt"].attemptHistory).toHaveLength(1)
+      // ...but the run is still live, so a retry remains licensed.
+      expect(state.run.state).toBe("active")
+      expect(state.run.completedAt).toBeNull()
+
+      const env2 = makeEnvelope({ dispatchId: "disp-rt-2", taskId: "task-rt", attempt: 2 })
+      const prop2 = makeEvent({
+        schemaVersion: 1,
+        eventId: "evt-rt-5",
+        sequence: 6,
+        projectId: PROJECT_ID,
+        runId: RUN_ID,
+        actor: { kind: "node", nodeId: "node-test" },
+        occurredAt: "2026-09-17T00:00:05.000Z",
+        correlationId: "corr-1",
+        causation: null,
+        controllerEpoch: 1,
+        type: "dispatch.proposed",
+        payload: {
+          dispatch: {
+            schemaVersion: 1,
+            envelope: env2,
+            envelopeDigest: "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+            state: "proposed",
+            createdAt: "2026-09-17T00:00:05.000Z",
+            externalReferences: [],
+          },
+        },
+      })
+      const fin2 = makeEvent({
+        schemaVersion: 1,
+        eventId: "evt-rt-6",
+        sequence: 7,
+        projectId: PROJECT_ID,
+        runId: RUN_ID,
+        actor: { kind: "node", nodeId: "node-test" },
+        occurredAt: "2026-09-17T00:00:06.000Z",
+        correlationId: "corr-1",
+        causation: null,
+        controllerEpoch: 1,
+        type: "dispatch.finished",
+        payload: { dispatchId: "disp-rt-2", outcome: "completed", summary: "second time lucky" },
+      })
+
+      state = reduceEvent(state, prop2)
+      // The proposal consumes the retry eligibility and re-opens the task.
+      expect(state.tasks["task-rt"].state).toBe("ready")
+      expect(state.tasks["task-rt"].retryable).toBe(false)
+
+      state = reduceEvent(state, fin2)
+      // The next attempt is what settles the run, and the first failure is
+      // still there to be read.
+      expect(state.run.state).toBe("completed")
+      expect(state.run.completedAt).toBe("2026-09-17T00:00:06.000Z")
+      expect(state.dispatches["disp-rt-1"].state).toBe("failed")
+      expect(state.tasks["task-rt"].attemptHistory).toHaveLength(2)
+    })
+
+    it("still ends the run on a cancelled attempt, because a cancel is not a retryable failure", () => {
+      // The counterweight to the rule above. If a retryable task kept the run
+      // alive forever, a cancelled run would never settle either — the rule is
+      // specifically about a FAILED attempt being recoverable, not about
+      // suppressing run termination generally.
+      let state: RunProjectionState | null = null
+
+      state = reduceEvent(
+        state,
+        makeEvent({
+          schemaVersion: 1,
+          eventId: "evt-cx-1",
+          sequence: 1,
+          projectId: PROJECT_ID,
+          runId: RUN_ID,
+          actor: { kind: "node", nodeId: "node-test" },
+          occurredAt: "2026-09-17T00:00:01.000Z",
+          correlationId: "corr-1",
+          causation: null,
+          controllerEpoch: 1,
+          type: "run.created",
+          payload: {
+            run: {
+              schemaVersion: 1,
+              runId: RUN_ID,
+              projectId: PROJECT_ID,
+              goal: "Cancel settles",
+              state: "draft",
+              paused: false,
+              createdAt: "2026-09-17T00:00:01.000Z",
+              updatedAt: "2026-09-17T00:00:01.000Z",
+              externalReferences: [],
+            },
+          },
+        }),
+      )
+      state = reduceEvent(
+        state,
+        makeEvent({
+          schemaVersion: 1,
+          eventId: "evt-cx-2",
+          sequence: 2,
+          projectId: PROJECT_ID,
+          runId: RUN_ID,
+          actor: { kind: "node", nodeId: "node-test" },
+          occurredAt: "2026-09-17T00:00:02.000Z",
+          correlationId: "corr-1",
+          causation: null,
+          controllerEpoch: 1,
+          type: "task.created",
+          payload: {
+            task: {
+              schemaVersion: 1,
+              taskId: "task-cx",
+              runId: RUN_ID,
+              projectId: PROJECT_ID,
+              title: "Cancellable task",
+              description: "Will be cancelled",
+              failurePolicy: "block",
+              state: "pending",
+              dependencies: [],
+              externalReferences: [],
+            },
+          },
+        }),
+      )
+      state = reduceEvent(
+        state,
+        makeEvent({
+          schemaVersion: 1,
+          eventId: "evt-cx-3",
+          sequence: 3,
+          projectId: PROJECT_ID,
+          runId: RUN_ID,
+          actor: { kind: "node", nodeId: "node-test" },
+          occurredAt: "2026-09-17T00:00:03.000Z",
+          correlationId: "corr-1",
+          causation: null,
+          controllerEpoch: 1,
+          type: "dispatch.proposed",
+          payload: {
+            dispatch: {
+              schemaVersion: 1,
+              envelope: makeEnvelope({ dispatchId: "disp-cx", taskId: "task-cx", attempt: 1 }),
+              envelopeDigest: "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+              state: "proposed",
+              createdAt: "2026-09-17T00:00:03.000Z",
+              externalReferences: [],
+            },
+          },
+        }),
+      )
+      state = reduceEvent(
+        state,
+        makeEvent({
+          schemaVersion: 1,
+          eventId: "evt-cx-4",
+          sequence: 4,
+          projectId: PROJECT_ID,
+          runId: RUN_ID,
+          actor: { kind: "node", nodeId: "node-test" },
+          occurredAt: "2026-09-17T00:00:04.000Z",
+          correlationId: "corr-1",
+          causation: null,
+          controllerEpoch: 1,
+          type: "dispatch.finished",
+          payload: { dispatchId: "disp-cx", outcome: "cancelled", summary: "operator" },
+        }),
+      )
+
+      expect(state.tasks["task-cx"].retryable).toBe(false)
+      expect(state.run.state).toBe("cancelled")
+    })
+
     it("handles timed_out dispatch setting task to failed and session to timed_out", () => {
       let state: RunProjectionState | null = null
 
@@ -1211,8 +1524,17 @@ describe("Projection Reducer and Projection Engine", () => {
       expect(state.dispatches["disp-to"].state).toBe("timed_out")
       expect(state.tasks["task-to"].state).toBe("failed")
       expect(state.sessions["sess-to"].state).toBe("timed_out")
-      expect(state.run.state).toBe("failed")
-      expect(state.run.completedAt).toBe("2026-09-17T00:00:05.000Z")
+      // The run is NOT `failed` here, and the change is M4.0's, not a
+      // regression: a `timed_out` attempt marks the task `retryable`, and
+      // `dispatch.finished` refuses to end a run while a task is retryable. The
+      // run therefore stays `active` until a later attempt settles it or an
+      // operator cancels it. Previously this line read `failed`, which made the
+      // terminal run ABSORBING and so made `dispatch.retry` unlicensed at the
+      // command seam — the plan's "a retry ADDS a dispatch attempt rather than
+      // erasing failure history" was unreachable for the run lifecycle.
+      expect(state.tasks["task-to"].retryable).toBe(true)
+      expect(state.run.state).toBe("active")
+      expect(state.run.completedAt).toBeNull()
     })
 
     it("handles cancelled runs when dispatch is cancelled", () => {

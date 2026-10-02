@@ -56,7 +56,7 @@ These are levels measured on macOS 26.6.2 / arm64, Bun 1.3.14, Rust 1.94.1. They
 | M7.13 TUI decoupling assertion | M7.7 | `test-engineer` — `gpt-5.6-sol high` | Source-scan test forbidding import edges from `src/tui/**` to the ingress queue or `src/jobs/`; `/v1/mesh/*` routing test | Test fails if the coupling is introduced; router answers `404`, never `101` or streaming `200`, for both mesh paths |
 | M7.14 Canary rollout | M7.4, M7.7, M7.8, M7.10, M7.11 | `milestone-lead` + `independent-reviewer` — `gpt-6-astra high` | `test-vps` cutover, 7-day soak, then `dev-main` cutover, 7-day soak | Rollback in <5 s with no rebuild; zero loss across both soaks |
 | M7.15 Security review of the trust boundary | M7.3–M7.13 | `security-reviewer` — `gpt-6-astra xhigh` | Adversarial review of the router as a new trust boundary; verify `F-05` was not relocated | No authority creep: engine still runs `assertSourceAuthorized`; router implements no plan approval |
-| M7.16 Milestone gate audit | All | `independent-reviewer` — `gpt-6-astra high` | Resource deltas against baseline, rollback evidence, open findings, macOS parity gap recorded honestly | All completion criteria evidenced; −39% reported as three-process total, never the router alone |
+| M7.16 Milestone gate audit | All | `independent-reviewer` — `gpt-6-astra high` | Resource deltas against baseline **under §5.1.1 A1–A4** (>=3 captures, spread <=10%, steady state under sustained load), rollback evidence, open findings, macOS parity gap recorded honestly | All completion criteria evidenced; reduction reported as three-process total, never the router alone; an inadmissible resource KPI is reported `not-gateable`, not passed |
 
 ## Two-Tier Validation Contract
 
@@ -205,23 +205,62 @@ because it requires `CAP_NET_RAW`, a broader grant than needed.
 
 ### 5.1 Measurement discipline
 
-Two traps, both encountered while capturing the baseline:
+Three traps. The first two were encountered while drafting ADR 0008; the third was
+measured by M7.0, after the ADR was written, and it invalidates the first two as a
+*sufficient* rule.
 
 1. **RSS deltas over a short window on Bun are not evidence.** RSS *fell* 4.4 MiB
    across 500 requests because JSC returned pages to its allocator. Never report a
    delta.
 2. **JIT allocation is lazy**, so a 2 s sample after start under-reports. Sample
    at >=1 Hz for >= 60 s.
+3. **A single idle capture is not a measurement of this quantity.** M7.0 captured
+   the *unchanged* engine three times, each individually compliant with rule 2, and
+   got sum medians of **55.95 / 34.84 / 34.63 MiB** — a **61% run-to-run spread**
+   on a process that never changed. The process sits on RSS plateaus of roughly
+   24, 35, and 54 MiB and migrates between them on a minute timescale while idle. A
+   warmup sweep did not pin it: 45 s settles *lower* (23.8 MiB) than 75 s (35.0 MiB),
+   so the plateau is not a function of elapsed time either.
+
+   **This means the effect being measured is smaller than the measurement noise.**
+   The target is ~21% (57.3 -> 45 MiB); the noise is ~61%. Rules 1 and 2 are
+   necessary but not sufficient, and ADR 0008 §1's single 57.3 MiB figure is one
+   draw from this distribution, not the quantity the gate compares against.
 
 Report median and p95 for **all three processes** (`aibr-router`, `aibr worker`,
 `aibr tui`) and their sum. Reporting the router's 1.94 MiB while omitting the
 43 MiB worker it was added to would be a dishonest headline.
 
+#### 5.1.1 Gate admissibility
+
+A resource comparison is **admissible** only when all four hold. `bench/mem.sh`
+reports run-to-run variance and refuses to pass an inadmissible comparison; these
+rules are what its `insufficient-samples` and `noise` verdicts mean operationally.
+
+| # | Rule | Why |
+| --- | --- | --- |
+| **A1** | >=1 Hz for >=60 s, every capture | Rules 1–2 |
+| **A2** | >=3 independent captures per quantity; the **median of the per-capture medians** is the reported figure | Rule 3: one capture is one draw |
+| **A3** | Run-to-run spread of the per-capture medians must be **<= 10%**, else the quantity is **not gateable** and is reported as `not-gateable` | At 61% the harness cannot distinguish the change from a plateau migration |
+| **A4** | Baselines are captured on the **same host, same boot, same `ingress_mode`, same capture protocol** as candidates | Cross-host comparison reintroduces rule 3 at a larger scale |
+
+**The quantity being gated is steady state under sustained load, not idle.** Rule 3
+removes "idle" as a well-defined quantity for a Bun process: its value depends on
+which allocator plateau JSC happens to be holding. Under sustained traffic at a
+fixed low rate (the load profile is fixed in `bench/baseline/capture-config.json`
+and must not change mid-milestone) JSC cannot release pages, the plateau is pinned,
+and the level becomes the thing that actually varies with the *code*. M7.0's
+artefact records this as `steadyState`.
+
+**If A3 fails on the reference host, M7.16 reports the resource KPI as
+`not-gateable` with the variance figures attached.** That is an acceptable and
+honest milestone outcome. Reporting a single 60 s capture as a pass is not.
+
 ### 5.2 Comparison matrix
 
 | KPI | Baseline | Target |
 | --- | --- | --- |
-| Total RSS, idle, three processes | 57.3 MiB (engine only, measured) | <= 45 MiB |
+| Total RSS, steady state, three processes | see `bench/baseline/engines.json` `steadyState` | <= 45 MiB |
 | — `aibr-router` | — | <= 4 MiB (1.94 measured) |
 | — `aibr worker` (no Fastify) | — | <= 48 MiB |
 | CPU idle | 0.0% | <= 0.5% |
@@ -258,7 +297,8 @@ the flag default flips, because collapsing them destroys rollback.
 ### Resource
 
 - [ ] Router idle RSS <= 4 MiB as median and p95 over >= 60 s, against `MemoryMax=32M`.
-- [ ] Total three-process RSS <= 45 MiB against a 57.3 MiB baseline.
+- [ ] Total three-process RSS <= 45 MiB, gated under §5.1.1 rules A1–A4, with the per-capture series committed. If A3 fails, the KPI is reported as `not-gateable` with the variance attached — **not** passed on a single capture.
+- [ ] The gated quantity is steady state under sustained load, and the load profile in `bench/baseline/capture-config.json` is unchanged between baseline and candidate captures.
 - [ ] Worker-without-Fastify measured, not projected.
 - [ ] Binary <= 2 MiB per target; `readelf -d` reports zero `NEEDED` on musl targets.
 - [ ] No Rust toolchain required on any host.

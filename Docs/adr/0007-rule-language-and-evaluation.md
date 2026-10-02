@@ -1097,32 +1097,136 @@ test could not distinguish an *unsatisfiable* arm (harmless, never fires) from a
 *tautological* one (live, fires on every dispatch), and only the second is the grant-side
 half of this defect. Both are refused now.
 
+#### 8.2.5 A cross-axis disjunction is refused, because the disclosure cannot render it
+
+**A disjunction is usable as a scope only when all of its arms constrain the SAME axis.**
+
+The section 11 disclosure renders reach as a **per-axis product**: `reach.roles` and
+`reach.nodes` side by side, which a reader takes as an AND. A cross-axis disjunction
+computes a **UNION**. So the disclosure described a far smaller set than the rule matches,
+and the rule then fired outside what it was described as:
+
+```
+any(roleId eq "role-1", targetNodeId eq "node-1")
+  discloses reach.roles = ["role-1"]   reach.nodes = ["node-1"]
+  role=role-1 node=node-1 -> allow, outstandingApprovals: []
+  role=role-9 node=node-1 -> allow, outstandingApprovals: []   <- role-9 was never named
+  role=role-9 node=node-9 -> require_approval                  <- correctly refused
+```
+
+A fuzz over axis pairs found 21 of 56 granting wider than disclosed. This is the same
+grant 8.2.3 exists to prevent, reachable **with no negation at all**.
+
+Only `projectId` is independently gated downstream — `classifyRule`
+(`src/rules/evaluate.ts:788`) refuses a foreign project — so an over-report on `projectId`
+is caught anyway, while on `roleId`, `targetNodeId`, `projectPathId` and `capability` it
+is a real grant. **A probe of the `projectId` axis alone will not find this.**
+
+The two cases are separated because they are genuinely different, and the disclosure
+already distinguishes them:
+
+| Shape | Reading | Disclosed as | Compiles |
+| --- | --- | --- | --- |
+| `any(projectId eq "p", projectId eq "q")` | a **union** on one axis | `reach.projects = ["p","q"]` — truthful | **yes** |
+| `any(roleId eq "r", targetNodeId eq "n")` | a **union** across axes | rendered as a product — false | **no** |
+
+**This is NOT conservatism, and it must not be read as such.** It is the identical argument
+to 8.2.3 for the identical reason: `constrainingScopeAxes` asks *can the disclosure render
+this reach*, and here the honest answer is no. Refusing a sound-but-undisclosable rule is
+**precision**.
+
+That is a different thing from the `any(A∧B, A∧¬B)` over-refusal in 8.2.4's residual
+note, which **is** conservatism — the rule there is sound, its reach is exactly what would
+be disclosed, and it is refused because the check cannot see that. Same outcome, opposite
+justifications, and conflating them would make both less useful to a reader deciding
+whether a refusal is a bug.
+
 #### 8.2.4 What this test is, and what it is not
 
 It is a **per-atom syntactic test over the predicate tree, not a satisfiability
 solver.** It decides whether a rule *contains a claim that can exclude*, never whether
 the rule as a whole is satisfiable or whether its clauses contradict each other.
 
-That is a deliberate limit, and it is conservative in **both** directions — which is
-the property that matters and was misstated here before amendment A14:
+**What it actually asks is narrower and more useful than "excludes something": it asks
+whether the section 11 disclosure can RENDER the reach the rule computes.** Every
+refusal in 8.2.2, 8.2.3 and 8.2.5 follows from that one question, and the question is
+what makes them one family rather than three special cases.
 
-- The test cannot credit scope the rule does not have. A negation anywhere beneath an
-  `any` arm kills the arm (8.2.3), so a tautological or contradictory arm cannot
-  contribute an axis.
-- The test **can** refuse scope the rule does have. `any(A∧B, A∧¬B)` is
-  satisfiability-equivalent to `A`, so its true reach *is* the set the disclosure
-  would render, and it is refused anyway — see the amendment's residual-risk note.
+The check has an error rate in **both** directions, and the earlier text here claimed
+otherwise:
 
-The first bullet was previously claimed as the *only* direction, which is false and was
-false in the dangerous direction: the defect A14 closes is exactly a case where the test
-credited scope a tautological arm did not have. The honest statement is that this is a
-syntactic approximation with an error rate in both directions, bounded by
-`MAX_PREDICATE_DEPTH` and `MAX_COMBINATOR_NODES_PER_RULE` so the shapes a human can
-author are the shapes that are examined.
+- **It can refuse scope the rule does have.** `any(A∧B, A∧¬B)` is
+  satisfiability-equivalent to `A`, so its true reach *is* the set the disclosure would
+  render, and it is refused anyway — see the amendment's residual-risk note.
+- **It was able to credit scope the rule does not have, twice.** 8.2.5 is a cross-axis
+  disjunction that rendered a union as a product, and section 8.3 is a vacuous branch
+  whose atom the disclosure cited as a bound. Both are closed. Both were *grants*, and
+  the honest statement is that a syntactic approximation whose error was claimed
+  one-directional will eventually be wrong in the direction that was denied.
 
-The consequences of being a syntactic test rather than a solver are a property of the
-approach, not of any one predicate family, and are stated in "Consequences and residual
-risk" rather than duplicated here.
+The check is bounded by `MAX_PREDICATE_DEPTH` and `MAX_COMBINATOR_NODES_PER_RULE` so the
+shapes a human can author are the shapes that are examined. The consequences of being a
+syntactic test rather than a solver are a property of the approach, not of any one
+predicate family, and are stated in "Consequences and residual risk" rather than
+duplicated here.
+
+**A standing caution.** This check has been repaired five times in one milestone, and on
+three of those occasions the defect was not in the arithmetic but in the *question*. The
+pattern that produced HIGH-1, F-1 and F-3 is stated once, in section 8.3, and it applies
+to any future tightening: a refusal is only correct if the disclosure and the compiler
+agree about the reach, and there is nothing in the language that makes them agree by
+construction. There is a test that keeps them agreeing. It is the one to extend first.
+
+### 8.3 The compiler and the disclosure are ONE walk, not two
+
+**There are two functions that traverse a rule's predicate tree, and they were allowed to
+disagree. Three HIGH defects in this milestone are that disagreement.**
+
+| Walk | File | Decides |
+| --- | --- | --- |
+| `constrainingScopeAxes` | `src/rules/compile.ts:694` | whether a predicate may act as a **scope** |
+| `collectReach` | `src/rules/explain.ts:314` | what that scope **is**, rendered per axis for §11 |
+
+Neither was wrong on its own terms. The defect was that a predicate tree can be walked to
+a *deeper* conclusion by one and a *shallower* one by the other, and nothing required them
+to agree. Three times the compiler learned something the disclosure had not:
+
+- **HIGH-1** — the compiler credited an axis from a vacuous atom, and the disclosure
+  believed it and named a one-project reach.
+- **F-1** (8.2.5) — the compiler accepted a cross-axis disjunction, and the disclosure
+  rendered its union as a product.
+- **F-3** — the compiler was **already correct** and the disclosure kept descending into a
+  branch the compiler had refused, citing the dead branch's atom as a bound:
+
+```
+all([any(roleId eq "role-1", not roleId eq "role-1")], targetNodeId eq "node-1")
+  reach.roles disclosed as ["role-1"]
+  role=role-9 node=node-1 -> allow, outstandingApprovals: []
+```
+
+The rule is `TRUE AND node`, so it matches **every** role on that node.
+
+The first two were closed by fixing the compiler and leaving the disclosure alone. **F-3
+could not be, which is the proof that patching sites was the wrong approach.** The fix
+removes the split: `subtreeContainsNegation` is **exported** from `compile.ts`, and
+`collectReach` asks the same question the compiler asks. The rule is deliberately narrow:
+
+- an `any` containing a negation yields **no reach at all** — the walk stops;
+- an `all` containing a negation is still **walked member by member**.
+
+The second bullet is not a detail. `all(P, not Q)` **is** `P`, so `P` is a real bound that
+must still be disclosed. The first attempt at this fix returned early for *any*
+negation-bearing subtree and silently emptied `all(projectId eq "p", not(roleId eq "r"))`
+of its entire reach — **and no assertion caught it**, because nothing asserted it before.
+That is the strongest available argument for the property test below.
+
+**The property is asserted structurally, not per predicate family.** The test block in
+`tests/unit/rules/explain.test.ts` sweeps all 20 ordered axis pairs with the vacuous
+branch on each side in turn, and requires that the disclosure report the vacuous axis
+`unknown` **and** still disclose the surviving sibling bound. A sweep that got one axis
+right and its mirror wrong would pass a per-family test and fail this one. Any future
+tightening of 8.2 should extend that block first, because it is the only thing standing
+between a correct compiler and a lying disclosure.
 
 ### 9. Complexity limits
 
@@ -1719,7 +1823,23 @@ each has a cost that is stated here rather than discovered later.
   solver in the compile path of a language whose defining property is that it cannot
   execute anything.
 
-  **A14 sharpened this bullet in one respect worth stating separately.** The over-refusal
+  **A15 and A16 do not add conservatism here, and it matters that they are not
+  mistaken for it.** The cross-axis refusal in 8.2.5 and the vacuous-branch handling in
+  8.3 are **precision**: each refuses a rule whose reach the disclosure cannot state, so
+  the refusal is the only safe answer. They are a different kind of decision from the
+  `any(A∧B, A∧¬B)` case above, where the rule is sound and the refusal is an artefact of
+  a syntactic check. Same outcome, opposite justification. A future reader deciding
+  whether one of these refusals is a bug needs to know which kind they are looking at.
+
+  **The residual that survives A15 and A16 is the structural one.** Nothing in the rule
+  language makes the compiler and the disclosure agree about a reach; they agree because
+  one exported predicate is shared, and a future change that adds a third walk — or edits
+  either of these two without the other — reintroduces the class of defect that produced
+  HIGH-1, F-1 and F-3. The property test in 8.3 is the guard, and it is the first thing
+  to extend when 8.2 is tightened. Three HIGH defects here were each found by a sweep
+  that disagreed with a single hand-written example, not by reading the code.
+
+  ****A14 sharpened this bullet in one respect worth stating separately.** The over-refusal
   is not only about disjunction *shapes* an author might write casually; it now includes a
   case where the disjunction is **satisfiability-equivalent to its own positive arm**, so
   the rule is sound and its true reach is exactly what the disclosure would render. That
@@ -1749,6 +1869,15 @@ each has a cost that is stated here rather than discovered later.
   to reintroduce exactly the clock-dependent behaviour it prevents, and it would be
   cheaper to remove before someone relies on it than to explain afterwards.
 
+- **CLOSED by A16 (was: "the disclosure may describe a reach the rule does not have").**
+  See section 8.3. `constrainingScopeAxes` and `collectReach` were two walks over one
+  predicate tree with no shared notion of a meaningful node, and that split — not any
+  arithmetic error — produced HIGH-1, F-1 and F-3. `subtreeContainsNegation` is now
+  exported from the compiler and both walks ask it. The residual is that nothing in the
+  *language* enforces the agreement; it is enforced by a shared predicate and a property
+  test over all 20 ordered axis pairs, and a third walk or an edit to one of these two
+  without the other would reintroduce the class.
+
 - **CLOSED by A14 (was: "the negation test is not depth-transitive").** This bullet
   previously described a live, verified fail-open: a negation buried below an `any` arm
   escaped a branch test that read only direct arms, so a pre-approval scoped
@@ -1769,21 +1898,32 @@ each has a cost that is stated here rather than discovered later.
   *Second:* the original prescribed two fixes — consult the whole subtree, **and**
   intersect rather than union within a conjunctive arm. **The second half is wrong and
   was not applied.** Intersecting the axes of an `any`'s arms refuses
-  `any(projectId eq "p", roleId eq "r")`, which genuinely excludes every dispatch whose
+  ~~`any(projectId eq "p", roleId eq "r")`, which genuinely excludes every dispatch whose
   project is not `p` and whose role is not `r`, and which the code's own tests pin as a
   CONTROL that must compile. The test 8.2 applies asks whether the rule **excludes
   anything**, not whether its reach is a product set; on that question unioning arm axes
-  is correct. Only the subtree half was needed, and it was sufficient.
+  is correct. Only the subtree half was needed, and it was sufficient.~~
 
-  The consequence of applying the subtree half alone is a **deliberate over-refusal**,
+  **Every sentence of that paragraph is WRONG, and A15 supersedes all of it.** The shape
+  is not a legitimate control; it is the cross-axis defect described in 8.2.5, and it
+  grants. Unioning arm axes is not "correct" for it, because the test being asked of a
+  scope is not "does the rule exclude something" — the negation rule above already
+  guarantees that for every shape reaching the union. It is **"can the disclosure render
+  the reach this computes"**, and for a cross-axis disjunction the answer is no. So
+  "only the subtree half was needed, and it was sufficient" was false: it was necessary
+  and it was *half* the fix. The reasoning here was written to defend the behaviour the
+  independent reviewer then found to be a grant, and it is left visible because an ADR
+  that quietly deletes the argument it was wrong about teaches a reader that such
+  arguments are reversible.
+
+  The consequence of applying the subtree half alone was a **deliberate over-refusal**,
   recorded rather than engineered away: `any(A∧B, A∧¬B)` is satisfiability-equivalent to
-  `A` — a sound rule whose true reach *is* the disclosed set — and is now refused. Two
-  tests in `tests/unit/rules/vacuity.test.ts` were **changed** rather than deleted to
-  assert this; both had previously asserted the opposite. The trade is asymmetric in the
-  correct direction: refusing a sound rule costs an author a rewrite, while admitting a
-  tautology clears the safety floor for dispatches nobody authorised. Distinguishing the
-  two requires deciding satisfiability over a predicate language with no vocabulary for
-  it.
+  `A` — a sound rule whose true reach *is* the disclosed set — and is refused. Two tests
+  in `tests/unit/rules/vacuity.test.ts` were **changed** rather than deleted to assert
+  this; both had previously asserted the opposite. The trade is asymmetric in the correct
+  direction: refusing a sound rule costs an author a rewrite, while admitting a tautology
+  clears the safety floor for dispatches nobody authorised. Distinguishing the two
+  requires deciding satisfiability over a predicate language with no vocabulary for it.
 
 ### Risks and the structural mechanism that addresses each
 
@@ -1794,7 +1934,8 @@ each has a cost that is stated here rather than discovered later.
 | Budget reservation is not atomic with eligibility | Eligibility is *defined* as holding a held reservation; `reserve` is one compare-and-set |
 | A cost budget is claimed without usage data | `enforceability` is computed from adapter-reported usage, never from the budget being set |
 | A rule widens the safety floor | `z.literal(false)` escalation fields, monotone `min`/`narrowPolicyState` composition, and the kernel's existing post-narrowing re-check |
-| A universal pre-approval is written | The compiler pass `checkNotUniversal` refuses a `pre_approve_within_bounds` or `select_routing_preference` carrying no **constructive** form on any of the twelve scope axes (section 8.2): a vacuous edge comparison, a `none`/`lacks`, or a bare `not` does not count, an `any` branch containing a `not` **anywhere beneath it** contributes nothing, and one scoped only by `taskTitlePattern` is refused. It is a compiler pass rather than a `.superRefine` so the four restriction actions may still be universal, and there is no `default_action`. The check is syntactic, so it over-refuses some sound disjunctions rather than admitting a vacuous one — see 8.2.4 |
+| A universal pre-approval is written | The compiler pass `checkNotUniversal` refuses a `pre_approve_within_bounds` or `select_routing_preference` carrying no **constructive** form on any of the twelve scope axes (section 8.2): a vacuous edge comparison, a `none`/`lacks`, or a bare `not` does not count, an `any` branch containing a `not` **anywhere beneath it** contributes nothing, a **cross-axis** disjunction contributes nothing (8.2.5), and one scoped only by `taskTitlePattern` is refused. Every refusal follows from one question — *can the §11 disclosure render this reach?* — so they are one family rather than three special cases. It is a compiler pass rather than a `.superRefine` so the four restriction actions may still be universal, and there is no `default_action`. The check is syntactic and errs in both directions; see 8.2.4 |
+| The disclosure describes a reach the rule does not have | **One walk, one question.** `subtreeContainsNegation` is exported from the compiler and `collectReach` asks it too, so a vacuous branch cannot be cited as a bound by one and ignored by the other (8.3). Asserted structurally over all 20 ordered axis pairs rather than per predicate family |
 | A rule restriction the M0 effect cannot carry is silently dropped | Four members travel in `RuleEvaluationResult.restrictions`; `evaluateWithKernel` applies them through the kernel's own `narrowPolicyState`, after the kernel's pre-approval pass, and a demand a rule adds is not clearable by a pre-approval (section 3.2) |
 | Replay over-admits and wedges the budget | Replay is a second admission decision: every occupying row gets one of three named verdicts, refusals install as `expired` and therefore return capacity, refusal is never total, and `held <= ceiling` holds after any replay (section 13.3) |
 | An adapter or a producer rewrites the operator's inbox | The store clones on write and deep-freezes; each adapter gets a fresh deep-frozen clone made inside `deliverOne`'s `try`, so a clone failure cannot abort the fan-out (section 17) |
@@ -1947,6 +2088,14 @@ The five decisions:
      and that the suite pins as a control. Section 8.2 asks whether a rule *excludes
      anything*, on which unioning is correct. The subtree half alone was necessary and
      sufficient.
+     **A15 SUPERSEDES THIS ENTIRE ITEM, INCLUDING THE CONTROL.** The shape named here as
+     legitimate is the cross-axis defect of 8.2.5, and it grants. Both halves of the
+     prescription were wrong: intersecting over-refuses a sound rule, and unioning — what
+     shipped — under-refuses a grant. The question the check asks is not *does this rule
+     exclude anything*, which the negation rule already guarantees, but *can the
+     disclosure render this reach*, and the cross-axis answer is no. "Necessary and
+     sufficient" was true of neither fix; the subtree half was necessary and was **half**
+     of what was needed.
   3. Section 8.2.4 claimed the test "cannot be fooled into refusing scope the rule does
      have". That is **false**, and false in the dangerous direction, since the defect it
      denied is precisely a case of crediting scope a rule does not have. The test is now
@@ -1960,6 +2109,65 @@ The five decisions:
   rule from the tautology requires deciding satisfiability over a predicate language with
   no vocabulary for it, and the milestone is conservative-by-refusal everywhere else for
   the same reason.
+
+- **A15 — A cross-axis disjunction is refused, because the disclosure renders it as a
+  product (section 8.2.5).** Found by an independent review of the committed diff.
+  `any(roleId eq "role-1", targetNodeId eq "node-1")` computed a union, disclosed
+  `reach.roles = ["role-1"]` and `reach.nodes = ["node-1"]` side by side — which reads as
+  an AND — and then returned kernel `allow / outstandingApprovals: []` for `role-9`, a
+  role no author named. A fuzz over axis pairs found 21 of 56 granting wider than
+  disclosed. **Only `projectId` is independently gated downstream by `classifyRule`, so a
+  probe of that axis alone reports the defect as absent.**
+
+  The normative rule: a disjunction is a usable scope only when all of its arms constrain
+  the **same** axis. A same-axis disjunction is a real set operation and the disclosure
+  renders its union truthfully, so it still compiles; a cross-axis one is not renderable
+  as the per-axis product §11 requires, so it is refused. This is **precision, not
+  conservatism**, and it is deliberately distinguished from A14's `any(A∧B, A∧¬B)`
+  over-refusal, which is conservatism — same outcome, opposite justification.
+
+  **This amendment corrects A14 rather than extending it.** A14's residual bullet, its
+  item 2 in the record above, and the risk-table row all asserted that
+  `any(projectId eq "p", roleId eq "r")` was a legitimate control and that the subtree
+  fix was "necessary and sufficient". Both claims are false, and the reasoning behind them
+  was written to defend the behaviour this amendment closes. The strikethrough at 8.2.4's
+  residual bullet is left visible on purpose: an ADR that quietly deletes the argument it
+  was wrong about teaches a reader that such arguments are reversible.
+
+- **A16 — The compiler and the disclosure are one walk, not two (section 8.3).** F-3, and
+  the most important entry in this record because it explains the other two.
+  `all([any(roleId eq "role-1", not roleId eq "role-1")], targetNodeId eq "node-1")` is
+  `TRUE AND node`. The compiler already refused the vacuous branch; `collectReach` kept
+  descending into it and cited the dead branch's atom as a bound, disclosing
+  `reach.roles = ["role-1"]` for a rule matching every role, and returning `allow` for a
+  role never named.
+
+  **HIGH-1, F-1 and F-3 are one defect wearing three faces:** two functions traversing one
+  predicate tree — `constrainingScopeAxes` deciding what may be a scope, `collectReach`
+  deciding what that scope *is* — with no shared notion of a meaningful node. The first
+  two were closed by fixing the compiler and leaving the disclosure alone. **F-3 could not
+  be, which is the proof that patching sites was the wrong approach.** `subtreeContainsNegation`
+  is now exported from the compiler and both walks ask it. An `any` containing a negation
+  yields no reach and the walk stops; an `all` containing one is still walked member by
+  member, because `all(P, not Q)` **is** `P` and `P` is a real bound.
+
+  The narrowness of that rule is load-bearing and was learned the hard way: the first
+  attempt returned early for *any* negation-bearing subtree and silently emptied
+  `all(projectId eq "p", not(roleId eq "r"))` of its entire reach, and **no assertion
+  caught it**, because nothing asserted it. The new test block therefore asserts the
+  property structurally — all 20 ordered axis pairs, vacuous branch on each side in turn,
+  requiring the vacuous axis to read `unknown` **and** the surviving sibling bound to
+  survive. A sweep that got one axis right and its mirror wrong passes a per-family test
+  and fails this one.
+
+  **The standing lesson, stated once.** This milestone found eight bypass-class defects,
+  and a fully green suite repeatedly failed to detect them: MED-3 survived three fix
+  attempts against roughly 5,000 passing tests, and the vacuity logic was repaired five
+  times. Every fix was verified by reverting it and confirming the tests go red. Twice a
+  *measurement* contradicted a report — including the lead's own red/green figures, which
+  were wrong twice — and each time the measurement won. Three of these defects were found
+  by a sweep that disagreed with a single hand-written example, not by reading the code.
+  A single passing assertion about a safety property is evidence about that assertion.
 
 Three smaller reconciliations accompany these. Citations in sections 3.1, 6.3, 7.3, 8,
 and 8.1 were re-read against the files and the ones that had drifted were corrected
@@ -1994,7 +2202,7 @@ where the reproduction contradicted the report, believing the reproduction.
 ## Amendment record
 
 > Entries A1 to A8 below record the **2026-10-01** amendment and are unchanged. The
-> **2026-10-02** amendment (A9 to A14) is in "Amendment — 2026-10-02" above, and it
+> **2026-10-02** amendment (A9 to A16) is in "Amendment — 2026-10-02" above, and it
 > **does supersede one decision**: section 8's "a `not` counts as constraining". The
 > "no decision was weakened" claim in this record is therefore true of A1 to A8 and
 > **not** of the document as a whole.

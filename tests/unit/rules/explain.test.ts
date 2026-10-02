@@ -527,3 +527,93 @@ describe("the disclosure is deterministic across fifty renderings", () => {
     expect(renderings.size).toBe(1)
   })
 })
+
+/**
+ * The compiler and the disclosure are TWO WALKS over one predicate tree, and for
+ * most of this milestone they disagreed.
+ *
+ * `constrainingScopeAxes` in `compile.ts` decides whether a rule may act as a scope;
+ * `collectReach` here decides what that scope IS, and renders it. Three defects in a
+ * row came from the split:
+ *
+ *   HIGH-1  the compiler credited a vacuous axis and the disclosure believed it
+ *   F-1     the compiler accepted a cross-axis disjunction and rendered a union as a
+ *           product, so the rule fired outside what the disclosure named
+ *   F-3     the compiler correctly ignored a vacuous branch while this walk kept
+ *           descending into it and cited the dead branch's atom as a bound
+ *
+ * Two of those were closed by fixing the compiler and leaving this walk alone. The
+ * third could not be, because the compiler was already right. The cause is structural
+ * rather than a missing `if`: two walks with no shared notion of a meaningful node.
+ *
+ * The property asserted below is therefore not about any one predicate family. It is
+ * that **the reach this disclosure reports and the reach the compiler enforced are the
+ * same set** — for every axis pair, with the vacuous branch on each side in turn, so
+ * the sweep cannot pass by getting one axis right and its mirror wrong.
+ */
+describe("the disclosure and the compiler agree on what a vacuous branch means", () => {
+  const atom = (field: string, value: string): Record<string, unknown> =>
+    field === "capability" ? { field, operator: "any", value: [value] } : { field, operator: "eq", value }
+  const AXES = [
+    { field: "projectId", axis: "projects" },
+    { field: "roleId", axis: "roles" },
+    { field: "targetNodeId", axis: "nodes" },
+    { field: "projectPathId", axis: "projectPaths" },
+    { field: "capability", axis: "capabilities" },
+  ] as const
+
+  for (const vacuous of AXES) {
+    for (const real of AXES) {
+      if (vacuous === real) continue
+      it(`does not cite a vacuous ${vacuous.field} branch as a bound, and still discloses the real ${real.field} bound beside it`, () => {
+        // `all([any(A, not A)], B)` is `TRUE AND B`, i.e. just `B`. So the only
+        // honest disclosure names `B` and reports `A` as `unknown`.
+        const rule = firstRuleOf([
+          rawPreApprovalDocument({
+            ruleId: `rule-vacuous-${vacuous.field}-${real.field}`,
+            predicates: [
+              {
+                field: "all",
+                predicates: [
+                  { field: "any", predicates: [atom(vacuous.field, "x"), { field: "not", predicate: atom(vacuous.field, "x") }] },
+                  atom(real.field, "y"),
+                ],
+              },
+            ],
+          }),
+        ])
+        const reach = buildPreApprovalDisclosure(rule).reach as Record<string, { kind: string; values?: readonly string[] }>
+
+        expect(reach[vacuous.axis]?.kind, `${vacuous.field}: a tautological branch bounds nothing, so it must read unknown`).toBe("unknown")
+        expect(reach[real.axis]?.kind, `${real.field}: the surviving sibling bound must still be disclosed`).toBe("constrained")
+        expect([...(reach[real.axis]?.values ?? [])]).toEqual(["y"])
+      })
+    }
+  }
+
+  it("still discloses the positive member of a conjunction that also contains a negation", () => {
+    // The control that keeps the sweep honest. `all(P, not Q)` is exactly `P`, so a
+    // walk that returns early for ANY negation-bearing subtree would empty this of its
+    // entire reach — which is precisely what the first attempt at this fix did, and why
+    // the rule distinguishes a disjunction from a conjunction rather than "does this
+    // subtree mention a `not`".
+    const rule = firstRuleOf([
+      rawPreApprovalDocument({
+        ruleId: "rule-conj-negation",
+        predicates: [
+          {
+            field: "all",
+            predicates: [
+              { field: "projectId", operator: "eq", value: PROJECT_ID },
+              { field: "not", predicate: { field: "roleId", operator: "eq", value: "role-9" } },
+            ],
+          },
+        ],
+      }),
+    ])
+    const reach = buildPreApprovalDisclosure(rule).reach as Record<string, { kind: string; values?: readonly string[] }>
+    expect(reach.projects?.kind).toBe("constrained")
+    expect([...(reach.projects?.values ?? [])]).toEqual([PROJECT_ID])
+    expect(reach.roles?.kind, "a negation bounds nothing on its own axis").toBe("unknown")
+  })
+})

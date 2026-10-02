@@ -48,9 +48,11 @@ set -euo pipefail
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=lib/stats.sh
+# shellcheck disable=SC1091
 . "$SCRIPT_DIR/lib/stats.sh"
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=lib/mem_probe.sh
+# shellcheck disable=SC1091
 . "$SCRIPT_DIR/lib/mem_probe.sh"
 
 usage() {
@@ -125,9 +127,18 @@ fi
 
 bench_enforce_sampling "$INTERVAL" "$SAMPLES" "$ALLOW_SHORT" || exit 2
 
+# shellcheck disable=SC2034
 BENCH_INTERVAL="$INTERVAL"
+# shellcheck disable=SC2034
 BENCH_SAMPLES="$SAMPLES"
-BENCH_COMMAND_LINE="bench/mem.sh --samples $SAMPLES --interval $INTERVAL --pid $PID_LIST${BASELINE:+ --baseline $BASELINE}${OUT:+ --out $OUT}${ALLOW_SHORT:+ --allow-short}"
+# Reconstructed rather than "${ALLOW_SHORT:+ ...}": that expansion tests for
+# non-emptiness, and "false" is non-empty, so it would record --allow-short on
+# every compliant run. A recorded field that misstates the run is worse than no
+# field, since it is what a reviewer trusts when the terminal output is gone.
+BENCH_COMMAND_LINE="bench/mem.sh --samples $SAMPLES --interval $INTERVAL --pid $PID_LIST"
+if [ -n "$BASELINE" ]; then BENCH_COMMAND_LINE="$BENCH_COMMAND_LINE --baseline $BASELINE"; fi
+if [ -n "$OUT" ]; then BENCH_COMMAND_LINE="$BENCH_COMMAND_LINE --out $OUT"; fi
+if [ "$ALLOW_SHORT" = "true" ]; then BENCH_COMMAND_LINE="$BENCH_COMMAND_LINE --allow-short"; fi
 
 # An annotation value becomes a JSON string in the artefact. Rejecting a double
 # quote or a backslash here keeps a hand-written --annotate from producing a file

@@ -17,11 +17,13 @@ set -euo pipefail
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=lib/stats.sh
+# shellcheck disable=SC1091
 . "$SCRIPT_DIR/lib/stats.sh"
 # mem_probe.sh is sourced for bench_json_series only; the classifier cases below
 # deliberately depend on nothing else in it.
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=lib/mem_probe.sh
+# shellcheck disable=SC1091
 . "$SCRIPT_DIR/lib/mem_probe.sh"
 
 WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/aibr-bench-selftest.XXXXXX")

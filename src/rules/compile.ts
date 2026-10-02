@@ -674,8 +674,18 @@ function excludesDispatch(predicate: FieldPredicate): boolean {
  * can sit one or two levels below the `any` being judged. Testing only direct
  * children is what let a nested tautology compile as a scope and grant a
  * pre-approval to a role its author never named.
+ *
+ * **EXPORTED because `collectReach` in `explain.ts` must ask the same question.**
+ * That function walks the same predicate tree to build the section 11 disclosure,
+ * and for most of this milestone the two walks disagreed: the compiler learned to
+ * ignore a vacuous branch while the disclosure kept citing it, so the disclosure
+ * asserted a bound the rule did not have. Three defects in a row (F-1, F-3, and the
+ * original HIGH-1) came from exactly this split, and two were closed by fixing the
+ * compiler and leaving the disclosure alone. There is now ONE question with ONE
+ * answer, and both walks ask it. See the `Reach` consistency test in
+ * `tests/unit/rules/explain.test.ts` for the assertion that keeps them agreeing.
  */
-function subtreeContainsNegation(predicate: RulePredicate): boolean {
+export function subtreeContainsNegation(predicate: RulePredicate): boolean {
   if (predicate.field === "not") return true
   if (predicate.field === "all" || predicate.field === "any") return predicate.predicates.some(subtreeContainsNegation)
   return false

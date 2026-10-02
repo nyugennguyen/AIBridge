@@ -45,7 +45,7 @@
  */
 
 import { MAX_EXPLANATION_TEXT_CHARS } from "./limits.js"
-import { describePredicates } from "./compile.js"
+import { describePredicates, subtreeContainsNegation } from "./compile.js"
 import { evaluateCompiledRule } from "./evaluate.js"
 import {
   ruleEvaluationContextSchema,
@@ -325,6 +325,26 @@ function collectReach(predicates: readonly RulePredicate[]): {
   const projectPaths: SourcedMembers[] = []
 
   const visit = (predicate: RulePredicate, path: string): void => {
+    // A subtree that mentions a negation contributes no reach OF ITS OWN, but the
+    // walk still descends when the subtree is a CONJUNCTION — `all(P, not Q)` is
+    // exactly `P`, and P is a real bound that must still be disclosed.
+    //
+    // The compiler refuses such a subtree as a scope (`subtreeContainsNegation` in
+    // `compile.ts`), so a rule that survives compilation reaches this walk only via an
+    // enclosing `all`, and `all([any(A, not A)], B)` is `TRUE AND B` — i.e. just `B`.
+    // Descending into the `any` anyway cited the dead branch's atom as a bound, so the
+    // disclosure asserted `reach.roles = ["role-1"]` for a rule matching EVERY role,
+    // and the kernel returned `allow` for a role the author never named. That is F-3.
+    //
+    // The rule that fixes it: a DISJUNCTION containing a negation is not a set on any
+    // axis, so it yields nothing — same question the compiler asks, same answer. A
+    // CONJUNCTION containing one is still a conjunction of its positive members, so it
+    // is walked member by member. Returning early for `all` would be wrong, and was:
+    // it silently emptied `all(projectId eq p, not(roleId eq r))` of its entire reach.
+    //
+    // Two walks over one tree, with no shared notion of a meaningful node, is the root
+    // cause of HIGH-1, F-1 and F-3 alike. Both now call the same exported predicate.
+    if (predicate.field === "any" && subtreeContainsNegation(predicate)) return
     switch (predicate.field) {
       case "projectId":
         projects.push({ values: identifierValues(predicate.value), sources: [path] })

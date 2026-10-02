@@ -657,9 +657,27 @@ both directions and cannot turn a kernel deny into an allow.
 ```
 
 Field-for-field a `PermissionNarrowing` subset (`src/orchestration/policy/types.ts:90-102`).
-At least one field must be present. Projects into `kernelRule` as a `restrict` effect,
-so the M3 engine enforces it with its existing approval accounting and its existing
-`outstandingApprovals` list.
+At least one field must be present.
+
+**SUPERSEDED IN PART by section 3.2 — read that section before relying on this one.** The
+sentence below was true of two of the four fields and false of the other two:
+
+> ~~Projects into `kernelRule` as a `restrict` effect, so the M3 engine enforces it with
+> its existing approval accounting and its existing `outstandingApprovals` list.~~
+
+`requireApprovalForDestructiveEffects` and `requireApprovalForExternalEffects` do project
+into the frozen M0 `restrict` effect and are enforced by the M3 engine. **`requireApprovalForDispatch`
+and `requireApprovalForCapabilities` have no field in that effect at all.** They travel in
+`RuleEvaluationResult.restrictions` and are applied by `evaluateWithKernel` through the
+kernel's own `narrowPolicyState`, after the kernel's pre-approval pass, with a demand a
+rule adds not clearable by a pre-approval.
+
+That distinction is not cosmetic. When the first version of this ADR was written, the
+paragraph above was the *only* statement on the subject, and an implementation that
+followed it — exporting the adapter and never calling it — produced a `require_approval`
+rule that compiled, digested, appeared in `unprojectedNarrowing`, and **did nothing**.
+Section 3.2 exists because this section was silent on who applies the unprojectable
+members, and silence is what permitted the omission.
 
 #### 7.3 `pre_approve_within_bounds`
 
@@ -1033,10 +1051,10 @@ release refuses, and is now refused as one with `rule.universal_pre_approval`.
 
 #### 8.2.3 An `any` branch containing any `not` arm contributes nothing
 
-**A disjunctive branch that contains a `not` arm is not usable as a scope, and
-contributes nothing — the whole branch, not just the `not` arm.** This is the specific
-defect the review found in the first version of this pass, and it is worth stating
-precisely because the fix is *not* complement reasoning.
+**A disjunctive branch that contains a `not` anywhere beneath it is not usable as a
+scope, and contributes nothing — the whole branch, not just the `not` arm.** This is the
+specific defect the review found in the first version of this pass, and it is worth
+stating precisely because the fix is *not* complement reasoning.
 
 `any(A, not A)` **compiled**. The two arms are complementary, so the branch holds for
 every dispatch — it is a tautology, and the branch is satisfied whatever the dispatch is.
@@ -1054,17 +1072,57 @@ the section 11 disclosure is required to render per axis; it would have to rende
 `any(A, not A)`. The branch contributes nothing and the enclosing `all` decides whether
 some *other* arm scopes the rule. Fail-closed, and consistent with 8.2.2.
 
+**"Containing" is depth-transitive, and it must be.** Reading only an `any`'s *direct*
+arms was the first version of this rule and it was **fail-open**, in the one direction
+that matters. Verified through the real compiler and the real kernel, a pre-approval
+scoped `any(roleId eq "role-1", any(projectId eq "proj-1", not projectId eq "proj-1"))`
+is a tautology — the inner arm is a disjunction with a negation — and it approved
+dispatches for a role the author never named:
+
+```
+role=role-1  project=proj-1  (the role the author wrote)  -> allow, outstandingApprovals: []
+role=role-9  project=proj-1  (a role the author NEVER named) -> allow, outstandingApprovals: []
+```
+
+against a disclosure reporting `reach.roles = ["role-1"]`. That is stop condition 5 by
+name, reachable at depth 2 against `MAX_PREDICATE_DEPTH` of 6. The implementation is
+`subtreeContainsNegation` in `src/rules/compile.ts`, which asks *does this subtree
+mention a `not`* rather than *do this node's children*.
+
+**The same gap admitted a shape that looked harmless and was not.** `any(all(A, not A))`
+also compiled under the one-level test, and was argued safe because the arm is
+unsatisfiable and therefore matches nothing — a disclosure over-report on a dead rule.
+That argument was correct about the evaluation and wrong about the risk: the one-level
+test could not distinguish an *unsatisfiable* arm (harmless, never fires) from a
+*tautological* one (live, fires on every dispatch), and only the second is the grant-side
+half of this defect. Both are refused now.
+
 #### 8.2.4 What this test is, and what it is not
 
 It is a **per-atom syntactic test over the predicate tree, not a satisfiability
 solver.** It decides whether a rule *contains a claim that can exclude*, never whether
-the rule as a whole is satisfiable or whether its clauses contradict each other. That is
-a deliberate limit and it is conservative in one direction only: the test can be fooled
-into crediting scope the rule does not have, and it cannot be fooled into refusing scope
-the rule does have — with the one exception recorded in the amendment's residual-risk
-note. The consequences of being a syntactic test rather than a solver are stated there
-rather than here, because they are a property of the approach and not of any one
-predicate family.
+the rule as a whole is satisfiable or whether its clauses contradict each other.
+
+That is a deliberate limit, and it is conservative in **both** directions — which is
+the property that matters and was misstated here before amendment A14:
+
+- The test cannot credit scope the rule does not have. A negation anywhere beneath an
+  `any` arm kills the arm (8.2.3), so a tautological or contradictory arm cannot
+  contribute an axis.
+- The test **can** refuse scope the rule does have. `any(A∧B, A∧¬B)` is
+  satisfiability-equivalent to `A`, so its true reach *is* the set the disclosure
+  would render, and it is refused anyway — see the amendment's residual-risk note.
+
+The first bullet was previously claimed as the *only* direction, which is false and was
+false in the dangerous direction: the defect A14 closes is exactly a case where the test
+credited scope a tautological arm did not have. The honest statement is that this is a
+syntactic approximation with an error rate in both directions, bounded by
+`MAX_PREDICATE_DEPTH` and `MAX_COMBINATOR_NODES_PER_RULE` so the shapes a human can
+author are the shapes that are examined.
+
+The consequences of being a syntactic test rather than a solver are a property of the
+approach, not of any one predicate family, and are stated in "Consequences and residual
+risk" rather than duplicated here.
 
 ### 9. Complexity limits
 
@@ -1661,6 +1719,18 @@ each has a cost that is stated here rather than discovered later.
   solver in the compile path of a language whose defining property is that it cannot
   execute anything.
 
+  **A14 sharpened this bullet in one respect worth stating separately.** The over-refusal
+  is not only about disjunction *shapes* an author might write casually; it now includes a
+  case where the disjunction is **satisfiability-equivalent to its own positive arm**, so
+  the rule is sound and its true reach is exactly what the disclosure would render. That
+  is `any(A∧B, A∧¬B) ≡ A`, refused because the branch contains a negation somewhere
+  beneath it. There is no author-facing rewrite that is obviously better than what they
+  wrote — the rule they wrote is correct — and the refusal is pure conservatism. It is
+  called out here so that nobody later discovers it and reads it as a regression: it is
+  the intended behaviour of a syntactic check, and the two tests in
+  `tests/unit/rules/vacuity.test.ts` that assert it are named in A14 precisely so the
+  decision is visible rather than discovered.
+
 - **The ceiling check in replay is only as good as the `ceilings` a caller resolves.**
   Section 13.3's guarantee (`held <= ceiling` after any replay) is a guarantee about the
   reconstructed state *relative to the ceilings it was given*. Replay cannot re-derive
@@ -1671,35 +1741,49 @@ each has a cost that is stated here rather than discovered later.
   boundary is named here so that a reviewer of a *caller* knows what it is being asked to
   be right about.
 
-- **The negation test is not depth-transitive, and a disjunction arm that is a
-  conjunction is credited with the union of its members' axes.** This is a real, verified
-  residual in the shipped check, found while verifying this amendment and recorded here
-  rather than left for a reviewer to find. `constrainingScopeAxes` tests an `any` branch's
-  **direct** arms for a `not` and then recurses, so a negation buried one level down
-  escapes the branch test, and the union it computes for an arm that is an `all` is a
-  union of axes where the arm requires *all* of them. Verified through the real
-  `compileRuleSet` and `buildPreApprovalDisclosure`: a pre-approval whose predicate is
-  `any(roleId eq "role-1", any(projectId eq "proj-1", not projectId eq "proj-1"))` is a
-  tautology on the projects axis, and it **compiles, grants, and reports
-  `reach.projects = ["proj-1"]`** — the same disclosure mismatch 8.2.3 was written to
-  close, reachable by one extra level of nesting (`MAX_PREDICATE_DEPTH` is 6, so it is
-  comfortably expressible). The same applies to `any(roleId eq "role-1", all(projectId eq
-  "proj-1", not projectId eq "proj-1"))`, where the arm is unsatisfiable.
+  `ReplayRequest.now` is related and worth naming for the M7 author: it is **required,
+  typed, and deliberately unread** (`src/budgets/recovery.ts`, `void request.now`). It
+  exists so that a rejected row's installed timestamp is the record's own rather than the
+  replay instant — restamping would rewrite history during recovery. It is recorded as a
+  residual because a required parameter that exists only to be discarded is an invitation
+  to reintroduce exactly the clock-dependent behaviour it prevents, and it would be
+  cheaper to remove before someone relies on it than to explain afterwards.
 
-  **This is distinct from, and worse than, the boundary the code's own tests already
-  document.** `tests/unit/rules/vacuity.test.ts` records that `any(all(A, not A))`
-  compiles, and argues it is fail-closed because the resulting rule is unsatisfiable and
-  therefore matches nothing — a disclosure that over-reports on a rule that never fires.
-  The case above is the opposite shape: the arm is a **tautology**, so the rule is
-  *satisfiable*, it **matches and grants**, and the disclosure over-reports on a rule
-  that is live. Over-reporting on a rule that never fires cannot clear the floor;
-  over-reporting on a rule that fires on every dispatch is the grant-side half of the bug
-  8.2.3 exists to prevent. **This is a defect in the implementation, not in this ADR.**
-  The fix is to make the branch test consult the whole subtree rather than the direct
-  arms, and to intersect rather than union within a conjunctive arm. It is recorded here
-  because an ADR that describes a check as sound while it is not is the failure mode this
-  document exists to prevent, and because the residual is bounded, reproduced, and named
-  rather than open.
+- **CLOSED by A14 (was: "the negation test is not depth-transitive").** This bullet
+  previously described a live, verified fail-open: a negation buried below an `any` arm
+  escaped a branch test that read only direct arms, so a pre-approval scoped
+  `any(roleId eq "role-1", any(projectId eq "proj-1", not projectId eq "proj-1"))`
+  compiled, granted, and returned kernel `allow` for a role the author never named.
+  `subtreeContainsNegation` now reads the whole subtree and every such shape is refused
+  at depth 1, 2 and 3. **Two corrections to the original bullet are worth recording,
+  because both were wrong in ways that would have led a fixer astray.**
+
+  *First:* the original named the **projects** axis as the soundness failure. The
+  projects over-report was the *harmless* half — `classifyRule`
+  (`src/rules/evaluate.ts:788-793`) independently refuses a foreign `projectId`, so a
+  rule over-claiming on projects is caught downstream. The **roles** axis has no such
+  gate, so on roles the rule was genuinely *wider* than disclosed and the kernel granted
+  it. A reader working from the original framing would have classified this as a
+  disclosure artefact and closed it as cosmetic. It was a grant.
+
+  *Second:* the original prescribed two fixes — consult the whole subtree, **and**
+  intersect rather than union within a conjunctive arm. **The second half is wrong and
+  was not applied.** Intersecting the axes of an `any`'s arms refuses
+  `any(projectId eq "p", roleId eq "r")`, which genuinely excludes every dispatch whose
+  project is not `p` and whose role is not `r`, and which the code's own tests pin as a
+  CONTROL that must compile. The test 8.2 applies asks whether the rule **excludes
+  anything**, not whether its reach is a product set; on that question unioning arm axes
+  is correct. Only the subtree half was needed, and it was sufficient.
+
+  The consequence of applying the subtree half alone is a **deliberate over-refusal**,
+  recorded rather than engineered away: `any(A∧B, A∧¬B)` is satisfiability-equivalent to
+  `A` — a sound rule whose true reach *is* the disclosed set — and is now refused. Two
+  tests in `tests/unit/rules/vacuity.test.ts` were **changed** rather than deleted to
+  assert this; both had previously asserted the opposite. The trade is asymmetric in the
+  correct direction: refusing a sound rule costs an author a rewrite, while admitting a
+  tautology clears the safety floor for dispatches nobody authorised. Distinguishing the
+  two requires deciding satisfiability over a predicate language with no vocabulary for
+  it.
 
 ### Risks and the structural mechanism that addresses each
 
@@ -1710,7 +1794,7 @@ each has a cost that is stated here rather than discovered later.
 | Budget reservation is not atomic with eligibility | Eligibility is *defined* as holding a held reservation; `reserve` is one compare-and-set |
 | A cost budget is claimed without usage data | `enforceability` is computed from adapter-reported usage, never from the budget being set |
 | A rule widens the safety floor | `z.literal(false)` escalation fields, monotone `min`/`narrowPolicyState` composition, and the kernel's existing post-narrowing re-check |
-| A universal pre-approval is written | The compiler pass `checkNotUniversal` refuses a `pre_approve_within_bounds` or `select_routing_preference` carrying no **constructive** form on any of the twelve scope axes (section 8.2): a vacuous edge comparison, a `none`/`lacks`, or a bare `not` does not count, an `any` branch containing a `not` contributes nothing, and one scoped only by `taskTitlePattern` is refused. It is a compiler pass rather than a `.superRefine` so the four restriction actions may still be universal, and there is no `default_action` |
+| A universal pre-approval is written | The compiler pass `checkNotUniversal` refuses a `pre_approve_within_bounds` or `select_routing_preference` carrying no **constructive** form on any of the twelve scope axes (section 8.2): a vacuous edge comparison, a `none`/`lacks`, or a bare `not` does not count, an `any` branch containing a `not` **anywhere beneath it** contributes nothing, and one scoped only by `taskTitlePattern` is refused. It is a compiler pass rather than a `.superRefine` so the four restriction actions may still be universal, and there is no `default_action`. The check is syntactic, so it over-refuses some sound disjunctions rather than admitting a vacuous one — see 8.2.4 |
 | A rule restriction the M0 effect cannot carry is silently dropped | Four members travel in `RuleEvaluationResult.restrictions`; `evaluateWithKernel` applies them through the kernel's own `narrowPolicyState`, after the kernel's pre-approval pass, and a demand a rule adds is not clearable by a pre-approval (section 3.2) |
 | Replay over-admits and wedges the budget | Replay is a second admission decision: every occupying row gets one of three named verdicts, refusals install as `expired` and therefore return capacity, refusal is never total, and `held <= ceiling` holds after any replay (section 13.3) |
 | An adapter or a producer rewrites the operator's inbox | The store clones on write and deep-freezes; each adapter gets a fresh deep-frozen clone made inside `deliverOne`'s `try`, so a clone failure cannot abort the fan-out (section 17) |
@@ -1839,6 +1923,44 @@ The five decisions:
   moving nothing defeated every recovery check because they all trusted return values
   (the sweep now reads the ledger back into `RecoveryReport.unverified`).
 
+- **A14 — The vacuity check is depth-transitive, and is honest about over-refusing
+  (sections 8.2.3 and 8.2.4).** A13 was written while verifying the A9 change, and in the
+  course of that verification a **fail-open defect in the shipped check** was found and
+  recorded as a residual: `constrainingScopeAxes` tested an `any` branch's *direct* arms
+  for a `not` and then recursed, so a negation one level down escaped. The pre-approval
+  `any(roleId eq "role-1", any(projectId eq "proj-1", not projectId eq "proj-1"))` is a
+  tautology; it compiled, disclosed `reach.roles = ["role-1"]`, and returned kernel `allow`
+  with `outstandingApprovals: []` for a role the author never named. The implementation is
+  now `subtreeContainsNegation`, which asks whether a subtree mentions a `not` at any
+  depth, and every such shape is refused at depth 1, 2 and 3.
+
+  Three things about A13's own record of the defect needed correcting, and each was wrong
+  in a way that would have misled whoever fixed it:
+
+  1. It named the **projects** axis as the soundness failure. That was the harmless half —
+     `classifyRule` independently refuses a foreign `projectId`. The **roles** axis has no
+     such gate, so on roles the rule was genuinely wider than disclosed *and* the kernel
+     granted it. The original framing invites classifying this as a disclosure artefact.
+  2. It prescribed intersecting rather than unioning the axes of a conjunctive arm.
+     **That half is wrong and was not applied** — it refuses
+     `any(projectId eq "p", roleId eq "r")`, a rule that legitimately excludes dispatches
+     and that the suite pins as a control. Section 8.2 asks whether a rule *excludes
+     anything*, on which unioning is correct. The subtree half alone was necessary and
+     sufficient.
+  3. Section 8.2.4 claimed the test "cannot be fooled into refusing scope the rule does
+     have". That is **false**, and false in the dangerous direction, since the defect it
+     denied is precisely a case of crediting scope a rule does not have. The test is now
+     described as a syntactic approximation with error in both directions, bounded by
+     `MAX_PREDICATE_DEPTH` and `MAX_COMBINATOR_NODES_PER_RULE`.
+
+  The residual that survives is a **deliberate over-refusal**: `any(A∧B, A∧¬B)` is
+  satisfiability-equivalent to `A`, a sound rule whose true reach is the disclosed set, and
+  it is refused. Two tests in `tests/unit/rules/vacuity.test.ts` were **changed** rather
+  than deleted to assert this; both previously asserted the opposite. Separating the sound
+  rule from the tautology requires deciding satisfiability over a predicate language with
+  no vocabulary for it, and the milestone is conservative-by-refusal everywhere else for
+  the same reason.
+
 Three smaller reconciliations accompany these. Citations in sections 3.1, 6.3, 7.3, 8,
 and 8.1 were re-read against the files and the ones that had drifted were corrected
 (`projectKernelMatch` 735 → 899, `projectToKernelRule` 791 → 955, the two projected
@@ -1852,18 +1974,27 @@ members and in what order, and a document silent on that is a document that perm
 omission A11 describes.
 
 One **defect in the implementation, not in this ADR**, was found while verifying A9 and
-is recorded in "Consequences and residual risk of the 2026-10-02 amendment": the
-`any`-contains-`not` test is not depth-transitive, and a disjunction arm that is a
-conjunction is credited with the union of its members' axes. A pre-approval that is a
-tautology on the projects axis therefore still compiles, grants, and reports
-`reach.projects = ["proj-1"]`. It is the same disclosure mismatch A9 closes, reachable
-by one extra level of nesting, and the ADR states the shipped behaviour and the gap
-rather than the behaviour the code was meant to have.
+recorded in "Consequences and residual risk": the `any`-contains-`not` test was not
+depth-transitive, and a disjunction arm that is a conjunction was credited with the union
+of its members' axes. **A14 closed it**, and the record of what it was is worth keeping
+because the original note was wrong about the axis and wrong about the fix — it named
+the projects axis, which `classifyRule` independently gates, rather than the roles axis,
+which nothing gates; and it prescribed an intersection that would have refused
+`any(projectId eq "p", roleId eq "r")`, a rule that legitimately excludes dispatches and
+that the test suite pins as a control.
+
+The deeper lesson is the one this milestone keeps relearning, and it belongs in an ADR
+rather than in a review report: **a safety feature that cannot execute is
+indistinguishable from one that works, and a green suite is not evidence.** HIGH-1 and
+MED-3 each survived roughly five thousand passing tests. MED-3 survived three separate
+fix attempts, two of which I introduced. What surfaced every one of them was not the test
+count but re-running the defect's own reproduction against the real entry points — and
+where the reproduction contradicted the report, believing the reproduction.
 
 ## Amendment record
 
 > Entries A1 to A8 below record the **2026-10-01** amendment and are unchanged. The
-> **2026-10-02** amendment (A9 to A13) is in "Amendment — 2026-10-02" above, and it
+> **2026-10-02** amendment (A9 to A14) is in "Amendment — 2026-10-02" above, and it
 > **does supersede one decision**: section 8's "a `not` counts as constraining". The
 > "no decision was weakened" claim in this record is therefore true of A1 to A8 and
 > **not** of the document as a whole.

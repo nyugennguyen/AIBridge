@@ -599,6 +599,12 @@ Exit criteria:
 
 ### Milestone 7: Hardening and Ecosystem
 
+> **Renumbered to Milestone 8.** Milestone 7 is now
+> [Polyglot ingress and durable admission](./implementation-plans/milestone-7-polyglot-ingress.md),
+> inserted per [ADR 0008](./adr/0008-polyglot-ingress-and-admission.md). The
+> executable plans in `Docs/implementation-plans/` are authoritative for
+> numbering; the section below is retained as the original product direction.
+
 **Goal:** Prepare AIBridge for broader adoption and runtime expansion.
 
 Deliverables:

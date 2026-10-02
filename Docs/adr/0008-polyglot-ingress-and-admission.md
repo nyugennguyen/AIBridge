@@ -55,6 +55,27 @@ samples, and future reporting must sample at >=1 Hz for >= 60 s and report media
 and p95. See
 [`milestone-7-polyglot-ingress.md` §5.1](../implementation-plans/milestone-7-polyglot-ingress.md).
 
+**Amended by M7.0: the rule above is necessary but not sufficient, and the 57.3 MiB
+figure is one draw from a wide distribution.** Building the measurement harness
+(`bench/`) and capturing the *unchanged* engine three times produced sum medians of
+**55.95 / 34.84 / 34.63 MiB** from three individually compliant captures — a **61%
+run-to-run spread** on a process that never changed. Bun's RSS sits on plateaus
+(~24, ~35, ~54 MiB) and migrates between them on a minute timescale while idle; a
+warmup sweep did not pin it, since 45 s settles *lower* than 75 s.
+
+Two consequences, both of which weaken this ADR rather than strengthen it:
+
+1. The reduction this milestone targets (~21%) is **smaller than the measurement
+   noise of a single idle capture**. The −39% figure is a projection from a
+   component breakdown, not a demonstrated quantity.
+2. The gated quantity is therefore **steady state under sustained load**, not idle,
+   and a comparison requires >=3 captures with run-to-run spread <=10%
+   ([`milestone-7-polyglot-ingress.md` §5.1.1](../implementation-plans/milestone-7-polyglot-ingress.md)).
+
+If that spread cannot be brought under 10% on the reference host, the resource KPI
+is reported `not-gateable`. That is an honest milestone outcome. Reporting one 60 s
+capture as a pass is not.
+
 ## 2. Decision
 
 A new Rust binary, `aibr-router`, owns ingress. It is the only component permitted

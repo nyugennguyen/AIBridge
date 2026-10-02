@@ -33,8 +33,8 @@
  */
 
 import { describe, expect, it } from "vitest"
-import { compileRule, compileRuleSet, evaluateRules } from "../../../src/rules/index.js"
-import { rawPreApprovalDocument, rawRuleDocument, validContext } from "./fixtures.js"
+import { compileRule, compileRuleSet, evaluateRules, evaluateWithKernel } from "../../../src/rules/index.js"
+import { dispatchEnvelope, rawPreApprovalDocument, rawRuleDocument, validContext } from "./fixtures.js"
 
 /** A pre-approval document, so the universal check applies. The actions are the two it is enforced for. */
 function preApproval(predicates: readonly unknown[]): Record<string, unknown> {
@@ -256,10 +256,29 @@ describe("a disjunction containing a negation is refused as a universal pre-appr
     expect(compiled.error.code).toBe("rule.universal_pre_approval")
   })
 
-  it("the sibling CONTROL still holds: `any(A, B)` with no negation anywhere still compiles", () => {
-    // The control that keeps the refusal above honest. If EVERY disjunction were
-    // refused, the test before it would pass while the feature was dead. A
-    // disjunction whose arms pin different axes is exactly the legitimate case.
+  it("CLOSED, and it was a grant: a CROSS-axis `any` is refused, because the disclosure renders it as a product", () => {
+    // THIS TEST ALSO CHANGED DIRECTION, and the change is the point.
+    //
+    // It previously asserted that `any(projectId eq "p", roleId eq "r")` compiles,
+    // as the control proving the check did not over-refuse. **That shape was a
+    // defect.** The independent review found it, and the reasoning I had written into
+    // the source comment defending it was wrong.
+    //
+    // The disclosure renders a PER-AXIS PRODUCT: `reach.roles` and `reach.projects`
+    // side by side, which reads as an AND. The predicate is a UNION. So the rule
+    // matches every dispatch on project `p` OR on role `r`, while the disclosure
+    // describes a much smaller set — and only `projectId` is independently gated
+    // downstream by `classifyRule`, so on `roleId` the over-report is a real grant:
+    //
+    //   role=role-1 -> allow
+    //   role=role-9 -> allow     <-- a role the author never named
+    //
+    // The fix distinguishes the two disjunctions properly. A SAME-axis disjunction is
+    // a genuine set operation and the disclosure renders it correctly as a union, so
+    // it still compiles (asserted in the control below). A CROSS-axis one is not a
+    // set operation at all and cannot be rendered as a product, so it is refused —
+    // the same rule as the negation case, for the same reason: the disclosure cannot
+    // state the reach, so a rule relying on it cannot be scoped.
     const compiled = compileRule(
       preApproval([
         {
@@ -271,7 +290,76 @@ describe("a disjunction containing a negation is refused as a universal pre-appr
         },
       ]),
     )
-    expect(compiled.ok, "a disjunction that genuinely excludes dispatches must still compile").toBe(true)
+    expect(compiled.ok, "a cross-axis disjunction discloses a product, not the union it computes").toBe(false)
+    if (compiled.ok) return
+    expect(compiled.error.code).toBe("rule.universal_pre_approval")
+  })
+
+  it("no cross-axis disjunction reaches the kernel with a role or node it did not name", () => {
+    // The end-to-end assertion for the defect above, and the reason a compile-refusal
+    // test is not sufficient on its own. Refusal is the strong form, but the failure
+    // mode being closed was an `allow` from the KERNEL, so this walks the whole path
+    // for every pair of ungated axes and asserts the refusal is uniform rather than
+    // spot-checking the pair the review happened to find.
+    //
+    // `projectId` is deliberately absent: `classifyRule` independently refuses a
+    // foreign project, so a cross-axis disjunction naming it is caught downstream
+    // even if the disclosure over-reports. `roleId`, `targetNodeId`, `projectPathId`
+    // and `capability` have no such gate, which is why the over-report on them is a
+    // grant rather than a cosmetic mismatch.
+    const ungated: readonly [string, Record<string, unknown>][] = [
+      ["roleId", { field: "roleId", operator: "eq", value: "role-1" }],
+      ["targetNodeId", { field: "targetNodeId", operator: "eq", value: "node-1" }],
+      ["projectPathId", { field: "projectPathId", operator: "eq", value: "path-1" }],
+      ["capability", { field: "capability", operator: "any", value: ["fs.read"] }],
+    ]
+    for (const [leftAxis, left] of ungated) {
+      for (const [rightAxis, right] of ungated) {
+        if (leftAxis >= rightAxis) continue
+        const set = compileRuleSet([
+          preApproval([{ field: "any", predicates: [left, right] }]),
+        ])
+        expect(set.ok, `${leftAxis} + ${rightAxis}: a cross-axis disjunction must not compile`).toBe(false)
+        // And IF one ever did compile, the kernel must still not be able to grant a
+        // dispatch on the axis it never named. This branch is unreachable while the
+        // refusal above holds — which is the point. It exists so that relaxing the
+        // compiler cannot quietly restore the grant: the refusal assertion would fail
+        // first, and this says what the failure would cost.
+        if (set.ok) {
+          const evaluation = evaluateRules(set.value, validContext())
+          const kernel = evaluateWithKernel(
+            { envelope: dispatchEnvelope({ ruleSnapshots: evaluation.kernelRules }), taskTitle: "deploy" },
+            set.value,
+            evaluation.kernelRules,
+          )
+          expect(kernel.ok, `${leftAxis} + ${rightAxis}: the kernel must refuse to answer for an undisclosed rule`).toBe(false)
+        }
+      }
+    }
+  })
+
+  it("the sibling CONTROL still holds: a SAME-axis `any` is a real union, so it compiles", () => {
+    // The control that keeps the refusal above honest. If EVERY disjunction were
+    // refused, the test before it would pass while the feature was dead. A disjunction
+    // whose arms all pin the SAME axis is exactly the legitimate case, and the
+    // disclosure renders its reach as the union it genuinely is.
+    for (const [label, value] of [
+      ["projectId", "proj-1"],
+      ["roleId", "role-1"],
+    ] as const) {
+      const compiled = compileRule(
+        preApproval([
+          {
+            field: "any",
+            predicates: [
+              { field: label, operator: "eq", value },
+              { field: label, operator: "eq", value: `${value}-other` },
+            ],
+          },
+        ]),
+      )
+      expect(compiled.ok, `${label}: a same-axis union discloses truthfully and must compile`).toBe(true)
+    }
   })
 
   it("CLOSED, not documented: an `any` arm containing a `not` BELOW a combinator is now refused, so the fail-open it enabled can no longer be written", () => {

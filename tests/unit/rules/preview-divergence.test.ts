@@ -338,22 +338,32 @@ describe("across 240 generated (rule set, history) variations, the preview never
     // ineligible rules, would leave this file green while testing nothing, so the
     // counts are ASSERTED rather than logged.
     //
-    // `comparedOutcomes` was 970 before the M6.10 HIGH-1 fix and is 807 now. The
-    // drop is the fix working: the generator emits vacuous-but-plausible predicates
-    // (`capability none [...]`, `roleVersion gte 1`, bare `not`s) which the
-    // compiler now REFUSES as universal pre-approvals, so fewer generated sets
-    // compile and fewer outcomes get compared. The threshold moved down to match
-    // the new reality rather than being deleted, because a divergence sweep whose
-    // breadth assertion was loosened to "any number above zero" would stop
+    // `comparedOutcomes` was 970 before the M6.10 HIGH-1 fix, 807 after it, and is
+    // 733 now. Each drop is a fix working: the generator emits predicates that look
+    // plausible but are vacuous or un-disclosable — `capability none [...]`,
+    // `roleVersion gte 1`, bare `not`s, and now the cross-axis `any` at
+    // PREDICATE_SHAPES[5] — which the compiler REFUSES as universal pre-approvals,
+    // so fewer generated sets compile and fewer outcomes get compared. The threshold
+    // moves with the reality rather than being deleted, because a divergence sweep
+    // whose breadth assertion was loosened to "any number above zero" would stop
     // detecting a generator that had quietly stopped generating anything.
+    //
+    // The third drop is worth naming: `any(projectId eq "p", roleId eq "r")` was on
+    // this list as a legitimate cross-axis disjunction until the independent review
+    // showed it is a grant — the disclosure renders the union as a per-axis product,
+    // so the rule fires for roles the disclosure does not name. The generator was
+    // feeding the sweep a shape that should never have compiled, which is precisely
+    // the class of defect a divergence sweep is supposed to catch and here it was
+    // being supplied by the fixture instead.
     expect(compiledSets).toBeGreaterThan(180)
     expect(refusedSets).toBeGreaterThan(0)
     // And the refusals are the ones the language is SUPPOSED to make — a
-    // pre-approval or a routing preference that constrains nothing
-    // (ADR 0007 section 8) — rather than a generator producing malformed
-    // documents, which would mean the sweep was walking the wrong class.
+    // pre-approval or a routing preference that constrains nothing, or constrains
+    // it in a way the disclosure cannot render (ADR 0007 sections 8.2.3 and 8.2.5)
+    // — rather than a generator producing malformed documents, which would mean the
+    // sweep was walking the wrong class.
     expect([...refusalCodes.keys()]).toEqual(["rule.universal_pre_approval"])
-    expect(comparedOutcomes).toBeGreaterThan(750)
+    expect(comparedOutcomes).toBeGreaterThan(700)
     // And it has to have visited the outcomes that matter. `matched` and
     // `not_matched` alone would mean the sweep never reached a disabled,
     // superseded, expired or out-of-scope rule, which is where a preview and an

@@ -17,7 +17,8 @@ The plans are designed for a root Codex agent coordinating isolated implementati
 | 4 | [Distributed Tailscale mesh](./milestone-4-distributed-mesh.md) | Secure, recoverable multi-node orchestration with manual takeover |
 | 5 | [Shared memory and context](./milestone-5-memory-and-context.md) | Scoped, attributable, redacted memory and deterministic context manifests |
 | 6 | [Rules, automation, and workflows](./milestone-6-rules-and-workflows.md) | Safe pre-approval, reusable workflows, budgets, simulation, and notifications |
-| 7 | [Hardening and ecosystem](./milestone-7-hardening-and-ecosystem.md) | Recovery, diagnostics, plugin SDK, upgrades, limits, and ecosystem readiness |
+| 7 | [Polyglot ingress and durable admission](./milestone-7-polyglot-ingress.md) | Native Rust ingress router, durable admission before acknowledgement, Fastify removed from the engine |
+| 8 | [Hardening and ecosystem](./milestone-8-hardening-and-ecosystem.md) | Recovery, diagnostics, plugin SDK, upgrades, limits, and ecosystem readiness |
 
 Milestones are sequential release gates. Research spikes for a later milestone may run early, but production code for milestone `N+1` must not become a dependency of milestone `N`.
 
@@ -74,7 +75,7 @@ The names below are reusable roles, not long-lived agents. Spawn a fresh sub-age
 - Running roles and policies are snapshots; template edits affect future dispatches only.
 - New persistence formats require a version, migration path, rollback story, and corrupt-data test.
 - No automatic controller election is introduced by these milestones.
-- Do not add a second programming language unless a milestone plan explicitly changes this decision through an ADR.
+- Do not add a second programming language unless a milestone plan explicitly changes this decision through an ADR. Rust is permitted under [ADR 0008](../adr/0008-polyglot-ingress-and-admission.md), within `router/` only, for ingress admission. The guardrail stands unchanged for `src/`.
 - A sub-agent may not perform release, publish, deployment, credential rotation, node enrollment, or destructive cleanup.
 
 ## Common Verification Commands

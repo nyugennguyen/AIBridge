@@ -1861,7 +1861,7 @@ each has a cost that is stated here rather than discovered later.
   boundary is named here so that a reviewer of a *caller* knows what it is being asked to
   be right about.
 
-  `ReplayRequest.now` is related and worth naming for the M7 author: it is **required,
+  `ReplayRequest.now` is related and worth naming for the M8 author: it is **required,
   typed, and deliberately unread** (`src/budgets/recovery.ts`, `void request.now`). It
   exists so that a rejected row's installed timestamp is the record's own rather than the
   replay instant — restamping would rewrite history during recovery. It is recorded as a

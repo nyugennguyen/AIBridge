@@ -1,0 +1,264 @@
+{
+  "$comment": [
+    "Schemas for the artefacts under bench/. Cited by the M7.16 gate report so a",
+    "reviewer can check a number against the field that produced it.",
+    "",
+    "The single rule these schemas exist to enforce: every memory figure is an",
+    "ABSOLUTE LEVEL. No field in any of these documents is a difference between",
+    "two samples. ADR 0008 section 1 records RSS falling 4.4 MiB across 500",
+    "requests because JSC returned pages to its allocator, and this harness has",
+    "since reproduced a fall from 65.0 MiB to 29.0 MiB inside one idle bridge",
+    "process. A delta would report that as a 55% improvement.",
+    "",
+    "Sample counts: a compliant memory capture has sampling.shortSample = false,",
+    "sampling.samples >= 60 and sampling.intervalSeconds <= 1. Anything with",
+    "shortSample = true must not be cited in a gate report."
+  ],
+
+  "aibridge.bench.mem/1": {
+    "description": "bench/mem.sh and bench/three-process.sh output. Absolute RSS levels in MiB.",
+    "required": ["schema", "generatedAt", "host", "units", "sampling", "processes", "sum", "series"],
+    "properties": {
+      "schema": { "const": "aibridge.bench.mem/1" },
+      "generatedAt": { "type": "string", "format": "date-time" },
+      "host": {
+        "type": "object",
+        "properties": {
+          "os": { "type": "string" },
+          "arch": { "type": "string" },
+          "kernel": { "type": "string" },
+          "cpus": { "type": "string" }
+        }
+      },
+      "units": {
+        "type": "object",
+        "description": "rssSource is ps -o rss=, which reports KiB on macOS and Linux alike.",
+        "properties": {
+          "rssSource": { "type": "string" },
+          "reported": { "const": "MiB" },
+          "conversion": { "const": "MiB = KiB / 1024" },
+          "quantity": { "const": "absolute level, never a delta" }
+        }
+      },
+      "measurementRule": { "type": "string" },
+      "sampling": {
+        "type": "object",
+        "properties": {
+          "intervalSeconds": { "type": "number" },
+          "requestedSamples": { "type": "integer" },
+          "ticksObserved": {
+            "type": "integer",
+            "description": "Ticks actually performed. A value below requestedSamples means the run was truncated and mem.sh refuses to emit a summary."
+          },
+          "durationSeconds": { "type": "number" },
+          "shortSample": {
+            "type": "boolean",
+            "description": "true when the run fell below 1 Hz or 60 s and --allow-short was passed. MUST NOT be cited in a gate report."
+          },
+          "minimum": {
+            "type": "object",
+            "properties": {
+              "samples": { "const": 60 },
+              "intervalSeconds": { "const": 1 },
+              "durationSeconds": { "const": 60 }
+            }
+          }
+        }
+      },
+      "commandLine": { "type": "string" },
+      "processes": {
+        "type": "object",
+        "description": "Keyed by slot name, which is the first alternative of its matcher expression.",
+        "additionalProperties": {
+          "type": "object",
+          "properties": {
+            "matcher": {
+              "type": "string",
+              "description": "'|'-separated alternatives. Matched against the process comm name first; argv substring only if no alternative matched a comm exactly."
+            },
+            "pids": { "type": "array", "items": { "type": "integer" } },
+            "pidCount": { "type": "integer" },
+            "matchKind": { "enum": ["comm", "argv", "none"] },
+            "observedTicks": { "type": "integer" },
+            "absentTicks": { "type": "integer" },
+            "absent": { "type": "boolean" },
+            "rssMib": { "$ref": "#/aibridge.bench.mem/1/distribution" }
+          }
+        }
+      },
+      "sum": {
+        "type": "object",
+        "description": "THE PRIMARY NUMBER. Per-tick sum over the slots that were alive in at least one tick, summed at a single instant.",
+        "properties": {
+          "primary": { "const": true },
+          "definition": { "type": "string" },
+          "slotsIncluded": { "type": "array", "items": { "type": "string" } },
+          "completeTicks": {
+            "type": "integer",
+            "description": "Ticks where every slot in slotsIncluded was present. Ticks with an absent slot are excluded from the sum entirely rather than counted as zero."
+          },
+          "ticksObserved": { "type": "integer" },
+          "rssMib": { "$ref": "#/aibridge.bench.mem/1/distribution" }
+        }
+      },
+      "series": {
+        "type": "object",
+        "description": "Raw per-tick MiB levels, keyed by slot name plus a \"sum\" entry. Observed samples only: absent ticks contribute no value and are counted in absentTicks. This is the shape bench_compare reads to classify a run against a baseline.",
+        "additionalProperties": { "type": "array", "items": { "type": "number" } }
+      },
+      "comparison": {
+        "type": "object",
+        "description": "Present when --baseline was supplied.",
+        "additionalProperties": {
+          "type": "object",
+          "properties": {
+            "verdict": {
+              "enum": ["improve", "regress", "noise", "insufficient-samples", "no-baseline-series"],
+              "description": "A verdict of improve or regress requires non-overlapping p5..p95 bands AND a median move beyond the 5% noise floor. Overlapping bands are always noise."
+            },
+            "baselineMedianMib": { "type": ["number", "null"] },
+            "candidateMedianMib": { "type": ["number", "null"] },
+            "relativeChangePct": { "type": ["number", "null"] },
+            "reason": { "type": "string" }
+          }
+        }
+      },
+      "headlineWarning": {
+        "type": "string",
+        "description": "Emitted by bench/three-process.sh. States that router-only figures are not a host-level result. A report quoting the router's figure must carry this warning with it."
+      }
+    },
+    "distribution": {
+      "type": ["object", "null"],
+      "properties": {
+        "n": { "type": "integer" },
+        "min": { "type": "number" },
+        "max": { "type": "number" },
+        "mean": { "type": "number" },
+        "stdev": { "type": "number", "description": "Sample standard deviation (n-1 denominator)." },
+        "median": { "type": "number", "description": "For even n, the mean of the two central order statistics." },
+        "p5": { "type": "number", "description": "Nearest rank: value at 1-based index ceil(0.05 * n). No interpolation." },
+        "p95": { "type": "number", "description": "Nearest rank: value at 1-based index ceil(0.95 * n). No interpolation." },
+        "p99": { "type": "number", "description": "Nearest rank: value at 1-based index ceil(0.99 * n). No interpolation." }
+      },
+      "percentileMethod": "nearest rank, no interpolation: a percentile is always an observed value, so a reported gate number cannot be a level the system never held"
+    }
+  },
+
+  "aibridge.bench.latency/1": {
+    "description": "bench/latency.sh output. Wall-clock round trip per request in milliseconds.",
+    "required": ["schema", "url", "method", "warmup", "samples", "latencyMs", "pass"],
+    "properties": {
+      "schema": { "const": "aibridge.bench.latency/1" },
+      "url": { "type": "string" },
+      "method": { "type": "string" },
+      "concurrency": { "const": 1, "description": "Requests are issued sequentially; this measures service time, not concurrency behaviour." },
+      "quantity": { "type": "string" },
+      "percentileMethod": { "type": "string" },
+      "warmup": {
+        "type": "object",
+        "description": "Excluded from latencyMs. Lazy JIT allocation means a sample taken right after start under-reports.",
+        "properties": {
+          "requests": { "type": "integer" },
+          "excludedFromReportedDistribution": { "const": true },
+          "reason": { "type": "string" },
+          "successfulSamples": { "type": "integer" },
+          "medianMs": { "type": ["number", "null"] }
+        }
+      },
+      "samples": { "type": "integer", "description": "Successful post-warmup requests actually measured." },
+      "requestedRequests": { "type": "integer" },
+      "failedRequests": { "type": "integer", "description": "Non-2xx/3xx responses. Excluded rather than averaged in; a failed curl prints 0.000000 s and would otherwise be the best sample in the distribution." },
+      "latencyMs": {
+        "type": "object",
+        "properties": {
+          "min": { "type": "number" },
+          "p5": { "type": "number" },
+          "p50": { "type": "number" },
+          "p95": { "type": "number" },
+          "p99": { "type": "number" },
+          "max": { "type": "number" },
+          "mean": { "type": "number" },
+          "stdev": { "type": "number" }
+        }
+      },
+      "thresholds": {
+        "type": "object",
+        "properties": {
+          "p50Ms": { "type": ["number", "null"] },
+          "p99Ms": { "type": ["number", "null"] }
+        }
+      },
+      "violations": { "type": "array", "items": { "type": "string" } },
+      "pass": { "type": "boolean" }
+    }
+  },
+
+  "aibridge.bench.imports/1": {
+    "description": "bench/imports-probe.sh output. The ADR 0008 section 1 import ladder, as levels. NOT a steady-state measurement and NOT the gate baseline.",
+    "required": ["schema", "host", "method", "quantity", "steps"],
+    "properties": {
+      "schema": { "const": "aibridge.bench.imports/1" },
+      "host": { "type": "object" },
+      "method": { "type": "string" },
+      "quantity": { "type": "string" },
+      "notAIdleSteadyStateMeasurement": { "const": true },
+      "steps": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "object",
+          "properties": {
+            "label": { "type": "string" },
+            "levelMib": { "$ref": "#/aibridge.bench.mem/1/distribution" },
+            "samples": { "type": "array", "items": { "type": "number" } },
+            "error": { "type": "string", "description": "Present when the step's probe threw. levelMib is then null; it is never 0, which would read as 'this module costs nothing'." }
+          }
+        }
+      }
+    }
+  },
+
+  "aibridge.bench.baseline/1": {
+    "description": "bench/baseline/engines.json. The committed ADR 0008 section 1 capture.",
+    "required": ["schema", "generatedAt", "quantity", "partial", "missing", "adrSection1Rows", "steadyState"],
+    "properties": {
+      "schema": { "const": "aibridge.bench.baseline/1" },
+      "generatedAt": { "type": "string", "format": "date-time" },
+      "adrReference": { "type": "string" },
+      "planReference": { "type": "string" },
+      "quantity": { "type": "string" },
+      "host": { "type": "object" },
+      "reproduceWith": { "type": "array", "items": { "type": "string" } },
+      "hostDeviations": { "type": "array", "items": { "type": "string" } },
+      "partial": {
+        "type": "boolean",
+        "description": "true when any ADR row or section 5.2 target could not be reproduced on this host. An artefact with partial = false claims full coverage."
+      },
+      "missing": {
+        "type": "array",
+        "description": "Names each unreproducible row and why. Required to be non-empty whenever partial is true.",
+        "items": {
+          "type": "object",
+          "properties": { "row": { "type": "string" }, "why": { "type": "string" } }
+        }
+      },
+      "adrSection1Rows": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "row": { "type": "string" },
+            "reproduced": { "type": "boolean" },
+            "medianMib": { "type": ["number", "null"] },
+            "p95Mib": { "type": ["number", "null"] },
+            "samples": { "type": ["integer", "null"] },
+            "source": { "type": "string" }
+          }
+        }
+      },
+      "steadyState": { "$ref": "#/aibridge.bench.mem/1" },
+      "importLadder": { "$ref": "#/aibridge.bench.imports/1" },
+      "latency": { "$ref": "#/aibridge.bench.latency/1" }
+    }
+  }
+}

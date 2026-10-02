@@ -727,20 +727,41 @@ function constrainingScopeAxes(predicates: readonly RulePredicate[]): readonly S
       // matches nothing. This shape is SATISFIABLE, because the arm is a tautology,
       // so it fires. Same syntactic gap, opposite safety consequence.
       if (subtreeContainsNegation(predicate)) continue
-      // The arms' axes are UNIONED, not intersected.
+      // The arms' axes are UNIONED — but only when they are the SAME axis.
       //
-      // An earlier attempt intersected them, reasoning that a disjunction bounds an
-      // axis only when every arm does. That is true of the reach SET but wrong for
-      // the test being applied here, which asks whether the rule EXCLUDES anything:
-      // `any(projectId eq "p", roleId eq "r")` excludes every dispatch whose project
-      // is not `p` AND whose role is not `r`, so it is a real constraint on both axes
-      // and the intersection refused it as vacuous. Refusing a genuine scope is a
-      // regression in the other direction, and `tests/unit/rules/vacuity.test.ts`
-      // pins that shape as a CONTROL. Unioning is correct here; the tautology that
-      // unioning cannot see is caught above by the subtree negation test, which is
-      // the property that actually matters — a rule that excludes nothing must not
-      // clear the safety floor, whereas a rule that excludes something may.
-      for (const nested of constrainingScopeAxes(predicate.predicates)) found.add(nested)
+      // A same-axis disjunction is a genuine set operation and the disclosure
+      // renders it correctly: `any(projectId eq "p", projectId eq "q")` discloses
+      // `reach.projects = ["p", "q"]`, which is the true union.
+      //
+      // A CROSS-axis disjunction is not a set operation at all, and cannot be
+      // rendered as the per-axis PRODUCT the section 11 disclosure is required to
+      // produce. `any(roleId eq "role-1", targetNodeId eq "node-1")` matches every
+      // dispatch that is on `role-1` OR on `node-1`, but the disclosure reported
+      // `reach.roles = ["role-1"]` and `reach.nodes = ["node-1"]` — which reads as
+      // the AND, a far smaller set. The rule then fired where the disclosure says it
+      // does not, and the kernel returned `allow` with no outstanding approvals:
+      //
+      //   role=role-1 node=node-1 -> allow
+      //   role=role-9 node=node-1 -> allow   <-- role-9 was never named
+      //
+      // This is the same grant the negation rule above exists to prevent, reached
+      // with no negation at all. Only `projectId` is independently gated downstream
+      // (`classifyRule` refuses a foreign project), so on roles, nodes and paths the
+      // over-report is a real grant; a fuzz over axis pairs found 21 of 56 granting
+      // wider than disclosed.
+      //
+      // So a cross-axis disjunction contributes nothing. That is not conservatism
+      // here — it is the same rule as the negation case, for the same reason: the
+      // disclosure cannot state the reach, so a rule that relies on it cannot be
+      // scoped. `constrainingScopeAxes` asks "can the disclosure render this", and
+      // the honest answer for a cross-axis `any` is no. A previous revision of this
+      // comment argued the opposite and pinned
+      // `any(projectId eq "p", roleId eq "r")` as a CONTROL that must compile; that
+      // shape is an instance of this defect, and the control was wrong.
+      const armAxes = predicate.predicates.map((nested) => constrainingScopeAxes([nested]))
+      const distinct = [...new Set(armAxes.map((axes) => axes.join(",")))]
+      if (distinct.length !== 1) continue
+      for (const axis of armAxes[0] ?? []) found.add(axis)
       continue
     }
     if (predicate.field === "not") continue

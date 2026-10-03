@@ -62,6 +62,90 @@ serde_json = { version = "=1.0.150", features = ["std"], default-features = fals
 # a second version.
 regress = { version = "=0.12.0" }
 
+# --- M7.3: the serving surface -------------------------------------------------
+#
+# These four are the whole delta between "a crate that compiles" and "a router".
+# Every one is pinned with `=` because the M7.1 spike measured this exact set and
+# the milestone's resource numbers are only comparable to that measurement if the
+# dependency graph is the same graph.
+
+# `http1` is required by `axum::serve` and is the only protocol enabled: no
+# `http2` means no h2 upgrade path onto the ingress socket, which is one less
+# thing that can carry a body past the size cap below.
+#
+# `json` is required because every response body is produced by `axum::Json`, and
+# because serde_json's `RawValue`/streaming bits are not what we use -- the body is
+# read whole under a byte cap and parsed once.
+#
+# `tokio` is required for `axum::serve` and for the extractor runtime; it turns on
+# `tower/make`, without which `into_make_service` does not exist.
+#
+# `ws` is DELIBERATELY ABSENT. This is the mechanism behind ADR 0008 §6's refusal:
+# `WebSocketUpgrade` is gated behind this feature, so a build without it cannot
+# construct a `101` response even in principle. The requirement was "the router
+# answers 404 for `/v1/mesh/terminal`, never 101" -- excluding the feature makes
+# that a property of the build rather than a property of a route table someone has
+# to remember to keep correct.
+#
+# `tracing`, `tower-log`, `form`, `query`, `matched-path`, `original-uri` and
+# `multipart` are all excluded because nothing in M7.3 uses them. `tracing` in
+# particular would put a subscriber framework into a process whose RSS is gated at
+# 4 MiB for a component that logs nothing yet; M7.10 owns the supervisor's log
+# destination and should add instrumentation when there is something to record.
+axum = { version = "=0.8.9", default-features = false, features = ["http1", "json", "tokio"] }
+
+# `rt-multi-thread` rather than `rt`: the M7.1 baseline was captured with the
+# multi-threaded runtime and reported 9 threads, so changing the runtime flavour
+# would make the router's RSS un-comparable to the number the milestone gates
+# against. `net` is the listener and the accept loop. `signal` is for the
+# SIGTERM/SIGINT graceful shutdown M7.10's `systemd` unit needs -- without it a
+# restart drops in-flight requests on the floor. `macros` is `#[tokio::main]`.
+# `fs` and `io-util` are NOT enabled: the router performs no filesystem I/O of its
+# own (M7.5's SQLite store will want them, and that is where they belong).
+tokio = { version = "=1.53.1", default-features = false, features = [
+    "rt-multi-thread",
+    "net",
+    "macros",
+    "signal",
+] }
+
+# Constant-time equality for the bearer token.
+#
+# `subtle` over `ring`/`hmac`, and the reason is the build matrix rather than the
+# API. `ring` compiles C and asm through a `cc` build script, which is precisely
+# what M7.9's `cargo zigbuild` musl matrix is trying to avoid; `hmac` would need
+# this crate to invent a keyed-MAC construction it does not have. `subtle` is pure
+# Rust, pulls in nothing, and exposes exactly the one primitive needed. It is also
+# the primitive Node's `crypto.timingSafeEqual` is: same constant-time contract,
+# different language, so the replacement is comparable to what it replaces.
+subtle = { version = "=2.6.1", default-features = false }
+
+# Local interface address enumeration for the ADR 0008 §8 layer-1 preflight.
+#
+# The preflight must answer "is the configured bind address present on an
+# interface on THIS host", and it must answer it WITHOUT binding. A probe
+# `TcpListener::bind` would answer a different question -- "can I bind right now"
+# -- which is a weaker property, has a TOCTOU window, and is the exact shape of the
+# thing §8 forbids. `if_addrs` is the same data `ip addr` shows, read directly.
+if-addrs = { version = "=0.15.0", default-features = false }
+
+# Job id minting, for the `202` body M7.3 is required to return.
+#
+# `getrandom` rather than `fastrand`/`rand`: the id is an admission correlation
+# token that a caller will hand back to `GET /jobs/:id`, and a predictable id is a
+# capability to read someone else's admission. `fastrand` is explicitly not
+# cryptographic and `rand`'s thread rng is seeded, but reseeding and platform
+# dispatch are exactly the dependencies this crate does not want in a 4 MiB
+# process. `getrandom` is a thin wrapper over `getrandom(2)`/`arc4random_buf`.
+getrandom = { version = "=0.4.3", default-features = false }
+
+[dev-dependencies]
+# `Router::oneshot` is how every request test in `router/tests/` is driven: no
+# socket is created, so a test cannot pass because a listener happened to bind and
+# cannot leave one behind. `ServiceExt` lives in `tower`, which axum does not
+# re-export.
+tower = { version = "=0.5.3", features = ["util"] }
+
 [profile.release]
 # ADR 0008 2.1 sizes the router against a 32 MiB systemd MemoryMax, and 2.7
 # turns that cap into an enforced invariant. Size is therefore a correctness

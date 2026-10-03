@@ -4,7 +4,7 @@
 
 Replace the Bun engine's HTTP ingress with a native Rust router that owns the listening socket, authenticates and bounds every request, and admits work to a durable SQLite queue before acknowledging it. Remove Fastify from the engine process, cut resident memory by roughly 39%, and close five open High threat-model findings at the trust boundary — while leaving the engine as the sole authority for every authorization decision and leaving the TUI decoupled from the job engine.
 
-This milestone **adds** a second programming language for one narrow component. It is authorised by [ADR 0008](../adr/0008-polyglot-ingress-and-admission.md), which also records the measured rejection of NATS. The language guardrail in [`README.md:77`](./README.md) is amended, not deleted.
+This milestone **adds** a second programming language for one narrow component. It is authorised by [ADR 0008](../adr/0008-polyglot-ingress-and-admission.md), which also records why durable admission uses the existing SQLite outbox rather than a message broker. The language guardrail in [`README.md:77`](./README.md) is amended, not deleted.
 
 ## Prerequisites
 
@@ -24,15 +24,14 @@ These are levels measured on macOS 26.6.2 / arm64, Bun 1.3.14, Rust 1.94.1. They
 | `app.listen()` | +8.5 MiB | — | ADR 0008 §1 |
 | **`aibr serve` end-to-end idle** | **57.3 MiB** | 14 | ADR 0008 §1 |
 | Rust + axum + tokio + serde, 2 routes, `opt-level="z"` + LTO + strip | **1.94 MiB** | 9 | Phase 1.3 |
-| `nats-server` v2.15.0 core, idle | 16.6 MiB | 9 | ADR 0008 §5 |
-| `nats-server` + JetStream (64 MB mem / 256 MB file), idle | 16.9–17.8 MiB | 10 | ADR 0008 §5 |
-| `nats-server` + JetStream after 39 MiB publish traffic | +7.5 MiB | — | ADR 0008 §5 |
 
 | Topology | Projected RSS | vs 57.3 MiB |
 | --- | --- | --- |
 | Today | 57.3 MiB | — |
-| Router, no broker (**this milestone**) | **45.2 MiB** | **−39%** |
-| Router + NATS JetStream (**rejected**) | 62.2 MiB | −14% |
+| Router + SQLite admission queue (**this milestone**) | **45.2 MiB** | **−39%** |
+
+No message broker is introduced or evaluated. Durable admission is the existing
+SQLite outbox re-deployed for ingress; ADR 0008 §5 records why.
 
 **The 43.3 MiB worker figure is a projection, not a measurement.** It is ADR 0008 §1 minus Fastify. M7.1 must confirm it before any report treats it as fact.
 
@@ -41,7 +40,7 @@ These are levels measured on macOS 26.6.2 / arm64, Bun 1.3.14, Rust 1.94.1. They
 | Task | Dependency | Sub-agent and model | Deliverable | Verification |
 | --- | --- | --- | --- | --- |
 | M7.0 Baseline capture and benchmark harness | M0–M6 | `test-engineer` — `gpt-5.6-sol high` | `bench/mem.sh`, `bench/latency.sh`, `bench/three-process.sh`; reproducible capture of the ADR 0008 §1 baseline as committed JSON | Median/p95 over >=60 s; harness demonstrably reports a *falling* RSS series as noise, not a win |
-| M7.1 ADR 0008 acceptance and spike | M7.0 | `architect` + `security-reviewer` — `gpt-6-astra xhigh` | Confirm or revise ADR 0008; build the three-topology spike; **record the NATS decision with its measurement** | Worker-without-Fastify measured at <=48 MiB; NATS rejection documented with the §5 numbers |
+| M7.1 ADR 0008 acceptance and spike | M7.0 | `architect` + `security-reviewer` — `gpt-6-astra xhigh` | Confirm or revise ADR 0008; build the worker-without-Fastify spike and a minimal Rust router stub; **measure the 43.3 MiB projection** | Worker-without-Fastify measured at <=48 MiB under §5.1.1 A1–A4; the projection is confirmed or the −39% claim is withdrawn |
 | M7.2 Contract generation chain | M7.1 | `subsystem-builder` — `gpt-5.6-sol high` | `zod-to-json-schema` -> `contracts/v1/*.schema.json` -> `typify` -> generated Rust types; generator is reproducible and committed | 15/15 `tests/contracts/examples/*.v1.json` parse identically both sides; `git diff --exit-code contracts/` clean |
 | M7.3 Router skeleton and four security gates | M7.2 | `subsystem-builder` — `gpt-5.6-sol high` | `aibr-router` Cargo workspace; structural validation; constant-time bearer; `job_id` charset; `realpath` project containment; `schemaVersion` refusal; `1 MiB` body cap | `F-01`/`F-03`/`F-04`/`F-06` reproductions from the threat model all rejected at ingress |
 | M7.4 `ingress_mode` flag and shadow mode | M7.3 | `feature-builder` — `gpt-5.6-terra high` | `bridge.ingress_mode: "engine" \| "router"` with `.default("engine")`; `--shadow-mode` mirroring ingress while the engine still listens | Every existing config keeps working; rollback is deleting one key; 72 h shadow divergence is zero |
@@ -348,7 +347,7 @@ the flag default flips, because collapsing them destroys rollback.
 - **Do not** implement `plan_status` approval in the router. `F-05` is relocated, not closed.
 - **Do not** delete the Fastify listener in the same change as the migration. Rollback is one config key.
 - **Do not** add an in-memory fallback when SQLite is unavailable. It would silently drop admitted work; exit `78` instead.
-- **Do not** introduce NATS, Redis, or any other broker. ADR 0008 §5 records the rejection and its measurements.
+- **Do not** introduce a message broker. ADR 0008 §5 records why, and names what would have to change before one could be reconsidered.
 - **Do not** couple the TUI to the worker or the ingress queue. `SF-11` requires detach to preserve node-owned sessions.
 - **Do not** migrate `/v1/mesh/*` in this milestone. Statefulness has no durable analogue here.
 - **Do not** hand-edit generated contract files.
@@ -382,11 +381,11 @@ bun bench/mem.sh --all --samples 60
 ```
 
 The final report is `Docs/implementation-reports/milestone-7-completion.md` and
-includes: three-process resource levels with median/p95, the shadow-mode
-divergence result, both soak results, rollback timing in both directions, the
-closed-findings corpus, the NATS rejection measurements, the macOS parity gap,
-and the `readelf -d` output for each musl target. The root agent, independent
-reviewer, and security reviewer all sign off per
+includes: three-process resource levels with median/p95 under §5.1.1, the
+shadow-mode divergence result, both soak results, rollback timing in both
+directions, the closed-findings corpus, the macOS parity gap, and the `readelf -d`
+output for each musl target. The root agent, independent reviewer, and security
+reviewer all sign off per
 [`README.md:113`](./README.md). A release is not implied by plan completion.
 
 ## Prerequisites Handed to Milestone 8

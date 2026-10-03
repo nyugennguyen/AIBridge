@@ -189,6 +189,115 @@ function closeObjectSchemas(node: unknown): unknown {
   return closed
 }
 
+/**
+ * Keywords that make typify synthesise a NAMED newtype rather than a bare
+ * `String`/`Number`. Without a name typify panics: its `get_type_name` returns
+ * `None` for `Name::Unknown` when no title is present, and `type_entry.rs`
+ * unwraps that.
+ */
+const TYPIFY_NAMED_CONSTRAINTS = [
+  "minLength",
+  "maxLength",
+  "pattern",
+  "minimum",
+  "maximum",
+  "exclusiveMinimum",
+  "exclusiveMaximum",
+  "multipleOf",
+  "minItems",
+  "maxItems",
+  "enum",
+  "const",
+  "format",
+] as const
+
+/** Characters that cannot appear in a Rust identifier typify would emit. */
+function pascalSegment(segment: string): string {
+  const words = segment
+    .replace(/[^A-Za-z0-9]+/g, " ")
+    .trim()
+    .split(/\s+/)
+    .filter((word) => word.length > 0)
+  return words
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join("")
+}
+
+/**
+ * Title every inline constrained subschema AND every union branch.
+ *
+ * WHY THIS EXISTS. Two independent typify 0.8 requirements, both satisfied by
+ * `unwrap()` on a `None` name and both measured rather than assumed:
+ *
+ *   1. typify turns a constrained scalar into a NEWTYPE that ENFORCES the bound,
+ *      which is how `minLength: 1` on `agent_id` reaches the router as a real
+ *      check. But an INLINE subschema such as `{"type":"string","minLength":1}`
+ *      has no name, and `get_type_name` returns `None` for `Name::Unknown`
+ *      (`type_entry.rs:511`).
+ *   2. typify names a union's VARIANTS from each branch's `title`
+ *      (`type_entry.rs:277` and `:290`). An untitled `oneOf` branch aborts the
+ *      same way. Only `command.schema.json` and `event.schema.json` carry a root
+ *      `oneOf`, and they were the last two of 27 to fail.
+ *
+ * THE ALTERNATIVE, AND WHY NOT. typify's `x-rust-type: { "type": "string" }`
+ * also stops panic (1), and it is simpler — but it tells typify to emit a plain
+ * `String` and DISCARD the bound. Every `minLength` in closure A would silently
+ * stop being enforced in Rust while the committed JSON Schema still claimed it.
+ * That is precisely the silent divergence ADR 0008 §2.3 exists to prevent, and it
+ * is the more dangerous failure because the artefact on disk still looks right.
+ *
+ * NAMING. The title is the root title plus the property path in PascalCase
+ * (`TriggerRequest` + `source_agent_id` -> `TriggerRequestSourceAgentId`). It is
+ * derived from the SCHEMA PATH, never from whatever title is already present, so
+ * the pass is idempotent: a second run computes the identical string. Path
+ * derivation also makes collisions impossible — two different paths cannot
+ * produce the same name, whereas suffix counters would drift the moment a field
+ * is inserted. Array indices are part of the path, which is what keeps two
+ * branches of the same union distinct.
+ *
+ * This adds a `title` and nothing else. No bound, type, or required list is
+ * re-declared here.
+ */
+function titleInlineConstrainedSchemas(
+  node: unknown,
+  prefix: string,
+  path: readonly string[] = [],
+  isUnionBranch = false,
+): unknown {
+  if (Array.isArray(node)) {
+    return node.map((item, index) => titleInlineConstrainedSchemas(item, prefix, [...path, String(index)], isUnionBranch))
+  }
+  if (node === null || typeof node !== "object") return node
+
+  const schema = node as Record<string, unknown>
+  const titled: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(schema)) {
+    // `properties` and `$defs` contribute their KEY to the name; every other
+    // keyword's value is descended into under the same path segment, so
+    // `items` does not add a level of its own.
+    if (key === "properties" || key === "$defs" || key === "patternProperties") {
+      if (value !== null && typeof value === "object") {
+        const nested: Record<string, unknown> = {}
+        for (const [childKey, childValue] of Object.entries(value)) {
+          nested[childKey] = titleInlineConstrainedSchemas(childValue, prefix, [...path, childKey])
+        }
+        titled[key] = nested
+        continue
+      }
+    }
+    // A member of `oneOf`/`anyOf` must be named whether or not it carries a
+    // constraint, because typify derives the variant identifier from the title.
+    titled[key] = titleInlineConstrainedSchemas(value, prefix, path, key === "oneOf" || key === "anyOf")
+  }
+
+  const isRoot = path.length === 0
+  const carriesConstraint = TYPIFY_NAMED_CONSTRAINTS.some((keyword) => Object.hasOwn(schema, keyword))
+  if (!isRoot && (carriesConstraint || isUnionBranch) && titled.title === undefined) {
+    titled.title = [prefix, ...path.map(pascalSegment)].filter((part) => part.length > 0).join("")
+  }
+  return titled
+}
+
 async function main(): Promise<void> {
   const expected = new Set(ALL_CONTRACTS.map((spec) => `${spec.file}.schema.json`))
 
@@ -218,12 +327,19 @@ async function main(): Promise<void> {
       "Invariants from .refine()/.superRefine() are NOT representable in JSON Schema and are absent from this file; they remain enforced by the TypeScript engine, which is the sole authority for them (ADR 0008 §2.2 Tier 2).",
     )
 
+    const rootTitle = rustTypeName(spec.exportName)
+    const closed = closeObjectSchemas(withoutSchemaKeyword(emitted)) as Record<string, unknown>
+    // Title before close, so the pass that decides names walks the tree the
+    // engine will actually consume. Both passes are pure and order-independent
+    // in effect; the order is fixed only to keep the output byte-stable.
+    const titled = titleInlineConstrainedSchemas(closed, rootTitle) as Record<string, unknown>
+
     const document = {
       $schema: emitted.$schema,
       $id: `urn:aibridge:contracts:${CONTRACT_VERSION}:${spec.file}`,
-      title: rustTypeName(spec.exportName),
+      title: rootTitle,
       description: provenance.join(" "),
-      ...closeObjectSchemas(withoutSchemaKeyword(emitted)),
+      ...titled,
     }
 
     await writeFile(`${CONTRACTS_DIRECTORY}${spec.file}.schema.json`, `${JSON.stringify(document, null, 2)}\n`)

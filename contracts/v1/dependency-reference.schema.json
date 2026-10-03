@@ -6,25 +6,29 @@
   "anyOf": [
     {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "title": "DependencyReference0"
     },
     {
       "type": "object",
       "properties": {
         "agent_id": {
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "title": "DependencyReference1AgentId"
         },
         "job_id": {
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "title": "DependencyReference1JobId"
         }
       },
       "required": [
         "agent_id",
         "job_id"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "title": "DependencyReference1"
     }
   ]
 }

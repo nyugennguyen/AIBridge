@@ -7,19 +7,23 @@
   "properties": {
     "job_id": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "title": "ReportCallbackJobId"
     },
     "source_agent_id": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "title": "ReportCallbackSourceAgentId"
     },
     "target_agent_id": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "title": "ReportCallbackTargetAgentId"
     },
     "opencode_session_id": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "title": "ReportCallbackOpencodeSessionId"
     },
     "status": {
       "type": "string",
@@ -28,11 +32,13 @@
         "failed",
         "timed_out",
         "callback_failed"
-      ]
+      ],
+      "title": "ReportCallbackStatus"
     },
     "summary": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "title": "ReportCallbackSummary"
     },
     "findings": {
       "type": "array",
@@ -46,7 +52,8 @@
               "medium",
               "high",
               "critical"
-            ]
+            ],
+            "title": "ReportCallbackFindingsSeverity"
           },
           "title": {
             "type": "string"

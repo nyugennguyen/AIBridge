@@ -9,26 +9,31 @@
       "anyOf": [
         {
           "type": "number",
-          "const": 1
+          "const": 1,
+          "title": "RunSchemaVersion0"
         },
         {
           "type": "number",
-          "const": 2
+          "const": 2,
+          "title": "RunSchemaVersion1"
         }
       ]
     },
     "runId": {
       "type": "string",
-      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+      "title": "RunRunId"
     },
     "projectId": {
       "type": "string",
-      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+      "title": "RunProjectId"
     },
     "goal": {
       "type": "string",
       "minLength": 1,
-      "maxLength": 65536
+      "maxLength": 65536,
+      "title": "RunGoal"
     },
     "state": {
       "type": "string",
@@ -38,18 +43,21 @@
         "completed",
         "failed",
         "cancelled"
-      ]
+      ],
+      "title": "RunState"
     },
     "paused": {
       "type": "boolean"
     },
     "createdAt": {
       "type": "string",
-      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,9})?Z$"
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,9})?Z$",
+      "title": "RunCreatedAt"
     },
     "updatedAt": {
       "type": "string",
-      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,9})?Z$"
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,9})?Z$",
+      "title": "RunUpdatedAt"
     },
     "externalReferences": {
       "maxItems": 128,
@@ -60,12 +68,14 @@
           "namespace": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 256
+            "maxLength": 256,
+            "title": "RunExternalReferencesNamespace"
           },
           "id": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 4096
+            "maxLength": 4096,
+            "title": "RunExternalReferencesId"
           }
         },
         "required": [
@@ -73,7 +83,8 @@
           "id"
         ],
         "additionalProperties": false
-      }
+      },
+      "title": "RunExternalReferences"
     }
   },
   "required": [

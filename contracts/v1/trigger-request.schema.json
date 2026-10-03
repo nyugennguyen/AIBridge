@@ -7,36 +7,44 @@
   "properties": {
     "job_id": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "title": "TriggerRequestJobId"
     },
     "source_agent_id": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "title": "TriggerRequestSourceAgentId"
     },
     "target_agent_id": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "title": "TriggerRequestTargetAgentId"
     },
     "capability": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "title": "TriggerRequestCapability"
     },
     "project_dir": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "title": "TriggerRequestProjectDir"
     },
     "prompt": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "title": "TriggerRequestPrompt"
     },
     "callback_url": {
       "type": "string",
-      "format": "uri"
+      "format": "uri",
+      "title": "TriggerRequestCallbackUrl"
     },
     "timeout_seconds": {
       "type": "integer",
       "exclusiveMinimum": 0,
-      "maximum": 9007199254740991
+      "maximum": 9007199254740991,
+      "title": "TriggerRequestTimeoutSeconds"
     },
     "depends_on": {
       "default": [],
@@ -45,25 +53,29 @@
         "anyOf": [
           {
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "title": "TriggerRequestDependsOn0"
           },
           {
             "type": "object",
             "properties": {
               "agent_id": {
                 "type": "string",
-                "minLength": 1
+                "minLength": 1,
+                "title": "TriggerRequestDependsOn1AgentId"
               },
               "job_id": {
                 "type": "string",
-                "minLength": 1
+                "minLength": 1,
+                "title": "TriggerRequestDependsOn1JobId"
               }
             },
             "required": [
               "agent_id",
               "job_id"
             ],
-            "additionalProperties": false
+            "additionalProperties": false,
+            "title": "TriggerRequestDependsOn1"
           }
         ]
       }
@@ -81,19 +93,23 @@
             "submitted",
             "approved",
             "rejected"
-          ]
+          ],
+          "title": "TriggerRequestMetadataPlanStatus"
         },
         "plan_reference": {
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "title": "TriggerRequestMetadataPlanReference"
         },
         "approved_by": {
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "title": "TriggerRequestMetadataApprovedBy"
         },
         "approved_at": {
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "title": "TriggerRequestMetadataApprovedAt"
         }
       },
       "required": [

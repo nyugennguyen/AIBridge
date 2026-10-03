@@ -12,19 +12,23 @@
         "submitted",
         "approved",
         "rejected"
-      ]
+      ],
+      "title": "PlanMetadataPlanStatus"
     },
     "plan_reference": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "title": "PlanMetadataPlanReference"
     },
     "approved_by": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "title": "PlanMetadataApprovedBy"
     },
     "approved_at": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "title": "PlanMetadataApprovedAt"
     }
   },
   "required": [

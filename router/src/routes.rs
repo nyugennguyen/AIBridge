@@ -110,6 +110,20 @@ pub struct AppState {
     /// reaches it. (The genuinely open-redirect-shaped field in these payloads is
     /// `callback_url`, and `F-02`/§2.6 binds it at enqueue in M7.8, not here.)
     pub public_url: Arc<str>,
+    /// `agent_id` from `config.json`.
+    ///
+    /// Carried for ONE reason: the committed `triggerResponseSchema` lists
+    /// `target_agent_id` as REQUIRED, and the M7.3 draft returned a `202` that
+    /// omitted it. A response that does not validate against the contract the
+    /// binary generates from is a contract violation the parity test cannot see,
+    /// because the parity test checks the fifteen `tests/contracts/examples/`
+    /// fixtures against their INPUT schemas — no fixture covers a response body.
+    ///
+    /// This is operator configuration echoed back, not an authorization decision:
+    /// the engine's own route does the same (`trigger.ts` reads
+    /// `dependencies.config.agent_id` for exactly this field), and the router
+    /// still cannot tell whether the caller may dispatch.
+    pub agent_id: Arc<str>,
 }
 
 impl AppState {
@@ -119,6 +133,10 @@ impl AppState {
             auth: Arc::new(config.bearer.clone()),
             project_roots: Arc::new(config.project_roots.clone()),
             public_url: Arc::from(config.bridge.bridge.public_url.deref()),
+            // `RouterConfig` flattens `BridgeConfig` under a `bridge` field (see
+            // `RouterConfig`'s own definition), so the configured agent_id is
+            // `config.bridge.agent_id` -- not a field of `RouterConfig` itself.
+            agent_id: Arc::from(config.bridge.agent_id.as_str()),
         }
     }
 
@@ -260,6 +278,8 @@ async fn trigger(
         Json(json!({
             "accepted": true,
             "job_id": job_id,
+            // Required by the committed triggerResponseSchema; see AppState::agent_id.
+            "target_agent_id": state.agent_id.as_ref(),
             "status_url": format!("{}/jobs/{}", state.public_url, job_id),
             "schemaVersion": CONTRACT_VERSION,
         })),

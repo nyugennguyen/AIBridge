@@ -261,7 +261,12 @@ pub struct AdmissionRecord {
     pub payload_json: String,
 
     pub created_at_ms: u64,
-    pub next_attempt_at_ms: u64,
+    /// `None` exactly when the row is terminal.
+    ///
+    /// `Option<u64>` rather than a sentinel, because there is no sentinel that
+    /// cannot eventually be a real timestamp, and a terminal row that looks due is
+    /// the busy-loop failure `fail`'s terminal branch exists to prevent.
+    pub next_attempt_at_ms: Option<u64>,
     pub attempts: u32,
     pub claim_token: Option<String>,
     pub claimed_at_ms: Option<u64>,
@@ -1191,7 +1196,20 @@ impl IngressOutbox {
           schema_version     TEXT    NOT NULL,
           payload_json       TEXT    NOT NULL,
           created_at_ms      INTEGER NOT NULL,
-          next_attempt_at_ms INTEGER NOT NULL,
+          -- NULLABLE, deliberately, and the `attempts >= MESH_OUTBOX_MAX_ATTEMPTS`
+          -- branch of `fail` writes NULL into it.
+          --
+          -- The first version of this schema declared it `NOT NULL`, which is
+          -- self-contradictory: `fail` CLEARS the deadline in the same statement
+          -- that retires a record, mirroring the mesh store's `exhaust`
+          -- (`sqlite-outbox-store.ts:159`), because a terminal row carrying a
+          -- future retry deadline is both a lie to an operator and a permanent
+          -- wake-up for any scheduler reading that column. The constraint made
+          -- the 8th failure fail with `NOT NULL constraint failed` -- so a record
+          -- could reach its threshold and then be UNABLE to become terminal.
+          -- It would have been caught by any test that drove eight failures, and
+          -- the schema is created before any of them run.
+          next_attempt_at_ms INTEGER,
           attempts           INTEGER NOT NULL DEFAULT 0,
           claim_token        TEXT,
           claimed_at_ms      INTEGER,
@@ -1473,7 +1491,14 @@ fn map_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<AdmissionRecord> {
         schema_version: row.get(3)?,
         payload_json: row.get(4)?,
         created_at_ms: u64::try_from(row.get::<_, i64>(5)?).unwrap_or(0),
-        next_attempt_at_ms: u64::try_from(row.get::<_, i64>(6)?).unwrap_or(0),
+        // NULL means terminal, so this is a real Option read rather than a default.
+        // `unwrap_or(0)` here would map "retired" onto "due at the epoch", which every
+        // claim query treats as ready -- a terminal row would be picked up again
+        // and a scheduler would wake for it forever.
+        next_attempt_at_ms: row
+            .get::<_, Option<i64>>(6)?
+            .map(|value| u64::try_from(value).unwrap_or(u64::MAX))
+            .or(None),
         attempts: u32::try_from(row.get::<_, i64>(7)?).unwrap_or(u32::MAX),
         claim_token: row.get(8)?,
         claimed_at_ms: row

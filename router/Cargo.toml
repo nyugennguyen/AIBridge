@@ -196,6 +196,12 @@ sha2 = { version = "=0.11.0", default-features = false }
 # cannot leave one behind. `ServiceExt` lives in `tower`, which axum does not
 # re-export.
 tower = { version = "=0.5.3", features = ["util"] }
+# The same crate the router links, re-exposed to tests so
+# `an_unknown_schema_version_is_refused` can stamp a newer `user_version` and
+# observe the refusal. Not a second SQLite: the features match the `[dependencies]`
+# entry exactly, so a test cannot accidentally assert against a different library
+# than the binary uses.
+rusqlite = { version = "=0.40.2", default-features = false, features = ["bundled"] }
 
 [profile.release]
 # ADR 0008 2.1 sizes the router against a 32 MiB systemd MemoryMax, and 2.7

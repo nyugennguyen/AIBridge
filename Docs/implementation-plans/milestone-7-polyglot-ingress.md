@@ -191,14 +191,32 @@ TypeScript types, which would create a fourth hand-maintained copy alongside the
 Zod schema, the `z.infer` re-export, and the generated struct.
 
 ```
-src/config/schemas.ts   (Zod — SOURCE OF TRUTH)
-      |  zod-to-json-schema
+Zod schemas (SOURCE OF TRUTH)
+  src/config/schemas.ts          — ingress closure: trigger, report, config
+  src/orchestration/schemas.ts   — the 15 orchestration record schemas
+      |  z.toJSONSchema()   (Zod 4 native; NOT zod-to-json-schema, see below)
       v
 contracts/v1/*.schema.json   (COMMITTED, reviewable in a PR diff)
-      |  typify / schemars
+      |  typify
       v
 router/src/contracts.rs     (GENERATED — "DO NOT EDIT" header)
 ```
+
+**Two amendments M7.2 measured into this chain:**
+
+1. `zod-to-json-schema@3.25.2` (latest) does not support Zod 4 — it returns `{}` for
+   `z.strictObject({a: z.string()})`, silently discarding every property. Zod 4.4.3
+   ships `z.toJSONSchema()` natively, emits draft 2020-12, and is exact. Using it
+   adds **zero** devDependencies instead of one broken one.
+2. The 15 fixtures bind to `src/orchestration/schemas.ts` (85 schemas), **not** to
+   `src/config/schemas.ts` — the ingress closure covers zero of them. The set is
+   therefore the **union** of both closures, or §9's 15/15 is untestable.
+
+**Unknown-key rejection is a post-pass**, injecting `additionalProperties: false`
+into closed object schemas, never a hand-written field shape. This makes the
+router strictly stricter than the engine (which strips unknown keys). That
+asymmetry is intended by §2.2 Tier 1 and is recorded so it is not later "fixed"
+into symmetry.
 
 CI runs `git diff --exit-code contracts/` after generation. Serialization is JSON
 only, per ADR 0008 §2.4 and the precedent of ADR 0007 §5.
@@ -329,7 +347,7 @@ the flag default flips, because collapsing them destroys rollback.
 ### Contracts
 
 - [ ] ADR 0008 accepted and signed by the `security-reviewer` before any Rust source exists.
-- [ ] `contracts/v1/` committed and reviewed; 15/15 `tests/contracts/examples/*.v1.json` parse identically in both languages.
+- [ ] - [ ] `contracts/v1/` committed and reviewed; all **15** `tests/contracts/examples/*.v1.json` parse identically in both languages — across **both** closures, since the fixtures bind to `src/orchestration/schemas.ts`, not the ingress schemas.
 - [ ] `git diff --exit-code contracts/` clean after generation; zero hand edits to generated Rust.
 - [ ] Unknown or missing `schemaVersion` produces an explicit refusal, never coercion.
 - [ ] Engine Zod re-parse at admission is <= 1 ms p99, proving the double parse is affordable.

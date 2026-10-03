@@ -195,9 +195,43 @@ into a component with fewer defences than the one it replaces.
 
 ### 2.3 Contracts
 
-`src/config/schemas.ts` remains the single source of truth, per
+Zod schemas remain the single source of truth, per
 [`README.md:66`](../../Docs/implementation-plans/README.md). Generation runs
-`zod-to-json-schema` -> committed JSON Schema -> `typify`/`schemars` -> Rust.
+**Zod 4's built-in `z.toJSONSchema()`** -> committed JSON Schema -> `typify` -> Rust.
+
+**Amended by M7.2: `zod-to-json-schema` is not used.** This section originally
+named it. Measured: `zod-to-json-schema@3.25.2` (the latest) does not support Zod
+4 — `zToJsonSchema(z.strictObject({ a: z.string() }))` returns `{}`, silently
+discarding every property. Zod 4.4.3 ships the converter natively as
+`z.toJSONSchema(schema, { target: "draft-2020-12", io: "input" })`, emits draft
+2020-12, and is **exact**: `z.object` yields no `additionalProperties` (permits)
+while `z.strictObject` yields `additionalProperties: false` (rejects).
+
+Using the native converter also means **zero new devDependencies**. The named
+package would have added a broken one.
+
+**Amended by M7.2: the contract set is two closures, not one.** This section said
+`src/config/schemas.ts`. Measured: the 15 fixtures in `tests/contracts/examples/`
+bind to the **85 schemas in `src/orchestration/schemas.ts`**, and
+`src/config/schemas.ts` is referenced by neither the fixtures nor that file — the
+ingress closure (`triggerRequestSchema`, `reportCallbackSchema`,
+`bridgeConfigSchema`) covers **zero** of the 15. So §9's "all 15 fixtures parse
+identically in both languages" is untestable against the ingress closure alone.
+
+The committed set is therefore the **union**: the ingress closure the router's
+four routes consume, plus the 15 orchestration record schemas. Both are curated by
+hand and both derive their structure from Zod; neither is a blanket re-export.
+
+**Unknown-key rejection is a post-pass, not a hand-written shape.** The generator
+must not re-declare field shapes — that is the fourth hand-maintained copy this
+section exists to prevent. A post-pass injects `additionalProperties: false` into
+closed object schemas; structure stays fully derived from Zod.
+
+**This makes the router strictly stricter than the engine, deliberately.** The
+engine's Zod `z.object` schemas *strip* unknown keys; the router *rejects* them.
+That asymmetry is what §2.2 wants of Tier 1, but it is a real semantic
+difference between two components over the same schema and is recorded here so it
+is not later "fixed" into symmetry.
 
 `ts-rs` is **not** used. It derives Rust from TypeScript *types*, but the source
 of truth here is Zod *schemas*, so its output would be a fourth hand-maintained

@@ -16,9 +16,10 @@ use support::{app, bearer, oneshot, request, TempDir};
 #[tokio::test]
 async fn the_configured_token_is_accepted() {
     let root = TempDir::new("auth-correct");
+    let store = support::outbox(&root);
 
     let reply = oneshot(
-        app(root.path()),
+        app(root.path(), store.clone()),
         support::authorized("GET", "/health", json!(null)),
     )
     .await;
@@ -35,10 +36,11 @@ async fn the_configured_token_is_accepted() {
 #[tokio::test]
 async fn a_wrong_token_is_refused() {
     let root = TempDir::new("auth-wrong");
+    let store = support::outbox(&root);
     let almost = format!("{}x", support::TOKEN);
 
     let reply = oneshot(
-        app(root.path()),
+        app(root.path(), store.clone()),
         request("GET", "/health", Some(json!(null)), Some(&bearer(&almost))),
     )
     .await;
@@ -50,10 +52,11 @@ async fn a_wrong_token_is_refused() {
 #[tokio::test]
 async fn a_token_differing_in_the_first_byte_is_refused() {
     let root = TempDir::new("auth-first-byte");
+    let store = support::outbox(&root);
     let almost = format!("x{}", &support::TOKEN[1..]);
 
     let reply = oneshot(
-        app(root.path()),
+        app(root.path(), store.clone()),
         request("GET", "/health", Some(json!(null)), Some(&bearer(&almost))),
     )
     .await;
@@ -65,9 +68,10 @@ async fn a_token_differing_in_the_first_byte_is_refused() {
 #[tokio::test]
 async fn a_missing_authorization_header_is_refused() {
     let root = TempDir::new("auth-missing");
+    let store = support::outbox(&root);
 
     let reply = oneshot(
-        app(root.path()),
+        app(root.path(), store.clone()),
         request("GET", "/health", Some(json!(null)), None),
     )
     .await;
@@ -83,9 +87,10 @@ async fn a_missing_authorization_header_is_refused() {
 #[tokio::test]
 async fn an_empty_authorization_header_is_refused() {
     let root = TempDir::new("auth-empty");
+    let store = support::outbox(&root);
 
     let reply = oneshot(
-        app(root.path()),
+        app(root.path(), store.clone()),
         request("GET", "/health", Some(json!(null)), Some("")),
     )
     .await;
@@ -97,9 +102,10 @@ async fn an_empty_authorization_header_is_refused() {
 #[tokio::test]
 async fn a_bare_scheme_with_no_token_is_refused() {
     let root = TempDir::new("auth-bare-scheme");
+    let store = support::outbox(&root);
 
     let reply = oneshot(
-        app(root.path()),
+        app(root.path(), store.clone()),
         request("GET", "/health", Some(json!(null)), Some("Bearer")),
     )
     .await;
@@ -114,9 +120,10 @@ async fn a_bare_scheme_with_no_token_is_refused() {
 #[tokio::test]
 async fn the_scheme_with_an_empty_token_is_refused() {
     let root = TempDir::new("auth-empty-token");
+    let store = support::outbox(&root);
 
     let reply = oneshot(
-        app(root.path()),
+        app(root.path(), store.clone()),
         request("GET", "/health", Some(json!(null)), Some("Bearer ")),
     )
     .await;
@@ -136,6 +143,7 @@ async fn the_scheme_with_an_empty_token_is_refused() {
 #[tokio::test]
 async fn every_wrong_scheme_prefix_is_refused() {
     let root = TempDir::new("auth-prefixes");
+    let store = support::outbox(&root);
 
     let token = support::TOKEN;
     for header in [
@@ -159,7 +167,7 @@ async fn every_wrong_scheme_prefix_is_refused() {
         format!("{token} Bearer"),
     ] {
         let reply = oneshot(
-            app(root.path()),
+            app(root.path(), store.clone()),
             request("GET", "/health", Some(json!(null)), Some(&header)),
         )
         .await;
@@ -182,6 +190,7 @@ async fn every_wrong_scheme_prefix_is_refused() {
 #[tokio::test]
 async fn a_token_of_a_different_length_is_refused_in_both_directions() {
     let root = TempDir::new("auth-length");
+    let store = support::outbox(&root);
 
     let shorter = &support::TOKEN[..support::TOKEN.len() - 1];
     let longer = format!("{}x", support::TOKEN);
@@ -189,7 +198,7 @@ async fn a_token_of_a_different_length_is_refused_in_both_directions() {
     // The prefix case first: a comparison that stopped at the shorter length would
     // admit this.
     let reply = oneshot(
-        app(root.path()),
+        app(root.path(), store.clone()),
         request("GET", "/health", Some(json!(null)), Some(&bearer(shorter))),
     )
     .await;
@@ -206,7 +215,7 @@ async fn a_token_of_a_different_length_is_refused_in_both_directions() {
     let long_enough = "x".repeat(4096);
     for token in [&longer, "x", long_enough.as_str()] {
         let reply = oneshot(
-            app(root.path()),
+            app(root.path(), store.clone()),
             request("GET", "/health", Some(json!(null)), Some(&bearer(token))),
         )
         .await;
@@ -227,9 +236,10 @@ async fn a_token_of_a_different_length_is_refused_in_both_directions() {
 #[tokio::test]
 async fn only_the_configured_length_is_accepted() {
     let root = TempDir::new("auth-length-positive");
+    let store = support::outbox(&root);
 
     let reply = oneshot(
-        app(root.path()),
+        app(root.path(), store.clone()),
         request(
             "GET",
             "/health",

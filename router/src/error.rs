@@ -1,6 +1,6 @@
 //! The router's entire error vocabulary, and the rules for what may appear in it.
 //!
-//! Every failure a caller can observe is one of these four variants, and every one
+//! Every failure a caller can observe is one of these five variants, and every one
 //! of them serialises to the same two-field body: a static `error` string and the
 //! `schemaVersion` this binary speaks. There is deliberately no variant that
 //! carries a message, a path, a field name from the request, or anything else
@@ -67,6 +67,26 @@ pub enum ApiError {
 
     /// Body above [`crate::validate::MAX_BODY_BYTES`].
     PayloadTooLarge,
+
+    /// The admission store refused or failed the write (`503`, M7.5).
+    ///
+    /// **The one variant here that is about the router's own state rather than the
+    /// request**, and it is deliberately the only one. It exists because a `202`
+    /// without a committed row is a lie the caller cannot detect, so a store that
+    /// cannot commit has to be answerable in a way that is not `202`
+    /// ([`crate::outbox`]'s module docs).
+    ///
+    /// `503` and not `500`: the condition is expected to clear, and `503` is what
+    /// tells a caller's retry loop — which is the documented recovery path for every
+    /// other crash-window row — that retrying is the right response. A `500` reads as
+    /// "this request is broken" and a caller that believes it will not retry.
+    ///
+    /// It still carries no detail. [`crate::outbox::StoreError`] knows whether the
+    /// store was locked, read-only, or at a schema version this build refuses, and
+    /// none of that reaches a socket: it is operator configuration, it goes to the
+    /// process's stderr, and the caller learns the one thing it can act on, which is
+    /// that the work was not accepted and may be resubmitted.
+    StoreUnavailable,
 }
 
 impl ApiError {
@@ -83,6 +103,7 @@ impl ApiError {
             Self::InvalidPayload(_) | Self::UnsupportedSchemaVersion => StatusCode::BAD_REQUEST,
             Self::NotFound => StatusCode::NOT_FOUND,
             Self::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
+            Self::StoreUnavailable => StatusCode::SERVICE_UNAVAILABLE,
         }
     }
 
@@ -107,6 +128,12 @@ impl ApiError {
             )),
             Self::NotFound => Cow::Borrowed("not found"),
             Self::PayloadTooLarge => Cow::Borrowed("request body exceeds the ingress limit"),
+            // Says the work was NOT accepted, because that is the whole content of
+            // this refusal and the thing a caller's retry loop branches on. It does
+            // not say *why* the store is unavailable -- see the variant's docs.
+            Self::StoreUnavailable => {
+                Cow::Borrowed("the router cannot durably accept work right now; retry")
+            }
         }
     }
 }

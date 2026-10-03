@@ -1534,14 +1534,35 @@ fn migrate(connection: &Connection, path: &Path) -> Result<(), StoreError> {
     // jumped and a partially applied migration is impossible: the whole batch is
     // one transaction and the version is written inside it.
     if found == 0 {
-        connection
-            .execute_batch(
-                "BEGIN IMMEDIATE;
-                 CREATE TABLE IF NOT EXISTS ingress_outbox_v1_marker (id INTEGER PRIMARY KEY);
-                 DROP TABLE IF EXISTS ingress_outbox_v1_marker;",
-            )
-            .and_then(|()| connection.execute_batch(IngressOutbox::MIGRATION_1))
-            .and_then(|()| connection.pragma_update(None, "user_version", SCHEMA_VERSION))
+        // The whole migration is ONE transaction, and the version is written
+        // inside it, so a process that dies mid-migration leaves `user_version`
+        // at 0 and the next start redoes the whole thing.
+        //
+        // `unchecked_transaction` is required here rather than `transaction`: the
+        // signature takes `&Connection`, and the checked variant needs `&mut` to
+        // hold the `BEGIN`/`COMMIT` borrow for the duration. `unchecked_transaction`
+        // does not borrow at all, which is exactly the escape hatch needed for
+        // setup code that runs before the store is shared. Every later write goes
+        // through `transaction_for_claim`, which is checked and takes `&mut`.
+        //
+        // The earlier form of this function issued a bare `BEGIN IMMEDIATE;` inside
+        // `execute_batch` and never committed it. SQLite keeps that transaction
+        // open on the connection, so every subsequent `transaction_with_behavior`
+        // on that connection failed with "cannot start a transaction within a
+        // transaction" — which surfaced as a `503` on every `POST /trigger` and
+        // made the whole admission path look like a working `SF-08` failure rather
+        // than an uncommitted migration. `MIGRATION_1` supplies its own statements
+        // only; the transaction boundary is this one.
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|error| StoreError::Open {
+                path: path.to_path_buf(),
+                detail: error.to_string(),
+            })?;
+        transaction
+            .execute_batch(IngressOutbox::MIGRATION_1)
+            .and_then(|()| transaction.pragma_update(None, "user_version", SCHEMA_VERSION))
+            .and_then(|()| transaction.commit())
             .map_err(|error| StoreError::Open {
                 path: path.to_path_buf(),
                 detail: error.to_string(),

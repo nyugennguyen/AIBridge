@@ -35,10 +35,15 @@ use support::{app, authorized, bearer, config_json, oneshot, request, TempDir, T
 #[tokio::test]
 async fn f01_a_traversal_job_id_is_refused_on_trigger() {
     let root = TempDir::new("f01-trigger");
+    let store = support::outbox(&root);
     let mut trigger = support::valid_trigger(root.path());
     trigger["job_id"] = json!("../escaped");
 
-    let reply = oneshot(app(root.path()), authorized("POST", "/trigger", trigger)).await;
+    let reply = oneshot(
+        app(root.path(), store.clone()),
+        authorized("POST", "/trigger", trigger),
+    )
+    .await;
 
     assert_eq!(
         reply.status,
@@ -56,10 +61,15 @@ async fn f01_a_traversal_job_id_is_refused_on_trigger() {
 #[tokio::test]
 async fn f01_a_traversal_job_id_is_refused_on_report() {
     let root = TempDir::new("f01-report");
+    let store = support::outbox(&root);
     let mut report = support::valid_report();
     report["job_id"] = json!("../../etc/passwd");
 
-    let reply = oneshot(app(root.path()), authorized("POST", "/report", report)).await;
+    let reply = oneshot(
+        app(root.path(), store.clone()),
+        authorized("POST", "/report", report),
+    )
+    .await;
 
     assert_eq!(
         reply.status,
@@ -80,6 +90,7 @@ async fn f01_a_traversal_job_id_is_refused_on_report() {
 #[tokio::test]
 async fn f01_a_traversal_job_id_in_a_path_is_never_a_job() {
     let root = TempDir::new("f01-read");
+    let store = support::outbox(&root);
 
     // `..%2Fescaped` and `%2e%2e%2fescaped` are the same traversal with different
     // encodings. They are in the table because a gate that checked the *decoded*
@@ -87,7 +98,7 @@ async fn f01_a_traversal_job_id_in_a_path_is_never_a_job() {
     // would only accidentally reject the unencoded form.
     for traversal in ["../escaped", "..%2Fescaped", "a%2Fb", "%2e%2e%2fescaped"] {
         let reply = oneshot(
-            app(root.path()),
+            app(root.path(), store.clone()),
             authorized("GET", &format!("/jobs/{traversal}"), json!(null)),
         )
         .await;
@@ -113,10 +124,15 @@ async fn f01_a_traversal_job_id_in_a_path_is_never_a_job() {
 #[tokio::test]
 async fn a_charset_conforming_job_id_is_admitted() {
     let root = TempDir::new("f01-positive");
+    let store = support::outbox(&root);
     let mut trigger = support::valid_trigger(root.path());
     trigger["job_id"] = json!("job_1-A-b");
 
-    let reply = oneshot(app(root.path()), authorized("POST", "/trigger", trigger)).await;
+    let reply = oneshot(
+        app(root.path(), store.clone()),
+        authorized("POST", "/trigger", trigger),
+    )
+    .await;
 
     assert_eq!(
         reply.status,
@@ -138,9 +154,10 @@ async fn a_charset_conforming_job_id_is_admitted() {
 #[tokio::test]
 async fn a_minted_job_id_is_echoed_and_respects_the_charset() {
     let root = TempDir::new("f01-minted");
+    let store = support::outbox(&root);
 
     let reply = oneshot(
-        app(root.path()),
+        app(root.path(), store.clone()),
         authorized("POST", "/trigger", support::valid_trigger(root.path())),
     )
     .await;
@@ -183,9 +200,10 @@ async fn a_minted_job_id_is_echoed_and_respects_the_charset() {
 #[tokio::test]
 async fn f03_the_job_read_route_refuses_an_unauthenticated_request() {
     let root = TempDir::new("f03");
+    let store = support::outbox(&root);
 
     let reply = oneshot(
-        app(root.path()),
+        app(root.path(), store.clone()),
         request("GET", "/jobs/job-1", Some(json!(null)), None),
     )
     .await;
@@ -208,9 +226,10 @@ async fn f03_the_job_read_route_refuses_an_unauthenticated_request() {
 #[tokio::test]
 async fn f03_the_unauthenticated_refusal_carries_www_authenticate() {
     let root = TempDir::new("f03-challenge");
+    let store = support::outbox(&root);
 
     let reply = oneshot(
-        app(root.path()),
+        app(root.path(), store.clone()),
         request("GET", "/jobs/job-1", Some(json!(null)), None),
     )
     .await;
@@ -233,6 +252,7 @@ async fn f03_the_unauthenticated_refusal_carries_www_authenticate() {
 #[tokio::test]
 async fn f03_no_route_answers_without_a_bearer() {
     let root = TempDir::new("f03-all-routes");
+    let store = support::outbox(&root);
 
     let routes: Vec<(&str, &str, Value)> = vec![
         ("GET", "/health", json!(null)),
@@ -242,7 +262,11 @@ async fn f03_no_route_answers_without_a_bearer() {
     ];
 
     for (method, path, body) in routes {
-        let reply = oneshot(app(root.path()), request(method, path, Some(body), None)).await;
+        let reply = oneshot(
+            app(root.path(), store.clone()),
+            request(method, path, Some(body), None),
+        )
+        .await;
 
         assert_eq!(
             reply.status,
@@ -274,6 +298,7 @@ async fn f03_no_route_answers_without_a_bearer() {
 #[tokio::test]
 async fn f04_a_symlink_escaping_the_configured_root_is_refused() {
     let scratch = TempDir::new("f04");
+    let store = support::outbox(&scratch);
     let project = scratch.dir(scratch.path().join("project"));
     let outside = scratch.dir(scratch.path().join("outside"));
     scratch.symlink("escape", &outside);
@@ -290,7 +315,7 @@ async fn f04_a_symlink_escaping_the_configured_root_is_refused() {
     });
 
     let reply = oneshot(
-        aibr_router::routes::build(support::state(&project)),
+        aibr_router::routes::build(support::state(&project, store.clone())),
         authorized("POST", "/trigger", escaping),
     )
     .await;
@@ -312,6 +337,7 @@ async fn f04_a_symlink_escaping_the_configured_root_is_refused() {
 #[tokio::test]
 async fn f04_a_real_subdirectory_of_the_configured_root_is_admitted() {
     let scratch = TempDir::new("f04-positive");
+    let store = support::outbox(&scratch);
     let project = scratch.dir(scratch.path().join("project"));
     let inside = scratch.dir(project.join("src"));
 
@@ -319,7 +345,7 @@ async fn f04_a_real_subdirectory_of_the_configured_root_is_admitted() {
     trigger["project_dir"] = json!(inside.to_string_lossy());
 
     let reply = oneshot(
-        aibr_router::routes::build(support::state(&project)),
+        aibr_router::routes::build(support::state(&project, store.clone())),
         authorized("POST", "/trigger", trigger),
     )
     .await;
@@ -343,6 +369,7 @@ async fn f04_a_real_subdirectory_of_the_configured_root_is_admitted() {
 #[tokio::test]
 async fn f04_every_containment_failure_produces_one_indistinguishable_answer() {
     let scratch = TempDir::new("f04-indistinguishable");
+    let store = support::outbox(&scratch);
     let project = scratch.dir(scratch.path().join("project"));
     let outside = scratch.dir(scratch.path().join("outside"));
     scratch.symlink("escape", &outside);
@@ -374,7 +401,7 @@ async fn f04_every_containment_failure_produces_one_indistinguishable_answer() {
         trigger["project_dir"] = json!(project_dir);
 
         let reply = oneshot(
-            aibr_router::routes::build(support::state(&project)),
+            aibr_router::routes::build(support::state(&project, store.clone())),
             authorized("POST", "/trigger", trigger),
         )
         .await;
@@ -413,10 +440,15 @@ async fn f04_every_containment_failure_produces_one_indistinguishable_answer() {
 #[tokio::test]
 async fn f06_an_unknown_schema_version_is_refused() {
     let root = TempDir::new("f06-unknown");
+    let store = support::outbox(&root);
     let mut trigger = support::valid_trigger(root.path());
     trigger["schemaVersion"] = json!("v2");
 
-    let reply = oneshot(app(root.path()), authorized("POST", "/trigger", trigger)).await;
+    let reply = oneshot(
+        app(root.path(), store.clone()),
+        authorized("POST", "/trigger", trigger),
+    )
+    .await;
 
     assert_eq!(
         reply.status,
@@ -444,13 +476,18 @@ async fn f06_an_unknown_schema_version_is_refused() {
 #[tokio::test]
 async fn f06_a_missing_schema_version_is_refused() {
     let root = TempDir::new("f06-missing");
+    let store = support::outbox(&root);
     let mut trigger = support::valid_trigger(root.path());
     trigger
         .as_object_mut()
         .expect("an object")
         .remove("schemaVersion");
 
-    let reply = oneshot(app(root.path()), authorized("POST", "/trigger", trigger)).await;
+    let reply = oneshot(
+        app(root.path(), store.clone()),
+        authorized("POST", "/trigger", trigger),
+    )
+    .await;
 
     assert_eq!(
         reply.status,
@@ -465,13 +502,18 @@ async fn f06_a_missing_schema_version_is_refused() {
 #[tokio::test]
 async fn f06_the_version_gate_covers_report_as_well() {
     let root = TempDir::new("f06-report");
+    let store = support::outbox(&root);
     let mut report = support::valid_report();
     report
         .as_object_mut()
         .expect("an object")
         .remove("schemaVersion");
 
-    let reply = oneshot(app(root.path()), authorized("POST", "/report", report)).await;
+    let reply = oneshot(
+        app(root.path(), store.clone()),
+        authorized("POST", "/report", report),
+    )
+    .await;
 
     assert_eq!(reply.status, StatusCode::BAD_REQUEST);
 }
@@ -484,6 +526,7 @@ async fn f06_the_version_gate_covers_report_as_well() {
 #[tokio::test]
 async fn every_response_carries_a_schema_version() {
     let root = TempDir::new("schema-version-everywhere");
+    let store = support::outbox(&root);
     let authorization = Some(bearer(TOKEN));
 
     let cases: Vec<(&str, axum::http::Request<axum::body::Body>)> = vec![
@@ -517,7 +560,7 @@ async fn every_response_carries_a_schema_version() {
     ];
 
     for (label, outgoing) in cases {
-        let reply = oneshot(app(root.path()), outgoing).await;
+        let reply = oneshot(app(root.path(), store.clone()), outgoing).await;
         let body = reply.json();
 
         assert_eq!(
@@ -553,6 +596,7 @@ async fn every_response_carries_a_schema_version() {
 #[tokio::test]
 async fn an_unknown_key_is_rejected_on_every_route_that_takes_a_body() {
     let root = TempDir::new("unknown-keys");
+    let store = support::outbox(&root);
 
     let mut trigger = support::valid_trigger(root.path());
     trigger["__aibr_unknown_key__"] = json!(true);
@@ -561,7 +605,11 @@ async fn an_unknown_key_is_rejected_on_every_route_that_takes_a_body() {
     report["__aibr_unknown_key__"] = json!(true);
 
     for (method, path, body) in [("POST", "/trigger", trigger), ("POST", "/report", report)] {
-        let reply = oneshot(app(root.path()), authorized(method, path, body)).await;
+        let reply = oneshot(
+            app(root.path(), store.clone()),
+            authorized(method, path, body),
+        )
+        .await;
 
         assert_eq!(
             reply.status,
@@ -580,12 +628,17 @@ async fn an_unknown_key_is_rejected_on_every_route_that_takes_a_body() {
 #[tokio::test]
 async fn the_bodyless_routes_answer_their_own_answers() {
     let root = TempDir::new("bodyless-routes");
+    let store = support::outbox(&root);
 
     for (method, path, expected) in [
         ("GET", "/health", StatusCode::OK),
         ("GET", "/jobs/job-1", StatusCode::NOT_FOUND),
     ] {
-        let reply = oneshot(app(root.path()), authorized(method, path, json!(null))).await;
+        let reply = oneshot(
+            app(root.path(), store.clone()),
+            authorized(method, path, json!(null)),
+        )
+        .await;
 
         assert_eq!(
             reply.status, expected,
@@ -608,11 +661,16 @@ async fn the_bodyless_routes_answer_their_own_answers() {
 #[tokio::test]
 async fn the_envelope_key_is_the_only_one_removed_from_a_body() {
     let root = TempDir::new("envelope-only");
+    let store = support::outbox(&root);
     let mut trigger = support::valid_trigger(root.path());
     trigger["prompt_text"] = json!("a typo-shaped unknown");
     trigger["__aibr_unknown_key__"] = json!(1);
 
-    let reply = oneshot(app(root.path()), authorized("POST", "/trigger", trigger)).await;
+    let reply = oneshot(
+        app(root.path(), store.clone()),
+        authorized("POST", "/trigger", trigger),
+    )
+    .await;
 
     assert_eq!(
         reply.status,
@@ -640,6 +698,7 @@ async fn the_envelope_key_is_the_only_one_removed_from_a_body() {
 #[tokio::test]
 async fn the_body_cap_accepts_exactly_one_mebibyte_and_refuses_one_more() {
     let root = TempDir::new("body-cap");
+    let store = support::outbox(&root);
     const LIMIT: usize = 1_048_576;
 
     let at_limit = padded_trigger(root.path(), LIMIT);
@@ -648,7 +707,11 @@ async fn the_body_cap_accepts_exactly_one_mebibyte_and_refuses_one_more() {
         LIMIT,
         "the fixture must serialise to exactly the limit"
     );
-    let reply = oneshot(app(root.path()), authorized("POST", "/trigger", at_limit)).await;
+    let reply = oneshot(
+        app(root.path(), store.clone()),
+        authorized("POST", "/trigger", at_limit),
+    )
+    .await;
     assert_eq!(
         reply.status,
         StatusCode::ACCEPTED,
@@ -658,7 +721,11 @@ async fn the_body_cap_accepts_exactly_one_mebibyte_and_refuses_one_more() {
 
     let over_limit = padded_trigger(root.path(), LIMIT + 1);
     assert_eq!(over_limit.to_string().len(), LIMIT + 1);
-    let reply = oneshot(app(root.path()), authorized("POST", "/trigger", over_limit)).await;
+    let reply = oneshot(
+        app(root.path(), store.clone()),
+        authorized("POST", "/trigger", over_limit),
+    )
+    .await;
     assert_eq!(
         reply.status,
         StatusCode::PAYLOAD_TOO_LARGE,
@@ -683,6 +750,7 @@ async fn the_body_cap_does_not_trust_content_length() {
     use axum::http::Request;
 
     let root = TempDir::new("body-cap-lying");
+    let store = support::outbox(&root);
     let oversized = padded_trigger(root.path(), 1_048_577);
 
     let outgoing = Request::builder()
@@ -696,7 +764,7 @@ async fn the_body_cap_does_not_trust_content_length() {
         .body(Body::from(oversized.to_string()))
         .expect("a well-formed request");
 
-    let reply = oneshot(app(root.path()), outgoing).await;
+    let reply = oneshot(app(root.path(), store.clone()), outgoing).await;
 
     assert_eq!(
         reply.status,
@@ -756,6 +824,7 @@ fn padded_trigger(project_root: &Path, length: usize) -> Value {
 #[tokio::test]
 async fn a_structurally_valid_trigger_from_an_unauthorized_source_is_still_admitted() {
     let root = TempDir::new("tier-boundary");
+    let store = support::outbox(&root);
 
     // Sanity: the fixture really is from a source the config does not list. If this
     // stops being true, the test would pass for the wrong reason.
@@ -772,7 +841,7 @@ async fn a_structurally_valid_trigger_from_an_unauthorized_source_is_still_admit
     );
 
     let reply = oneshot(
-        app(root.path()),
+        app(root.path(), store.clone()),
         authorized("POST", "/trigger", support::valid_trigger(root.path())),
     )
     .await;
@@ -806,6 +875,7 @@ async fn a_structurally_valid_trigger_from_an_unauthorized_source_is_still_admit
 #[tokio::test]
 async fn plan_status_approved_is_not_a_trust_signal_to_the_router() {
     let root = TempDir::new("plan-status");
+    let store = support::outbox(&root);
 
     let mut trigger = support::valid_trigger(root.path());
     trigger["metadata"] = json!({
@@ -813,7 +883,11 @@ async fn plan_status_approved_is_not_a_trust_signal_to_the_router() {
         "plan_reference": "plan-1"
     });
 
-    let reply = oneshot(app(root.path()), authorized("POST", "/trigger", trigger)).await;
+    let reply = oneshot(
+        app(root.path(), store.clone()),
+        authorized("POST", "/trigger", trigger),
+    )
+    .await;
 
     assert_eq!(
         reply.status,
@@ -835,9 +909,10 @@ async fn plan_status_approved_is_not_a_trust_signal_to_the_router() {
 #[tokio::test]
 async fn a_report_from_an_unauthorized_source_is_still_admitted() {
     let root = TempDir::new("report-tier-boundary");
+    let store = support::outbox(&root);
 
     let reply = oneshot(
-        app(root.path()),
+        app(root.path(), store.clone()),
         authorized("POST", "/report", support::valid_report()),
     )
     .await;
@@ -865,8 +940,9 @@ async fn a_report_from_an_unauthorized_source_is_still_admitted() {
 #[tokio::test]
 async fn the_websocket_terminal_route_does_not_exist_in_the_router() {
     let root = TempDir::new("mesh-terminal");
+    let store = support::outbox(&root);
 
-    let reply = support::upgrade(app(root.path()), "/v1/mesh/terminal").await;
+    let reply = support::upgrade(app(root.path(), store.clone()), "/v1/mesh/terminal").await;
 
     assert_eq!(
         reply.status,
@@ -898,8 +974,9 @@ async fn the_websocket_terminal_route_does_not_exist_in_the_router() {
 #[tokio::test]
 async fn the_sse_events_route_does_not_exist_in_the_router() {
     let root = TempDir::new("mesh-events");
+    let store = support::outbox(&root);
 
-    let reply = support::upgrade(app(root.path()), "/v1/mesh/events").await;
+    let reply = support::upgrade(app(root.path(), store.clone()), "/v1/mesh/events").await;
 
     assert_eq!(
         reply.status,
@@ -929,11 +1006,12 @@ async fn the_sse_events_route_does_not_exist_in_the_router() {
 #[tokio::test]
 async fn neither_mesh_path_is_reachable_by_any_method() {
     let root = TempDir::new("mesh-methods");
+    let store = support::outbox(&root);
 
     for path in ["/v1/mesh/terminal", "/v1/mesh/events"] {
         for method in ["GET", "POST", "PUT", "DELETE", "PATCH"] {
             let reply = oneshot(
-                app(root.path()),
+                app(root.path(), store.clone()),
                 request(method, path, Some(json!(null)), Some(&bearer(TOKEN))),
             )
             .await;
@@ -967,8 +1045,13 @@ async fn neither_mesh_path_is_reachable_by_any_method() {
 #[tokio::test]
 async fn health_reports_only_the_router() {
     let root = TempDir::new("health");
+    let store = support::outbox(&root);
 
-    let reply = oneshot(app(root.path()), authorized("GET", "/health", json!(null))).await;
+    let reply = oneshot(
+        app(root.path(), store.clone()),
+        authorized("GET", "/health", json!(null)),
+    )
+    .await;
 
     assert_eq!(reply.status, StatusCode::OK);
     let body = reply.json();
@@ -991,10 +1074,11 @@ async fn health_reports_only_the_router() {
 #[tokio::test]
 async fn the_job_read_route_answers_not_found_for_every_id() {
     let root = TempDir::new("jobs-always-404");
+    let store = support::outbox(&root);
 
     for id in ["job-1", "a", &"z".repeat(128)] {
         let reply = oneshot(
-            app(root.path()),
+            app(root.path(), store.clone()),
             authorized("GET", &format!("/jobs/{id}"), json!(null)),
         )
         .await;
@@ -1040,9 +1124,10 @@ async fn the_job_read_route_answers_not_found_for_every_id() {
 #[tokio::test]
 async fn the_accepted_shapes_are_stable() {
     let root = TempDir::new("accepted-shapes");
+    let store = support::outbox(&root);
 
     let reply = oneshot(
-        app(root.path()),
+        app(root.path(), store.clone()),
         authorized("POST", "/trigger", support::valid_trigger(root.path())),
     )
     .await;
@@ -1085,7 +1170,7 @@ async fn the_accepted_shapes_are_stable() {
     );
 
     let reply = oneshot(
-        app(root.path()),
+        app(root.path(), store.clone()),
         authorized("POST", "/report", support::valid_report()),
     )
     .await;
@@ -1109,6 +1194,7 @@ async fn the_accepted_shapes_are_stable() {
 #[tokio::test]
 async fn the_bearer_never_appears_in_a_response_body() {
     let root = TempDir::new("no-secrets");
+    let store = support::outbox(&root);
 
     let cases: Vec<(&str, &str, &str, Value)> = vec![
         (
@@ -1146,7 +1232,7 @@ async fn the_bearer_never_appears_in_a_response_body() {
         };
 
         let reply = oneshot(
-            app(root.path()),
+            app(root.path(), store.clone()),
             request(method, path, Some(body), Some(&presentation)),
         )
         .await;
@@ -1172,13 +1258,18 @@ async fn the_bearer_never_appears_in_a_response_body() {
 #[tokio::test]
 async fn no_refusal_body_quotes_the_request() {
     let root = TempDir::new("no-echo");
+    let store = support::outbox(&root);
     let canary = "a-string-that-appears-only-in-the-request";
 
     let mut trigger = support::valid_trigger(root.path());
     trigger["prompt"] = json!(canary);
     trigger["schemaVersion"] = json!("v99");
 
-    let reply = oneshot(app(root.path()), authorized("POST", "/trigger", trigger)).await;
+    let reply = oneshot(
+        app(root.path(), store.clone()),
+        authorized("POST", "/trigger", trigger),
+    )
+    .await;
 
     assert_eq!(reply.status, StatusCode::BAD_REQUEST);
     assert!(

@@ -1,0 +1,75 @@
+{
+  "schema": "aibridge.bench.mem/1",
+  "generatedAt": "2026-10-03T08:23:28Z",
+  "host": { "os": "Darwin", "arch": "arm64", "kernel": "Darwin 25.6.0", "cpus": "8" },
+  "units": {"rssSource": "ps -o rss= -p <pid> (KiB on macOS and Linux)", "reported": "MiB", "conversion": "MiB = KiB / 1024", "quantity": "absolute level, never a delta"},
+  "measurementRule": "median and p95 of absolute RSS levels; >=1 Hz for >=60 s; never a difference between two samples (ADR 0008 section 1)",
+  "sampling": { "intervalSeconds": 1, "requestedSamples": 60, "ticksObserved": 60, "durationSeconds": 60.0, "shortSample": false, "minimum": { "samples": 60, "intervalSeconds": 1, "durationSeconds": 60 } },
+  "commandLine": "bench/mem.sh --samples 60 --interval 1 --pid spike-router-stub|aibr-router-stub,spike-bun-process|/Users/mac/Projects/AIBrigde/spike/worker-no-fastify.ts --out /Users/mac/Projects/AIBrigde/spike/results/topology-B-run2.json",
+  "processes": {
+      "spike-router-stub": {
+        "matcher": "spike-router-stub|aibr-router-stub",
+        "pids": [71009],
+        "pidCount": 1,
+        "matchKind": "argv",
+        "observedTicks": 60,
+        "absentTicks": 0,
+        "absent": false,
+        "rssMib": {
+          "n": 60,
+          "min": 1.906250,
+          "max": 1.937500,
+          "mean": 1.913802,
+          "stdev": 0.013337,
+          "median": 1.906250,
+          "p5": 1.906250,
+          "p95": 1.937500,
+          "p99": 1.937500
+        }
+      },
+
+      "spike-bun-process": {
+        "matcher": "spike-bun-process|/Users/mac/Projects/AIBrigde/spike/worker-no-fastify.ts",
+        "pids": [71013],
+        "pidCount": 1,
+        "matchKind": "argv",
+        "observedTicks": 60,
+        "absentTicks": 0,
+        "absent": false,
+        "rssMib": {
+          "n": 60,
+          "min": 42.703125,
+          "max": 46.875000,
+          "mean": 45.202344,
+          "stdev": 1.046641,
+          "median": 45.828125,
+          "p5": 43.718750,
+          "p95": 46.875000,
+          "p99": 46.875000
+        }
+      }
+    },
+  "sum": { "primary": true, "definition": "per-tick sum over slots that were alive in at least one tick, summed at a single instant", "slotsIncluded": ["spike-router-stub", "spike-bun-process"], "completeTicks": 60, "ticksObserved": 60, "rssMib": {
+      "n": 60,
+      "min": 44.609375,
+      "max": 48.781250,
+      "mean": 47.116146,
+      "stdev": 1.050331,
+      "median": 47.734375,
+      "p5": 45.625000,
+      "p95": 48.781250,
+      "p99": 48.781250
+    } },
+  "series": {
+    "spike-router-stub": [1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.921875, 1.937500, 1.937500, 1.937500, 1.937500, 1.937500, 1.937500, 1.937500, 1.937500, 1.937500, 1.937500, 1.937500, 1.937500, 1.937500, 1.937500],
+    "spike-bun-process": [42.703125, 43.937500, 43.953125, 44.046875, 44.046875, 44.046875, 44.078125, 44.078125, 44.078125, 44.078125, 44.046875, 44.046875, 44.046875, 43.718750, 43.718750, 43.718750, 43.765625, 43.765625, 43.765625, 43.765625, 43.968750, 45.843750, 45.843750, 45.828125, 45.828125, 45.828125, 45.828125, 45.828125, 45.828125, 45.921875, 45.921875, 45.921875, 45.921875, 45.921875, 45.937500, 46.875000, 46.875000, 46.875000, 46.875000, 45.906250, 45.906250, 45.906250, 45.921875, 45.937500, 45.937500, 45.953125, 45.953125, 45.953125, 45.968750, 45.968750, 45.921875, 45.921875, 45.921875, 45.921875, 45.125000, 45.125000, 45.453125, 45.453125, 45.453125, 45.453125],
+    "sum": [44.609375, 45.843750, 45.859375, 45.953125, 45.953125, 45.953125, 45.984375, 45.984375, 45.984375, 45.984375, 45.953125, 45.953125, 45.953125, 45.625000, 45.625000, 45.625000, 45.671875, 45.671875, 45.671875, 45.671875, 45.875000, 47.750000, 47.750000, 47.734375, 47.734375, 47.734375, 47.734375, 47.734375, 47.734375, 47.828125, 47.828125, 47.828125, 47.828125, 47.828125, 47.843750, 48.781250, 48.781250, 48.781250, 48.781250, 47.812500, 47.812500, 47.812500, 47.828125, 47.843750, 47.843750, 47.875000, 47.890625, 47.890625, 47.906250, 47.906250, 47.859375, 47.859375, 47.859375, 47.859375, 47.062500, 47.062500, 47.390625, 47.390625, 47.390625, 47.390625]
+  },
+  "topology": "B",
+  "label": "topology=B run=2 of 3",
+  "spike": "true -- SPIKE ARTEFACT, single host, single session, not a soak",
+  "primaryMetric": "sum.rssMib.median (MiB, absolute level)",
+  "headlineWarning": "router-only figures are not a host-level result; opencode serve, the ~20 MiB Bun runtime floor, and @opentui/core are untouched. The primary number is the per-tick SUM across the processes that were alive; per-process figures are secondary.",
+  "loadProfile": "/Users/mac/Projects/AIBrigde/spike/load-profile.json",
+  "hostMemoryState": "swapUsedMib=3392.06, memoryFreePercent=53"
+}

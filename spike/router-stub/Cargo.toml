@@ -1,0 +1,50 @@
+[package]
+name = "aibr-router-stub"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# SPIKE CODE -- NOT PRODUCTION. This is a MEASUREMENT STUB for M7.1, not the
+# aibr-router binary M7.3 will build. It is not in `router/`, it has no Cargo
+# workspace relationship to `router/`, and it is not a starting point for it.
+#
+# What it is for: ADR 0008 §2.1 projects that the real router sits at ~1.94 MiB,
+# and that projection is never checked by anything. This stub establishes the
+# floor -- roughly what a tokio runtime plus a handful of axum routes costs on
+# this host -- so the milestone's router memory figure can be sanity-checked
+# against a measurement instead of against recollection.
+#
+# What it deliberately is NOT, and why each omission is the point:
+#   * no SQLite and no sqlx, so it does not pretend to measure durable admission
+#     (M7.5's `ingress_outbox` will add memory this stub cannot show)
+#   * no structural validation, no bearer comparison, no realpath containment,
+#     no schemaVersion handling, no body cap  (all of those are M7.3, and
+#     inventing them here would create a component that looks like a security
+#     boundary and is not one)
+#   * no backoff, no claim leases, no terminal retention  (M7.6)
+#   * no message broker of any kind. ADR 0008 §5 rejected one and this task
+#     dropped it from scope; the stub binds 127.0.0.1 on an ephemeral port.
+#
+# Its RSS is therefore a LOWER BOUND on the real router, not an estimate of it.
+#
+# Versions are pinned EXACTLY, per the convention ADR 0008 records: a stub whose
+# dependency versions float would move its own memory floor whenever axum or tokio
+# published a release, and a floor that moves for reasons unrelated to the code
+# cannot be compared across runs. `default-features = false` for the same reason
+# in miniature: an optional feature someone upstream enables by default would
+# otherwise enter the sum as a silent change.
+
+[dependencies]
+axum = { version = "=0.8.9", default-features = false, features = ["http1", "tokio"] }
+tokio = { version = "=1.53.1", default-features = false, features = ["rt-multi-thread", "net", "time", "sync", "macros"] }
+
+[profile.release]
+# Matches ADR 0008 §2.1's stated build so the stub is comparable to the 1.94 MiB
+# projection it exists to check.
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[workspace]

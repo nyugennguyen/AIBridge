@@ -1,0 +1,18 @@
+# Build output only.
+#
+# NOTE ON PATHS: a .gitignore containing a slash is anchored to the directory it
+# lives in, so `router-stub/target/` is correct here and `spike/router-stub/target/`
+# would resolve to spike/spike/router-stub/target/ and silently match nothing --
+# which is how 560 files of Cargo build output got committed once. Use paths
+# relative to THIS file, or drop the leading slash for a repo-root-anchored rule.
+router-stub/target/
+__pycache__/
+
+# spike/results/ is deliberately NOT ignored: milestone 7 section 5.2 gates on
+# "the per-capture series committed", so the raw series are the evidence and a
+# summary without them is a claim.
+
+# Per-capture scratch from the load generator. The committed results/ directory
+# holds the summary.json and per-capture JSON that the spike report cites; the
+# generator's own transient state is not evidence.
+load-scratch/

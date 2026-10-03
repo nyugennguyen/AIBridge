@@ -1,0 +1,9 @@
+{
+  "//": "SPIKE-LOCAL. `bun run typecheck` uses the root tsconfig.json, whose include list is src/**, tests/** and vitest.config.ts -- spike/ is deliberately NOT in the project build, so `bun run build` never emits it and `bun run typecheck` is unaffected by spike. This file typechecks spike/ separately so the spike is not unchecked code, and is run explicitly: `bunx tsc -p spike/tsconfig.json`. See spike/README.md.",
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": ".."
+  },
+  "include": ["**/*.ts", "../src/**/*.ts"]
+}

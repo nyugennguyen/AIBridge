@@ -1,0 +1,753 @@
+{
+  "schema": "aibridge.spike.summary/1",
+  "generatedAt": "2026-10-03T08:29:45Z",
+  "captureStartedAt": "2026-10-03T08:15:50Z",
+  "status": "SPIKE ARTEFACT. Single host, single session, short window. Not a soak, not a rollout result, and not evidence of multi-day stability. Milestone 7 \u00a75.3 assignment to any of this is forbidden.",
+  "quantity": "absolute RSS levels in MiB; no delta is reported anywhere in this artefact",
+  "protocol": {
+    "A1": ">=1 Hz for >=60 s per capture; bench/mem.sh refuses anything less (exit 2)",
+    "A2": ">=3 captures per quantity; reported figure is the median of the per-capture medians",
+    "A3": "run-to-run spread of the per-capture medians must be <=10%, else not-gateable",
+    "A4": "same host, same boot, same profile, same capture script for every capture",
+    "repeats": 3
+  },
+  "projectionsUnderTest": {
+    "workerWithoutFastifyMib": 43.3,
+    "workerCriterionMib": 48.0,
+    "source": "ADR 0008 \u00a72.1 and \u00a711; milestone 7 \u00a75.2. A projection, explicitly."
+  },
+  "workerWithoutFastify": {
+    "definition": "the Bun process with no fastify import and no listener: spike/worker-no-fastify.ts, sampled under the fixed load profile. Topologies B and C are the same process; only the neighbouring processes differ, so their captures are pooled.",
+    "poolingCaveat": "Pooling B and C doubles the capture count for the criterion, but C's captures have the router stub resident, so their Bun levels are not strictly identical quantities to B's. If B and C disagree by more than A3's 10%, pool the two separately before believing either.",
+    "captures": 6,
+    "perCaptureMedianMib": [
+      47.203,
+      45.828,
+      46.953,
+      47.0,
+      48.812,
+      46.656
+    ],
+    "perCaptureP95Mib": [
+      64.406,
+      46.875,
+      47.625,
+      62.938,
+      50.109,
+      47.703
+    ],
+    "medianOfPerCaptureMediansMib": 46.977,
+    "medianOfPerCaptureP95Mib": 48.906,
+    "minMedianMib": 45.828,
+    "maxMedianMib": 48.812,
+    "runToRunSpreadMib": 2.984,
+    "runToRunSpreadPct": 6.35,
+    "gateable": true,
+    "criterionMib": 48.0,
+    "projectionMib": 43.3,
+    "projectionResidualMib": 3.677,
+    "meetsCriterionOnMedian": true,
+    "meetsCriterionOnP95": false,
+    "criterionIsGateable": true,
+    "criterionMarginMib": 1.023,
+    "marginExceedsSpread": false,
+    "verdict": "PASS",
+    "verdictNote": "PASS/FAIL requires both A3 (spread <=10%) and the level criterion. Where the margin to the criterion is smaller than the run-to-run spread, the verdict is not resolvable by re-capturing: state the point estimate and the spread, not a clean pass."
+  },
+  "topologies": {
+    "A": {
+      "captures": 3,
+      "runs": [
+        {
+          "file": "topology-A-run1.json",
+          "generatedAt": "2026-10-03T08:17:17Z",
+          "sampling": {
+            "intervalSeconds": 1,
+            "requestedSamples": 60,
+            "ticksObserved": 60,
+            "durationSeconds": 60.0,
+            "shortSample": false,
+            "minimum": {
+              "samples": 60,
+              "intervalSeconds": 1,
+              "durationSeconds": 60
+            }
+          },
+          "sum": {
+            "n": 60,
+            "min": 66.0,
+            "max": 69.34375,
+            "mean": 68.583073,
+            "stdev": 1.029919,
+            "median": 69.132812,
+            "p5": 66.046875,
+            "p95": 69.3125,
+            "p99": 69.34375
+          },
+          "processes": {
+            "spike-bun-process": {
+              "n": 60,
+              "min": 66.0,
+              "max": 69.34375,
+              "mean": 68.583073,
+              "stdev": 1.029919,
+              "median": 69.132812,
+              "p5": 66.046875,
+              "p95": 69.3125,
+              "p99": 69.34375
+            }
+          },
+          "pids": {
+            "spike-bun-process": [
+              63980
+            ]
+          },
+          "absentTicks": {
+            "spike-bun-process": 0
+          }
+        },
+        {
+          "file": "topology-A-run2.json",
+          "generatedAt": "2026-10-03T08:18:50Z",
+          "sampling": {
+            "intervalSeconds": 1,
+            "requestedSamples": 60,
+            "ticksObserved": 60,
+            "durationSeconds": 60.0,
+            "shortSample": false,
+            "minimum": {
+              "samples": 60,
+              "intervalSeconds": 1,
+              "durationSeconds": 60
+            }
+          },
+          "sum": {
+            "n": 60,
+            "min": 58.671875,
+            "max": 62.53125,
+            "mean": 61.648438,
+            "stdev": 1.180687,
+            "median": 62.148438,
+            "p5": 58.6875,
+            "p95": 62.53125,
+            "p99": 62.53125
+          },
+          "processes": {
+            "spike-bun-process": {
+              "n": 60,
+              "min": 58.671875,
+              "max": 62.53125,
+              "mean": 61.648438,
+              "stdev": 1.180687,
+              "median": 62.148438,
+              "p5": 58.6875,
+              "p95": 62.53125,
+              "p99": 62.53125
+            }
+          },
+          "pids": {
+            "spike-bun-process": [
+              65668
+            ]
+          },
+          "absentTicks": {
+            "spike-bun-process": 0
+          }
+        },
+        {
+          "file": "topology-A-run3.json",
+          "generatedAt": "2026-10-03T08:20:22Z",
+          "sampling": {
+            "intervalSeconds": 1,
+            "requestedSamples": 60,
+            "ticksObserved": 60,
+            "durationSeconds": 60.0,
+            "shortSample": false,
+            "minimum": {
+              "samples": 60,
+              "intervalSeconds": 1,
+              "durationSeconds": 60
+            }
+          },
+          "sum": {
+            "n": 60,
+            "min": 61.953125,
+            "max": 87.015625,
+            "mean": 80.170573,
+            "stdev": 10.595104,
+            "median": 86.140625,
+            "p5": 61.984375,
+            "p95": 87.015625,
+            "p99": 87.015625
+          },
+          "processes": {
+            "spike-bun-process": {
+              "n": 60,
+              "min": 61.953125,
+              "max": 87.015625,
+              "mean": 80.170573,
+              "stdev": 10.595104,
+              "median": 86.140625,
+              "p5": 61.984375,
+              "p95": 87.015625,
+              "p99": 87.015625
+            }
+          },
+          "pids": {
+            "spike-bun-process": [
+              67341
+            ]
+          },
+          "absentTicks": {
+            "spike-bun-process": 0
+          }
+        }
+      ],
+      "samplingMinimumsHonoured": true,
+      "slotOverlap": "none; no pid appears in more than one slot in any capture",
+      "distinctProcessesPerCapture": [
+        1
+      ],
+      "expectedDistinctProcesses": 1,
+      "processCountAsExpected": true,
+      "sum": {
+        "perCaptureMedianMib": [
+          69.133,
+          62.148,
+          86.141
+        ],
+        "perCaptureP95Mib": [
+          69.312,
+          62.531,
+          87.016
+        ],
+        "medianOfPerCaptureMediansMib": 69.133,
+        "medianOfPerCaptureP95Mib": 69.312,
+        "minMedianMib": 62.148,
+        "maxMedianMib": 86.141,
+        "runToRunSpreadMib": 23.992,
+        "runToRunSpreadPct": 34.7,
+        "gateable": false,
+        "verdict": "not-gateable"
+      },
+      "processes": {
+        "spike-bun-process": {
+          "presentInAnyCapture": true,
+          "captures": 3,
+          "absentTicksTotal": 0,
+          "perCaptureMedianMib": [
+            69.133,
+            62.148,
+            86.141
+          ],
+          "medianOfPerCaptureMediansMib": 69.133,
+          "medianOfPerCaptureP95Mib": 69.312,
+          "runToRunSpreadPct": 34.7,
+          "gateable": false
+        }
+      }
+    },
+    "B": {
+      "captures": 3,
+      "runs": [
+        {
+          "file": "topology-B-run1.json",
+          "generatedAt": "2026-10-03T08:21:55Z",
+          "sampling": {
+            "intervalSeconds": 1,
+            "requestedSamples": 60,
+            "ticksObserved": 60,
+            "durationSeconds": 60.0,
+            "shortSample": false,
+            "minimum": {
+              "samples": 60,
+              "intervalSeconds": 1,
+              "durationSeconds": 60
+            }
+          },
+          "sum": {
+            "n": 60,
+            "min": 48.4375,
+            "max": 66.75,
+            "mean": 56.522656,
+            "stdev": 8.318864,
+            "median": 49.125,
+            "p5": 48.625,
+            "p95": 66.75,
+            "p99": 66.75
+          },
+          "processes": {
+            "spike-router-stub": {
+              "n": 60,
+              "min": 1.921875,
+              "max": 2.34375,
+              "mean": 2.11875,
+              "stdev": 0.212244,
+              "median": 1.921875,
+              "p5": 1.921875,
+              "p95": 2.34375,
+              "p99": 2.34375
+            },
+            "spike-bun-process": {
+              "n": 60,
+              "min": 46.515625,
+              "max": 64.40625,
+              "mean": 54.403906,
+              "stdev": 8.107169,
+              "median": 47.203125,
+              "p5": 46.703125,
+              "p95": 64.40625,
+              "p99": 64.40625
+            }
+          },
+          "pids": {
+            "spike-router-stub": [
+              69041
+            ],
+            "spike-bun-process": [
+              69045
+            ]
+          },
+          "absentTicks": {
+            "spike-router-stub": 0,
+            "spike-bun-process": 0
+          }
+        },
+        {
+          "file": "topology-B-run2.json",
+          "generatedAt": "2026-10-03T08:23:28Z",
+          "sampling": {
+            "intervalSeconds": 1,
+            "requestedSamples": 60,
+            "ticksObserved": 60,
+            "durationSeconds": 60.0,
+            "shortSample": false,
+            "minimum": {
+              "samples": 60,
+              "intervalSeconds": 1,
+              "durationSeconds": 60
+            }
+          },
+          "sum": {
+            "n": 60,
+            "min": 44.609375,
+            "max": 48.78125,
+            "mean": 47.116146,
+            "stdev": 1.050331,
+            "median": 47.734375,
+            "p5": 45.625,
+            "p95": 48.78125,
+            "p99": 48.78125
+          },
+          "processes": {
+            "spike-router-stub": {
+              "n": 60,
+              "min": 1.90625,
+              "max": 1.9375,
+              "mean": 1.913802,
+              "stdev": 0.013337,
+              "median": 1.90625,
+              "p5": 1.90625,
+              "p95": 1.9375,
+              "p99": 1.9375
+            },
+            "spike-bun-process": {
+              "n": 60,
+              "min": 42.703125,
+              "max": 46.875,
+              "mean": 45.202344,
+              "stdev": 1.046641,
+              "median": 45.828125,
+              "p5": 43.71875,
+              "p95": 46.875,
+              "p99": 46.875
+            }
+          },
+          "pids": {
+            "spike-router-stub": [
+              71009
+            ],
+            "spike-bun-process": [
+              71013
+            ]
+          },
+          "absentTicks": {
+            "spike-router-stub": 0,
+            "spike-bun-process": 0
+          }
+        },
+        {
+          "file": "topology-B-run3.json",
+          "generatedAt": "2026-10-03T08:25:00Z",
+          "sampling": {
+            "intervalSeconds": 1,
+            "requestedSamples": 60,
+            "ticksObserved": 60,
+            "durationSeconds": 60.0,
+            "shortSample": false,
+            "minimum": {
+              "samples": 60,
+              "intervalSeconds": 1,
+              "durationSeconds": 60
+            }
+          },
+          "sum": {
+            "n": 60,
+            "min": 46.421875,
+            "max": 64.921875,
+            "mean": 49.242969,
+            "stdev": 2.96853,
+            "median": 48.859375,
+            "p5": 46.6875,
+            "p95": 49.53125,
+            "p99": 64.921875
+          },
+          "processes": {
+            "spike-router-stub": {
+              "n": 60,
+              "min": 1.90625,
+              "max": 2.359375,
+              "mean": 1.921354,
+              "stdev": 0.082025,
+              "median": 1.90625,
+              "p5": 1.90625,
+              "p95": 1.90625,
+              "p99": 2.359375
+            },
+            "spike-bun-process": {
+              "n": 60,
+              "min": 44.515625,
+              "max": 62.5625,
+              "mean": 47.321615,
+              "stdev": 2.889131,
+              "median": 46.953125,
+              "p5": 44.78125,
+              "p95": 47.625,
+              "p99": 62.5625
+            }
+          },
+          "pids": {
+            "spike-router-stub": [
+              72950
+            ],
+            "spike-bun-process": [
+              72954
+            ]
+          },
+          "absentTicks": {
+            "spike-router-stub": 0,
+            "spike-bun-process": 0
+          }
+        }
+      ],
+      "samplingMinimumsHonoured": true,
+      "slotOverlap": "none; no pid appears in more than one slot in any capture",
+      "distinctProcessesPerCapture": [
+        2
+      ],
+      "expectedDistinctProcesses": 2,
+      "processCountAsExpected": true,
+      "sum": {
+        "perCaptureMedianMib": [
+          49.125,
+          47.734,
+          48.859
+        ],
+        "perCaptureP95Mib": [
+          66.75,
+          48.781,
+          49.531
+        ],
+        "medianOfPerCaptureMediansMib": 48.859,
+        "medianOfPerCaptureP95Mib": 49.531,
+        "minMedianMib": 47.734,
+        "maxMedianMib": 49.125,
+        "runToRunSpreadMib": 1.391,
+        "runToRunSpreadPct": 2.85,
+        "gateable": true,
+        "verdict": "gateable"
+      },
+      "processes": {
+        "spike-bun-process": {
+          "presentInAnyCapture": true,
+          "captures": 3,
+          "absentTicksTotal": 0,
+          "perCaptureMedianMib": [
+            47.203,
+            45.828,
+            46.953
+          ],
+          "medianOfPerCaptureMediansMib": 46.953,
+          "medianOfPerCaptureP95Mib": 47.625,
+          "runToRunSpreadPct": 2.93,
+          "gateable": true
+        },
+        "spike-router-stub": {
+          "presentInAnyCapture": true,
+          "captures": 3,
+          "absentTicksTotal": 0,
+          "perCaptureMedianMib": [
+            1.922,
+            1.906,
+            1.906
+          ],
+          "medianOfPerCaptureMediansMib": 1.906,
+          "medianOfPerCaptureP95Mib": 1.938,
+          "runToRunSpreadPct": 0.82,
+          "gateable": true
+        }
+      }
+    },
+    "C": {
+      "captures": 3,
+      "runs": [
+        {
+          "file": "topology-C-run1.json",
+          "generatedAt": "2026-10-03T08:26:33Z",
+          "sampling": {
+            "intervalSeconds": 1,
+            "requestedSamples": 60,
+            "ticksObserved": 60,
+            "durationSeconds": 60.0,
+            "shortSample": false,
+            "minimum": {
+              "samples": 60,
+              "intervalSeconds": 1,
+              "durationSeconds": 60
+            }
+          },
+          "sum": {
+            "n": 60,
+            "min": 45.390625,
+            "max": 65.328125,
+            "mean": 49.477604,
+            "stdev": 5.445588,
+            "median": 48.921875,
+            "p5": 45.40625,
+            "p95": 65.25,
+            "p99": 65.328125
+          },
+          "processes": {
+            "spike-router-stub": {
+              "n": 60,
+              "min": 1.890625,
+              "max": 2.3125,
+              "mean": 1.953125,
+              "stdev": 0.121542,
+              "median": 1.921875,
+              "p5": 1.890625,
+              "p95": 2.3125,
+              "p99": 2.3125
+            },
+            "spike-bun-process": {
+              "n": 60,
+              "min": 43.5,
+              "max": 63.015625,
+              "mean": 47.524479,
+              "stdev": 5.325667,
+              "median": 47.0,
+              "p5": 43.515625,
+              "p95": 62.9375,
+              "p99": 63.015625
+            }
+          },
+          "pids": {
+            "spike-router-stub": [
+              74891
+            ],
+            "spike-bun-process": [
+              74895
+            ]
+          },
+          "absentTicks": {
+            "spike-router-stub": 0,
+            "spike-bun-process": 0
+          }
+        },
+        {
+          "file": "topology-C-run2.json",
+          "generatedAt": "2026-10-03T08:28:06Z",
+          "sampling": {
+            "intervalSeconds": 1,
+            "requestedSamples": 60,
+            "ticksObserved": 60,
+            "durationSeconds": 60.0,
+            "shortSample": false,
+            "minimum": {
+              "samples": 60,
+              "intervalSeconds": 1,
+              "durationSeconds": 60
+            }
+          },
+          "sum": {
+            "n": 60,
+            "min": 48.25,
+            "max": 54.09375,
+            "mean": 50.715885,
+            "stdev": 1.553394,
+            "median": 50.6875,
+            "p5": 48.25,
+            "p95": 52.015625,
+            "p99": 54.09375
+          },
+          "processes": {
+            "spike-router-stub": {
+              "n": 60,
+              "min": 1.875,
+              "max": 1.90625,
+              "mean": 1.891406,
+              "stdev": 0.015605,
+              "median": 1.90625,
+              "p5": 1.875,
+              "p95": 1.90625,
+              "p99": 1.90625
+            },
+            "spike-bun-process": {
+              "n": 60,
+              "min": 46.375,
+              "max": 52.21875,
+              "mean": 48.824479,
+              "stdev": 1.542556,
+              "median": 48.8125,
+              "p5": 46.375,
+              "p95": 50.109375,
+              "p99": 52.21875
+            }
+          },
+          "pids": {
+            "spike-router-stub": [
+              76855
+            ],
+            "spike-bun-process": [
+              76859
+            ]
+          },
+          "absentTicks": {
+            "spike-router-stub": 0,
+            "spike-bun-process": 0
+          }
+        },
+        {
+          "file": "topology-C-run3.json",
+          "generatedAt": "2026-10-03T08:29:39Z",
+          "sampling": {
+            "intervalSeconds": 1,
+            "requestedSamples": 60,
+            "ticksObserved": 60,
+            "durationSeconds": 60.0,
+            "shortSample": false,
+            "minimum": {
+              "samples": 60,
+              "intervalSeconds": 1,
+              "durationSeconds": 60
+            }
+          },
+          "sum": {
+            "n": 60,
+            "min": 45.375,
+            "max": 64.65625,
+            "mean": 48.577344,
+            "stdev": 2.366705,
+            "median": 48.5625,
+            "p5": 45.390625,
+            "p95": 49.609375,
+            "p99": 64.65625
+          },
+          "processes": {
+            "spike-router-stub": {
+              "n": 60,
+              "min": 1.90625,
+              "max": 2.3125,
+              "mean": 1.913021,
+              "stdev": 0.052447,
+              "median": 1.90625,
+              "p5": 1.90625,
+              "p95": 1.90625,
+              "p99": 2.3125
+            },
+            "spike-bun-process": {
+              "n": 60,
+              "min": 43.46875,
+              "max": 62.34375,
+              "mean": 46.664323,
+              "stdev": 2.320047,
+              "median": 46.65625,
+              "p5": 43.484375,
+              "p95": 47.703125,
+              "p99": 62.34375
+            }
+          },
+          "pids": {
+            "spike-router-stub": [
+              78813
+            ],
+            "spike-bun-process": [
+              78817
+            ]
+          },
+          "absentTicks": {
+            "spike-router-stub": 0,
+            "spike-bun-process": 0
+          }
+        }
+      ],
+      "samplingMinimumsHonoured": true,
+      "slotOverlap": "none; no pid appears in more than one slot in any capture",
+      "distinctProcessesPerCapture": [
+        2
+      ],
+      "expectedDistinctProcesses": 2,
+      "processCountAsExpected": true,
+      "sum": {
+        "perCaptureMedianMib": [
+          48.922,
+          50.688,
+          48.562
+        ],
+        "perCaptureP95Mib": [
+          65.25,
+          52.016,
+          49.609
+        ],
+        "medianOfPerCaptureMediansMib": 48.922,
+        "medianOfPerCaptureP95Mib": 52.016,
+        "minMedianMib": 48.562,
+        "maxMedianMib": 50.688,
+        "runToRunSpreadMib": 2.125,
+        "runToRunSpreadPct": 4.34,
+        "gateable": true,
+        "verdict": "gateable"
+      },
+      "processes": {
+        "spike-bun-process": {
+          "presentInAnyCapture": true,
+          "captures": 3,
+          "absentTicksTotal": 0,
+          "perCaptureMedianMib": [
+            47.0,
+            48.812,
+            46.656
+          ],
+          "medianOfPerCaptureMediansMib": 47.0,
+          "medianOfPerCaptureP95Mib": 50.109,
+          "runToRunSpreadPct": 4.59,
+          "gateable": true
+        },
+        "spike-router-stub": {
+          "presentInAnyCapture": true,
+          "captures": 3,
+          "absentTicksTotal": 0,
+          "perCaptureMedianMib": [
+            1.922,
+            1.906,
+            1.906
+          ],
+          "medianOfPerCaptureMediansMib": 1.906,
+          "medianOfPerCaptureP95Mib": 1.906,
+          "runToRunSpreadPct": 0.82,
+          "gateable": true
+        }
+      }
+    }
+  }
+}

@@ -72,9 +72,33 @@ Two consequences, both of which weaken this ADR rather than strengthen it:
    and a comparison requires >=3 captures with run-to-run spread <=10%
    ([`milestone-7-polyglot-ingress.md` §5.1.1](../implementation-plans/milestone-7-polyglot-ingress.md)).
 
-If that spread cannot be brought under 10% on the reference host, the resource KPI
-is reported `not-gateable`. That is an honest milestone outcome. Reporting one 60 s
-capture as a pass is not.
+**Measured by M7.1, superseding the projection:** the worker-without-Fastify
+measures **46.98 MiB** (median of 6 capture medians, spread 6.35%) — **3.68 MiB
+above the 43.3 MiB projection this section originally derived.** The projection
+was optimistic because subtracting Fastify's 31.2 MiB understates what the engine
+keeps: Zod, the OpenCode SDK, and JSC's own footprint survive the removal.
+
+The `<= 48 MiB` criterion passes on the median by 1.02 MiB, but the run-to-run
+spread is 2.98 MiB, so **the pass is not resolvable by re-capturing**; see
+[`milestone-7-router-spike.md`](../spikes/milestone-7-router-spike.md). The
+router stub's 1.94 MiB projection **did** hold (1.906 MiB measured, 558 KiB
+binary), but that is a lower bound — the real router adds SQLite via `sqlx`.
+
+Two consequences follow, both weakening this ADR:
+
+1. **The measured reduction is −29.3%, not −39%** — worker+router 48.86 MiB
+   against a 69.13 MiB baseline. The baseline is higher than the 57.3 MiB above
+   because the spike measures **steady state under sustained load** while §1
+   measured **idle**; those are different quantities and §5.1.1 changed the gated
+   one deliberately.
+2. **The baseline is not gateable.** Three captures of the *unchanged* engine
+   spread 34.7% (62.1–86.1 MiB). A comparison whose baseline cannot be reproduced
+   cannot yield a trustworthy percentage, so **−29.3% is a point estimate with a
+   stated spread, not a result.**
+
+If the run-to-run spread cannot be brought under 10% on the reference host, the
+resource KPI is reported `not-gateable`. That is an honest milestone outcome.
+Reporting one 60 s capture as a pass is not.
 
 ## 2. Decision
 
@@ -125,15 +149,20 @@ to change before a broker could be reconsidered.
 
 Projected result, from §1:
 
-| Topology | Projected RSS | vs 57.3 MiB |
+| Topology | RSS (measured M7.1) | Note |
 | --- | --- | --- |
-| Today | 57.3 MiB | — |
-| Router + SQLite admission queue | **45.2 MiB** | **−39%** |
+| Today, engine with Fastify | 69.13 MiB | spread 34.7% — **not gateable** |
+| Worker + router stub | 48.86 MiB | spread 2.85% — gateable |
+| — of which worker | 46.98 MiB | projection was 43.3 |
+| — of which router stub | 1.91 MiB | projection 1.94 confirmed |
 
-Both figures are **projections from a component breakdown, not measurements**, and
-§1 records that a single idle capture is itself not a reproducible quantity. M7.1
-must measure the worker-without-Fastify figure before any report treats the −39%
-as established; see [`milestone-7-polyglot-ingress.md` §5.1.1](../implementation-plans/milestone-7-polyglot-ingress.md).
+Measured reduction **−29.3%**, not the −39% this ADR originally claimed. The
+`<= 45 MiB` total target is **known to be unreachable** on this host with this
+topology: the worker alone is ~47 MiB before the router, the TUI, or
+`opencode serve`. The target assumed the projection was exact, and it was not.
+
+The router figure is a **lower bound**. The stub has no SQLite or `sqlx`; M7.5's
+`ingress_outbox` adds memory this spike cannot show.
 
 ### 2.2 Two-tier validation, stated so it cannot be quietly collapsed
 
@@ -305,8 +334,10 @@ one-line revert.
   principal correctness risk and is named as such in §2.8 and the plan's risk
   table.
 
-**Gains.** Fastify's 31.2 MiB is removed from the engine (−39% total). Five open
-High findings are closable at ingress — `F-01` (`job_id` -> path traversal via
+**Gains.** Fastify's 31.2 MiB is removed from the engine: a **measured −29.3%**
+total (48.86 MiB against a 69.13 MiB baseline), not the −39% first projected — see
+§1 and the spike. Five open High findings are closable at ingress — `F-01`
+(`job_id` -> path traversal via
 `join(directory, job.id + ".json")`,
 [`src/jobs/store.ts:36`](../../src/jobs/store.ts)), `F-02` (§2.6), `F-03`
 (`GET /jobs/:id` carries **no authentication**,
@@ -316,12 +347,14 @@ High findings are closable at ingress — `F-01` (`job_id` -> path traversal via
 (unversioned legacy state). `SF-15` gains a real admission gate. A
 language-stable ingress contract becomes available for future non-Node agents.
 
-**On the stated objective.** This milestone reduces AIBridge's own footprint by
-roughly 39%. It does **not** change the footprint of `opencode serve`, the Bun
-runtime floor (~20 MiB), or `@opentui/core` (19 MB of `node_modules`, in a
-separate process). A goal phrased as *drastically reduced host footprint* is not
-met by this milestone alone; the dominant terms lie outside it. This is recorded
-so the gate report cannot present −39% as a host-level result.
+**On the stated objective.** This milestone reduces AIBridge's own footprint by a
+**measured 29%**, and that figure is a point estimate whose own baseline spread
+(34.7%) makes it un-gateable in strict terms. It does **not** change the footprint
+of `opencode serve`, the Bun runtime floor (~20 MiB), or `@opentui/core` (19 MB of
+`node_modules`, in a separate process). A goal phrased as *drastically reduced
+host footprint* is not met by this milestone alone; the dominant terms lie outside
+it. This is recorded so the gate report cannot present the reduction as a
+host-level result.
 
 ## 4. Language guardrail, amended
 
@@ -503,9 +536,20 @@ the router's five build targets in addition to the npm package.
 - **`/v1/mesh/*` migration** is deferred with no milestone assigned. It needs a
   design for stateful ownership over a durable transport and should not be
   scheduled alongside stateless ingress work.
-- **Worker RSS is a projection, not a measurement.** 43.3 MiB is derived from the §1
-  breakdown by subtracting Fastify. Phase 1 must confirm it by building the worker
-  without its Fastify import before the gate report treats it as fact.
+- ~~**Worker RSS is a projection, not a measurement.**~~ **CLOSED by M7.1, and the
+  projection was wrong.** Measured 46.98 MiB against a projected 43.3 MiB (+8.5%);
+  see §1 and [`milestone-7-router-spike.md`](../spikes/milestone-7-router-spike.md).
+- **The baseline cannot be gated (R-M7.1-1).** Three captures of the unchanged
+  engine under the §5.1.1 protocol spread 34.7% (62.1–86.1 MiB), so no percentage
+  reduction can be claimed as a result until a baseline definition is found whose
+  own spread is <=10%. M7.16 owns this.
+- **The `<= 48 MiB` worker criterion is unresolvable by re-capture (R-M7.1-2).**
+  Margin 1.02 MiB, spread 2.98 MiB. More samples could resolve it; more runs of
+  the same length cannot.
+- **The router's real RSS is unmeasured (R-M7.1-4).** The stub's 1.91 MiB has no
+  SQLite or `sqlx`, so it is a lower bound. M7.5 adds the real cost.
+- **Admission latency was never baselined.** No `opencode serve` is reachable on
+  the reference host, so the §5.2 p50/p99 targets have no comparison point.
 - **macOS parity.** `launchd` supervision is specified but untested. The reference
   host is macOS; the production node is Linux. If macOS parity cannot be tested to
   the same standard, that gap belongs in the gate report rather than in a footnote.

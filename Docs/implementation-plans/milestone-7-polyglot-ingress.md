@@ -22,18 +22,26 @@ These are levels measured on macOS 26.6.2 / arm64, Bun 1.3.14, Rust 1.94.1. They
 | Bun process floor | 22.9 MiB | — | ADR 0008 §1 |
 | `import fastify` | +22.7 MiB | — | ADR 0008 §1 |
 | `app.listen()` | +8.5 MiB | — | ADR 0008 §1 |
-| **`aibr serve` end-to-end idle** | **57.3 MiB** | 14 | ADR 0008 §1 |
-| Rust + axum + tokio + serde, 2 routes, `opt-level="z"` + LTO + strip | **1.94 MiB** | 9 | Phase 1.3 |
+| `aibr serve` end-to-end, **idle** | 57.3 MiB | 14 | ADR 0008 §1 |
+| Rust + axum + tokio, 2 routes, `opt-level="z"` + LTO + strip | **1.91 MiB** (558 KiB binary) | 9 | M7.1 measured |
 
-| Topology | Projected RSS | vs 57.3 MiB |
-| --- | --- | --- |
-| Today | 57.3 MiB | — |
-| Router + SQLite admission queue (**this milestone**) | **45.2 MiB** | **−39%** |
+**The 57.3 MiB idle figure and the M7.1 steady-state figures are different
+quantities.** Idle is not a reproducible level for a Bun process (§5.1 rule 3);
+steady state under sustained load is. Measured under the §5.1.1 protocol:
 
-No message broker is introduced or evaluated. Durable admission is the existing
-SQLite outbox re-deployed for ingress; ADR 0008 §5 records why.
+| Topology | Median of medians | p95 | Spread | Gateable |
+| --- | --- | --- | --- | --- |
+| A — engine with Fastify, steady state | 69.13 MiB | 69.31 | **34.7%** | **no** |
+| B — worker + router stub, steady state | 48.86 MiB | 49.53 | 2.85% | yes |
+| — worker alone | **46.98 MiB** (projection was 43.3) | 48.91 | 6.35% | yes, marginal |
+| — router stub alone | 1.91 MiB | 3.56 | — | lower bound |
 
-**The 43.3 MiB worker figure is a projection, not a measurement.** It is ADR 0008 §1 minus Fastify. M7.1 must confirm it before any report treats it as fact.
+Measured reduction **−29.3%**, not the −39% first projected. Full analysis and
+residuals: [`milestone-7-router-spike.md`](../spikes/milestone-7-router-spike.md).
+
+**The 43.3 MiB worker projection was wrong.** M7.1 measured **46.98 MiB** (+8.5%).
+The old figure was ADR 0008 §1 minus Fastify, which understates what the engine
+keeps — Zod, the OpenCode SDK, and JSC's own footprint survive the removal.
 
 ## Agent Plan
 
@@ -257,18 +265,23 @@ honest milestone outcome. Reporting a single 60 s capture as a pass is not.
 
 ### 5.2 Comparison matrix
 
-| KPI | Baseline | Target |
+| KPI | Measured baseline (M7.1) | Target |
 | --- | --- | --- |
-| Total RSS, steady state, three processes | see `bench/baseline/engines.json` `steadyState` | <= 45 MiB |
-| — `aibr-router` | — | <= 4 MiB (1.94 measured) |
-| — `aibr worker` (no Fastify) | — | <= 48 MiB |
+| Total RSS, steady state, three processes | 69.13 MiB, spread 34.7%, **not gateable** | **re-baseline required — see R-M7.1-1** |
+| — `aibr-router` | 1.91 MiB (lower bound; stub has no SQLite) | <= 4 MiB |
+| — `aibr worker` (no Fastify) | 46.98 MiB, spread 6.35% | <= 48 MiB (**margin 1.02 < spread 2.98 — unresolvable by re-capture**) |
 | CPU idle | 0.0% | <= 0.5% |
 | CPU spike, 500-request burst | — | < 15 ms |
-| Admission latency p50 / p99 | — | <= 2 ms / <= 10 ms |
-| Webhook -> engine accept, p50 | — | <= 15 ms |
+| Admission latency p50 / p99 | not baselined (no `opencode serve` on this host) | <= 2 ms / <= 10 ms |
+| Webhook -> engine accept, p50 | not baselined | <= 15 ms |
 | Zero loss across 24 h soak | — | 0 |
 | Rollback time | — | < 5 s, no rebuild |
 | Open High findings closed | 5 open | 5 closed |
+
+**The `<= 45 MiB` total target this milestone originally specified is withdrawn.**
+The worker alone measures ~47 MiB before the router, the TUI, or `opencode serve`,
+so no total below ~50 MiB is reachable with this topology. M7.16 must re-baseline
+this row rather than report a pass against a target known to be out of reach.
 
 ### 5.3 Rollout
 
@@ -295,10 +308,11 @@ the flag default flips, because collapsing them destroys rollback.
 
 ### Resource
 
-- [ ] Router idle RSS <= 4 MiB as median and p95 over >= 60 s, against `MemoryMax=32M`.
-- [ ] Total three-process RSS <= 45 MiB, gated under §5.1.1 rules A1–A4, with the per-capture series committed. If A3 fails, the KPI is reported as `not-gateable` with the variance attached — **not** passed on a single capture.
-- [ ] The gated quantity is steady state under sustained load, and the load profile in `bench/baseline/capture-config.json` is unchanged between baseline and candidate captures.
-- [ ] Worker-without-Fastify measured, not projected.
+- [ ] Router RSS <= 4 MiB as median and p95 over >= 60 s, against `MemoryMax=32M`. **M7.1 measured 1.91 MiB as a lower bound; the `sqlx` + SQLite cost is unmeasured (R-M7.1-4).**
+- [ ] Worker-without-Fastify <= 48 MiB. **M7.1 measured 46.98 MiB, margin 1.02 MiB against a 2.98 MiB spread — report the point estimate and spread, not a clean pass (R-M7.1-2).**
+- [ ] **The total-RSS KPI is re-baselined.** The `<= 45 MiB` target is withdrawn as unreachable; M7.16 must establish a new target against a baseline whose run-to-run spread is <=10%. Three captures of the unchanged engine spread 34.7% (R-M7.1-1).
+- [ ] Idle and steady-state figures are labelled distinctly everywhere they appear. The 57.3 MiB idle figure and the 69.13 MiB steady-state figure are different quantities and neither may be cited as the other (R-M7.1-3).
+- [ ] All resource comparisons gated under §5.1.1 rules A1–A4, with the per-capture series committed. An inadmissible KPI is reported `not-gateable`, **not** passed on a single capture.
 - [ ] Binary <= 2 MiB per target; `readelf -d` reports zero `NEEDED` on musl targets.
 - [ ] No Rust toolchain required on any host.
 - [ ] Every resource figure in the report is a level with median/p95, never a delta.
@@ -336,8 +350,10 @@ the flag default flips, because collapsing them destroys rollback.
 
 ### Honest reporting
 
-- [ ] The −39% is reported as a **three-process total**, never the router alone.
+- [ ] The reduction is reported as a **three-process total**, never the router alone.
+- [ ] **No report claims −39%.** The measured figure is **−29.3%**, stated with its spread, against a baseline that is itself not gateable (R-M7.1-1).
 - [ ] The gate report states that `opencode serve`, the ~20 MiB Bun runtime floor, and `@opentui/core` (19 MB, separate process) are **untouched**, so this is not a host-level footprint result.
+- [ ] The withdrawn `<= 45 MiB` target is reported as withdrawn, with the reason.
 - [ ] The macOS `launchd` parity gap is recorded, not footnoted.
 
 ## Guardrails and Stop Conditions

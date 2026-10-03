@@ -38,7 +38,7 @@ Milestone 7 introduced a second language and two new durable stores. These items
 
 - Rust is permitted **only** inside `router/`, only for ingress admission, under ADR 0008. The language guardrail is unchanged for `src/`. M8.7's SDK must not expose router internals; the ingress contract is JSON over a socket plus the committed schemas in `contracts/v1/`.
 - The router is a **structural gate, never an authorization authority**. M8.1 and M8.10 must not "optimise" the worker's duplicate Zod re-parse away on the assumption that the Rust check already validated the payload.
-- No broker may be introduced. ADR 0008 §5 records why, with measurements.
+- No broker may be introduced. ADR 0008 §5 records why, and names the topology change that would have to precede one.
 
 ## Agent Plan
 

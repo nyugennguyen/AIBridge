@@ -92,9 +92,9 @@ The existing Bun engine loses its HTTP listener and its Fastify dependency and
 becomes a worker that drains the queue. It remains the semantic authority for
 every decision the router refuses to make.
 
-**NATS is rejected.** See §5. The rejection is on measurement, and the
-measurements are recorded here so the decision can be re-litigated with numbers
-rather than recollection.
+**No message broker is introduced.** Durable admission is the existing SQLite
+outbox, re-deployed for ingress. See §5 for the reasoning and for what would have
+to change before a broker could be reconsidered.
 
 ### 2.1 Component layout
 
@@ -123,16 +123,17 @@ rather than recollection.
  +--------------------------------+
 ```
 
-Projected result, from §1 and the Phase 1 measurement of `nats-server`:
+Projected result, from §1:
 
 | Topology | Projected RSS | vs 57.3 MiB |
 | --- | --- | --- |
 | Today | 57.3 MiB | — |
-| Router, no broker | **45.2 MiB** | **−39%** |
-| Router + NATS JetStream | 62.2 MiB | −14% |
+| Router + SQLite admission queue | **45.2 MiB** | **−39%** |
 
-A broker costs 17 MiB idle and 62% of the memory saving it would be introduced to
-create. §5 explains why it also buys nothing this topology needs.
+Both figures are **projections from a component breakdown, not measurements**, and
+§1 records that a single idle capture is itself not a reproducible quantity. M7.1
+must measure the worker-without-Fastify figure before any report treats the −39%
+as established; see [`milestone-7-polyglot-ingress.md` §5.1.1](../implementation-plans/milestone-7-polyglot-ingress.md).
 
 ### 2.2 Two-tier validation, stated so it cannot be quietly collapsed
 
@@ -341,44 +342,42 @@ Per [`README.md:78`](../../Docs/implementation-plans/README.md), release, publis
 deployment, credential rotation, and node enrolment remain outside sub-agent
 authority. This ADR does not grant any of them.
 
-## 5. NATS: evaluated and rejected
+## 5. No message broker
 
-A JetStream-backed topology was built and measured rather than dismissed.
+Ingress durability is the **existing SQLite outbox, re-deployed for ingress**.
+No broker — NATS, Redis, or any other — is introduced, and none is evaluated as
+part of this milestone.
 
-`nats-server` v2.15.0 on the reference host: **16.6 MiB idle** core without
-JetStream, **16.9–17.8 MiB** with JetStream at `max_memory_store: 64MB` /
-`max_file_store: 256MB`, 9–10 threads, **+7.5 MiB** after 39 MiB of publish
-traffic.
+The decision rests on the problem already being solved in this repository.
+[`src/mesh/outbox/`](../../src/mesh/outbox/) implements durable enqueue-before-transmit,
+claim leases, `eventId` dedupe, the backoff table, the attempt threshold, retained
+terminal records, an atomic ack commit, and `recoverStale` on restart — under
+roughly twenty test files including `retry-convergence`, `crash-boundaries`, and
+`stale-epoch`. §2.5 ports that policy rather than replacing it. A broker here would
+be a second, less thoroughly tested implementation of a solved problem, plus:
 
-Rejected on six independent grounds. Any one would be sufficient.
-
-1. **Cost.** 17 MiB idle and a third supervised process, for two nodes, consuming
-   62% of the memory saving that motivated the milestone (§2.1).
-2. **Duplication.** [`src/mesh/outbox/`](../../src/mesh/outbox/) already implements
-   durable enqueue-before-transmit, claim leases, `eventId` dedupe, the backoff
-   table, the attempt threshold, retained terminal records, atomic ack commit, and
-   `recoverStale` on restart — under roughly twenty test files including
-   `retry-convergence`, `crash-boundaries`, and `stale-epoch`. JetStream would be
-   a second implementation of a solved problem, less thoroughly tested.
-3. **Dual write.** A webhook would be persisted to JetStream *and* to the SQLite
-   event store, with no transaction spanning them. Two durable records of one
-   fact, disagreeable under any crash. §2.5 avoids this entirely.
-4. **It does not address the stated failure.** "Guarantee zero data loss across
-   regions during network partitions" presumes a multi-region topology. This
-   deployment is two nodes over a Tailscale overlay; a per-node NATS server is a
-   loopback bus. Genuine cross-region durability would require a *clustered* NATS
-   with cluster routes, gossip, and quorum — substantial operational surface for a
-   topology that does not exist.
-5. **Language split.** JetStream client-side dedupe state would exist in two
+1. **A second durable record of one fact.** A webhook would be persisted to the
+   broker *and* to the SQLite event store, with no transaction spanning them. Two
+   records that can disagree under any crash. §2.5 avoids this entirely.
+2. **An unverifiable third contract.** Client-side dedupe state would exist in two
    languages, which is §2.3's drift risk in its worst form, with the broker's
-   dedupe window as an unverifiable third contract.
-6. **Contract register.** A second durable delivery path conflicts with ADR 0003
+   dedupe window as a contract nobody here owns.
+3. **A register conflict.** A second durable delivery path contradicts ADR 0003
    (event store and idempotency) and ADR 0007 §17 ("delivery never affects
-   orchestration state"). Adopting it would require reopening both.
+   orchestration state"). Adopting one would require reopening both.
+4. **A third supervised process** for a two-node overlay, against a `systemd`
+   memory cap (§2.7) that a broker's footprint would immediately violate.
+5. **It would not address the stated failure.** "Zero data loss across regions
+   during network partitions" presumes a multi-region topology. This deployment is
+   two nodes over Tailscale; a per-node broker is a loopback bus. Genuine
+   cross-region durability would need a clustered deployment with consensus — real
+   operational surface for a topology that does not exist.
 
-If a future topology introduces genuine multi-region or many-consumer fan-out,
-this ADR is the place to reopen, and the measurement table above is the baseline to
-beat. `src/mesh/outbox/` remains the fallback, not a second broker.
+**What would reopen this.** A future milestone that introduces genuine
+multi-region deployment, or many consumers per admitted item, would need to revisit
+durable admission. This ADR is where that argument belongs. Until then
+`src/mesh/outbox/` is the one durable-delivery implementation in this system, and
+the invariant to preserve is that there is exactly one.
 
 ## 6. Statefulness boundary: two routes do not migrate
 

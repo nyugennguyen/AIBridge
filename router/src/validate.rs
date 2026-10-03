@@ -73,12 +73,14 @@ pub const MAX_BODY_BYTES: usize = 1_048_576;
 
 /// The longest accepted `job_id`, in bytes.
 ///
-/// 128. The engine mints ids of the form `#<26 lowercase hex chars>`
-/// ([`src/jobs/manager.ts`](../../src/jobs/manager.ts)), so 128 is more than an
-/// order of magnitude of headroom over anything in production. The bound exists so
-/// that the charset check is also a length check: a 10 MB string of `-` is a valid
-/// member of the charset, and an unbounded id would otherwise be a way to make the
-/// router allocate and then carry an arbitrarily long string in a response field.
+/// 128 bytes. The engine mints ids of the form `#<26 lowercase hex chars>`
+/// ([`src/jobs/manager.ts`](../../src/jobs/manager.ts)), which leaves 128 as more than
+/// an order of magnitude of headroom over anything in production.
+///
+/// The bound exists so that the charset check is also a length check: a 10 MB string of
+/// `-` is a valid member of the charset, and an unbounded id would otherwise be a way
+/// to make the router allocate and then carry an arbitrarily long string in a response
+/// field.
 pub const JOB_ID_MAX_LEN: usize = 128;
 
 /// The `job_id` charset: `[A-Za-z0-9_-]{1,128}`.
@@ -118,14 +120,20 @@ pub fn valid_job_id(id: &str) -> bool {
 /// is not silent stripping.
 pub fn envelope(document: &mut Value) -> Result<(), ApiError> {
     let Some(object) = document.as_object_mut() else {
-        return Err(ApiError::InvalidPayload("request body must be a JSON object"));
+        return Err(ApiError::InvalidPayload(
+            "request body must be a JSON object",
+        ));
     };
 
-    // `remove` rather than `get`: the key has to be gone before the payload is
-    // handed to a `deny_unknown_fields` type, and doing it with `get` and
-    // deserialising from a *copy* would mean cloning every body on the hot path to
-    // achieve the same result.
-    let Some(value) = object.remove("schemaVersion") else {
+    // Read first, remove only on success. The removal is unconditional once the
+    // version checks out — a `deny_unknown_fields` type has nowhere to put the key —
+    // but doing it in two steps means a *refused* document comes back exactly as it
+    // arrived. That matters more than it looks: `envelope` is the only function in
+    // this crate that mutates the caller's body, and a mutating function whose
+    // failure path is also mutating is one that is hard to reason about at the next
+    // call site. It also costs nothing, since the success path does the `remove`
+    // anyway.
+    let Some(value) = object.get("schemaVersion") else {
         // `SF-14`: a missing canonical version is an explicit failure, never an
         // empty state and never an inferred one. Guessing here is what F-06
         // describes — unversioned state that a future reader cannot interpret.
@@ -135,11 +143,14 @@ pub fn envelope(document: &mut Value) -> Result<(), ApiError> {
     };
 
     match value {
-        Value::String(version) if version == CONTRACT_VERSION => Ok(()),
-        // Both a wrong version and a non-string version land here, deliberately,
-        // and together. `{"schemaVersion": 1}` is not a v1 request with a typo in
-        // it; it is a caller that does not know what the field is, and the two
-        // deserve the same answer.
+        Value::String(version) if version == CONTRACT_VERSION => {
+            object.remove("schemaVersion");
+            Ok(())
+        }
+        // Both a wrong version and a non-string version land here, deliberately, and
+        // together. `{"schemaVersion": 1}` is not a v1 request with a typo in it; it
+        // is a caller that does not know what the field is, and the two deserve the
+        // same answer.
         _ => Err(ApiError::UnsupportedSchemaVersion),
     }
 }
@@ -151,7 +162,10 @@ pub fn envelope(document: &mut Value) -> Result<(), ApiError> {
 /// reports failure without reproducing what serde would say: serde's message names
 /// the offending key, and a `400` body that names the key a caller invented is
 /// more reflection than this crate allows. See [`crate::error`].
-pub fn payload<T: DeserializeOwned>(document: &Value, discriminator: &'static str) -> Result<T, ApiError> {
+pub fn payload<T: DeserializeOwned>(
+    document: &Value,
+    discriminator: &'static str,
+) -> Result<T, ApiError> {
     T::deserialize(document).map_err(|_| ApiError::InvalidPayload(discriminator))
 }
 
@@ -218,10 +232,7 @@ pub fn require_job_id(id: &str, discriminator: &'static str) -> Result<(), ApiEr
 /// a `project_dir` that resolves, and a `project_dir` that does not resolve cannot
 /// be a working directory for any runtime. Rejecting it here is not a policy
 /// choice; it is the same answer the worker would give.
-pub fn canonical_project_dir<'a>(
-    requested: &str,
-    roots: &'a [PathBuf],
-) -> Result<PathBuf, ApiError> {
+pub fn canonical_project_dir(requested: &str, roots: &[PathBuf]) -> Result<PathBuf, ApiError> {
     const REFUSED: &str = "project_dir is not a path inside this deployment's project roots";
 
     // Absolute only. A relative `project_dir` would be resolved against the
@@ -234,7 +245,8 @@ pub fn canonical_project_dir<'a>(
         return Err(ApiError::InvalidPayload(REFUSED));
     }
 
-    let resolved = std::fs::canonicalize(candidate).map_err(|_| ApiError::InvalidPayload(REFUSED))?;
+    let resolved =
+        std::fs::canonicalize(candidate).map_err(|_| ApiError::InvalidPayload(REFUSED))?;
 
     // `starts_with` on `Path` compares whole components, not string prefixes:
     // `/srv/project-evil` does not start with `/srv/project`. That is the property
@@ -285,7 +297,16 @@ mod tests {
 
     #[test]
     fn valid_job_ids_are_accepted() {
-        for id in ["a", "A", "0", "-", "_", "job-1", "JOB_1", "0123456789abcdef"] {
+        for id in [
+            "a",
+            "A",
+            "0",
+            "-",
+            "_",
+            "job-1",
+            "JOB_1",
+            "0123456789abcdef",
+        ] {
             assert!(valid_job_id(id), "{id:?} should be accepted");
         }
     }
@@ -315,7 +336,10 @@ mod tests {
     #[test]
     fn f06_an_unknown_schema_version_is_refused_and_not_coerced() {
         let mut document = json!({ "schemaVersion": "v2", "source_agent_id": "test-vps" });
-        assert_eq!(envelope(&mut document), Err(ApiError::UnsupportedSchemaVersion));
+        assert_eq!(
+            envelope(&mut document),
+            Err(ApiError::UnsupportedSchemaVersion)
+        );
         // The body is untouched: a refused version leaves no half-migrated object
         // behind for a caller that retries with a corrected version by mutating
         // what it thinks it sent.
@@ -324,7 +348,13 @@ mod tests {
 
     #[test]
     fn a_non_string_schema_version_is_refused() {
-        for version in [json!(1), json!(null), json!(true), json!(["v1"]), json!({ "v": 1 })] {
+        for version in [
+            json!(1),
+            json!(null),
+            json!(true),
+            json!(["v1"]),
+            json!({ "v": 1 }),
+        ] {
             let mut document = json!({ "schemaVersion": version });
             assert_eq!(
                 envelope(&mut document),
@@ -336,7 +366,8 @@ mod tests {
 
     #[test]
     fn a_matching_schema_version_is_removed_for_the_payload_type() {
-        let mut document = json!({ "schemaVersion": CONTRACT_VERSION, "source_agent_id": "test-vps" });
+        let mut document =
+            json!({ "schemaVersion": CONTRACT_VERSION, "source_agent_id": "test-vps" });
         assert_eq!(envelope(&mut document), Ok(()));
         assert!(
             document.get("schemaVersion").is_none(),

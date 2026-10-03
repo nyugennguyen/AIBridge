@@ -148,7 +148,7 @@ impl fmt::Display for PreflightError {
                  the LAN. Bind the configured tailnet address or do not bind."
             ),
             Self::AddressAbsent { address, present } => {
-                write!(f, "bridge.host {address} is not configured on this host.\n")?;
+                writeln!(f, "bridge.host {address} is not configured on this host.")?;
                 if present.is_empty() {
                     f.write_str("This host reports no interface addresses at all.")
                 } else {
@@ -214,14 +214,15 @@ fn check(host: &str, present: &[IpAddr]) -> Result<(), PreflightError> {
 
 /// Every address configured on every interface of this host.
 fn interface_addresses() -> Result<Vec<IpAddr>, PreflightError> {
-    let interfaces = if_addrs::get_if_addrs().map_err(|error| PreflightError::InterfacesUnreadable {
-        source: error.to_string(),
-    })?;
+    let interfaces =
+        if_addrs::get_if_addrs().map_err(|error| PreflightError::InterfacesUnreadable {
+            source: error.to_string(),
+        })?;
     Ok(interfaces
         .into_iter()
-        .filter_map(|interface| match interface.addr {
-            if_addrs::IfAddr::V4(v4) => Some(IpAddr::V4(v4.ip)),
-            if_addrs::IfAddr::V6(v6) => Some(IpAddr::V6(v6.ip)),
+        .map(|interface| match interface.addr {
+            if_addrs::IfAddr::V4(v4) => IpAddr::V4(v4.ip),
+            if_addrs::IfAddr::V6(v6) => IpAddr::V6(v6.ip),
         })
         .collect())
 }

@@ -61,7 +61,10 @@ pub enum ConfigError {
     /// is the one an operator hits first and the one whose fix is not a file edit.
     MissingConfigPath,
     /// The config file could not be read.
-    Unreadable { path: PathBuf, source: std::io::Error },
+    Unreadable {
+        path: PathBuf,
+        source: std::io::Error,
+    },
     /// The file was read but is not a `BridgeConfig`.
     ///
     /// The underlying serde message is deliberately **not** included. Serde's
@@ -115,11 +118,7 @@ impl RouterConfig {
     /// `origin` is used only to name the file in errors; it is not required to
     /// exist, which is what lets the tests exercise this without touching disk
     /// for the parse-failure cases.
-    pub fn from_json(
-        text: &str,
-        bearer_token: &str,
-        origin: &Path,
-    ) -> Result<Self, ConfigError> {
+    pub fn from_json(text: &str, bearer_token: &str, origin: &Path) -> Result<Self, ConfigError> {
         let bridge: BridgeConfig =
             serde_json::from_str(text).map_err(|_| ConfigError::Invalid {
                 path: origin.to_path_buf(),
@@ -133,17 +132,25 @@ impl RouterConfig {
         })
     }
 
-    /// The address this process is configured to listen on, as configured.
+    /// The socket address this process is configured to listen on.
     ///
     /// Returned uncanonicalised on purpose: [`crate::bind::preflight`] is what
     /// decides whether this address is usable here, and passing it the configured
     /// string is the whole point of that check.
+    ///
+    /// An IPv6 host is bracketed. `format!("{}:{}", host, port)` produces `:::8787`
+    /// for a v6 host, which is not a socket address at all and fails to parse at
+    /// `TcpListener::bind` with an error that names neither the config key nor the
+    /// bracket that is missing. Every target in M7.9's matrix can run an IPv6 tailnet
+    /// address, so this is the shape a real deployment reaches.
     pub fn bind_address(&self) -> String {
-        format!(
-            "{}:{}",
-            self.bridge.bridge.host.deref(),
-            self.bridge.bridge.port
-        )
+        let host = self.bridge.bridge.host.deref();
+        let port = self.bridge.bridge.port;
+
+        match host.parse::<std::net::IpAddr>() {
+            Ok(std::net::IpAddr::V6(_)) => format!("[{host}]:{port}"),
+            _ => format!("{host}:{port}"),
+        }
     }
 }
 
@@ -167,7 +174,7 @@ fn canonical_project_roots(bridge: &BridgeConfig) -> Vec<PathBuf> {
     bridge
         .projects
         .iter()
-        .filter_map(|project| std::fs::canonicalize(project.path.deref()).ok())
+        .map(|project| std::fs::canonicalize(project.path.deref()))
+        .filter_map(Result::ok)
         .collect()
 }
-

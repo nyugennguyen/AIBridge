@@ -1013,12 +1013,28 @@ async fn the_job_read_route_answers_not_found_for_every_id() {
 
 /// The `202` shapes for trigger and report.
 ///
-/// `target_agent_id` is absent from the router's `202`, deliberately. The engine's
-/// `triggerResponseSchema` includes it ([`src/config/schemas.ts:89`](../../src/config/schemas.ts))
-/// and the engine fills it from its own config; a router echoing a caller-supplied
-/// `target_agent_id` would be asserting that this process *is* that target, which is a
-/// routing decision the worker owns. `status` and `opencode_session_id` are absent for
-/// the same family of reason: both describe a job lifecycle and a runtime this
+/// `target_agent_id` IS echoed, from the configured `agent_id`. An earlier draft
+/// of this file asserted its absence, on the reasoning that echoing it "would be
+/// asserting that this process *is* that target". Two things are wrong with that.
+///
+/// First, the contract: `target_agent_id` is REQUIRED by
+/// [`contracts/v1/trigger-response.schema.json`](../../contracts/v1/trigger-response.schema.json)
+/// (from `triggerResponseSchema`, [`src/config/schemas.ts:89`](../../src/config/schemas.ts)).
+/// A response omitting a required field does not validate against the schema this
+/// binary generates from. Nothing else in the suite would have caught it: the
+/// parity test in `fixtures.rs` checks the fifteen example fixtures against their
+/// INPUT schemas, and no fixture is a response body.
+///
+/// Second, the reasoning confused echoing with deciding. The router reads
+/// `agent_id` from ITS OWN config, never from the request. The engine's
+/// `trigger.ts` reads the same field for the same reason. Deciding that the
+/// router stands in front of a particular agent — which is what "this process is
+/// that target" would mean — remains the worker's call, and the router still
+/// admits a structurally valid trigger from an unconfigured source (see
+/// `a_structurally_valid_trigger_from_an_unauthorized_source_is_still_admitted`).
+///
+/// `status` and `opencode_session_id` remain absent, and the original reasons hold:
+/// both describe a job lifecycle and a runtime this
 /// process does not have. The M7.7 cutover reconciles all three with the committed
 /// schema and it is recorded in `Docs/implementation-reports/m7.3-progress.md`.
 #[tokio::test]
@@ -1048,10 +1064,23 @@ async fn the_accepted_shapes_are_stable() {
          {}",
         reply.text()
     );
-    assert!(
-        trigger.get("target_agent_id").is_none(),
-        "the router does not claim to be the target agent; it is in front of whichever \
-         agent is. Body was {}",
+    // `target_agent_id` IS required by the committed triggerResponseSchema, so it
+    // is echoed from config. This reverses an earlier assertion in this file that
+    // demanded its ABSENCE, on the reasoning that the router "does not claim to be
+    // the target agent". That reasoning was wrong about the contract: a required
+    // field cannot be omitted, and a response that fails its own generated schema
+    // is a violation the parity test cannot catch, since no
+    // tests/contracts/examples/ fixture covers a RESPONSE body.
+    //
+    // Echoing the configured `agent_id` is not a claim of authority. The engine's
+    // `trigger.ts` reads the same field for the same purpose, and the router still
+    // cannot tell whether the caller may dispatch -- see
+    // `a_structurally_valid_trigger_from_an_unauthorized_source_is_still_admitted`.
+    assert_eq!(
+        trigger["target_agent_id"],
+        json!(support::CONFIGURED_AGENT_ID),
+        "target_agent_id is REQUIRED by contracts/v1/trigger-response.schema.json and \
+         must be the configured agent_id. Body was {}",
         reply.text()
     );
 

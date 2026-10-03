@@ -84,9 +84,16 @@ impl Reply {
 /// `the_committed_example_config_parses` — because that is a different claim: that
 /// the router can read the file the engine reads, not that any particular project
 /// path works.
+/// The `agent_id` [`config_json`] writes.
+///
+/// Named so a test asserting the router's `202` echoes it does not hard-code the
+/// literal a second time: the literal lives here, where the fixture that defines
+/// it is, so changing one changes both.
+pub const CONFIGURED_AGENT_ID: &str = "router-test";
+
 pub fn config_json(project_root: &Path) -> Value {
     json!({
-        "agent_id": "router-test",
+        "agent_id": CONFIGURED_AGENT_ID,
         "bridge": {
             // `127.0.0.1`, not a tailnet address: these tests exercise the gate, not
             // the bind. A real tailnet address would make every test need a tailnet.
@@ -153,6 +160,11 @@ pub fn state(project_root: &Path) -> AppState {
         auth: std::sync::Arc::new(Bearer::new(TOKEN).expect("the canary token is not empty")),
         project_roots: std::sync::Arc::new(vec![canonical(project_root)]),
         public_url: std::sync::Arc::from("http://router-test.tailnet:8787"),
+        // Matches `config_json`'s `agent_id`, which is what
+        // `AppState::from_config` would read. Asserted by
+        // `the_accepted_shapes_are_stable`, so a divergence between the fixture
+        // config and this state is a test failure rather than a silent mismatch.
+        agent_id: std::sync::Arc::from(CONFIGURED_AGENT_ID),
     }
 }
 

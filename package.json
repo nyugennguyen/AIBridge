@@ -29,7 +29,8 @@
     "test:integration": "vitest run tests/integration",
     "test:watch": "vitest",
     "test:installer": "shellcheck scripts/install.sh && bash -n scripts/install.sh && vitest run tests/unit/installer",
-    "release:check": "bun install --frozen-lockfile && bun run build && bun test && bun run typecheck && shellcheck scripts/install.sh && bash -n scripts/install.sh && bun dist/cli.js --help && bun pm pack --dry-run"
+    "release:check": "bun install --frozen-lockfile && bun run build && bun test && bun run typecheck && shellcheck scripts/install.sh && bash -n scripts/install.sh && bun dist/cli.js --help && bun pm pack --dry-run",
+    "generate:parity-vector": "tsx scripts/generate-parity-vector.ts"
   },
   "dependencies": {
     "@fastify/websocket": "11.3.1",

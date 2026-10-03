@@ -19,6 +19,7 @@ dependencies = [
 name = "aibr-router"
 version = "0.1.0"
 dependencies = [
+ "regress",
  "serde",
  "serde_json",
 ]

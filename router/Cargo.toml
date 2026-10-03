@@ -33,11 +33,34 @@ description = "Polyglot ingress admission router for AIBridge (ADR 0008)"
 # `src/` must not acquire a dependency on this crate; there is no path
 # declaration that could express either, which is the point.
 [dependencies]
-serde = { version = "=1.0.228", features = ["derive"], default-features = false }
-# `std` is required (axum, tokio and SQLite all assume it) but `alloc` is not
-# requested: serde's default features pull `std` in via a path this crate does
-# not otherwise need, so the set is spelled out rather than inherited.
+# `std` is REQUIRED, not merely convenient, and the reason is the generated code
+# rather than this crate: typify emits `#[serde(untagged)]` and internally-tagged
+# enums, and serde gates `de::ContentDeserializer`, `de::Content` and the
+# `TaggedContentVisitor` family behind `std`/`alloc`. With only `derive` enabled
+# the crate fails to compile with 400+ "found an item that was configured out"
+# errors pointing at `contracts.rs`, which reads as a codegen bug rather than a
+# missing feature. `alloc` alone is not enough either; the deserializer visitors
+# need `std`.
+serde = { version = "=1.0.228", features = ["derive", "std"], default-features = false }
 serde_json = { version = "=1.0.150", features = ["std"], default-features = false }
+# `regress` is not optional. typify compiles a JSON Schema `pattern` into a
+# `::regress::Regex` held in a `LazyLock`, so a schema with a pattern does not
+# merely lose validation without it — the generated crate does not build. The
+# 27 committed schemas contain 1722 such references, so this is load-bearing from
+# the first build rather than a future concern.
+#
+# A bounded-time engine rather than the `regex` crate: this is a TRUST BOUNDARY
+# and ADR 0007 §17 refuses unbounded pattern semantics, so the dependency is
+# chosen to match the threat model.
+#
+# `default-features = true` here, NOT `false` as originally written. `regress`'s
+# `std` feature is what pulls in the standard library, and with it disabled the
+# crate fails to compile in a way that names neither the feature nor the
+# dependency: 23 errors about `std`, `Vec`, and `Box` not being found, reported
+# from inside regress's own source. It is also the version the workspace lockfile
+# had already resolved, so the pin matches what was tested rather than introducing
+# a second version.
+regress = { version = "=0.12.0" }
 
 [profile.release]
 # ADR 0008 2.1 sizes the router against a 32 MiB systemd MemoryMax, and 2.7
@@ -51,3 +74,23 @@ codegen-units = 1
 # M7.3 must not add one.
 panic = "abort"
 strip = true
+
+# `clippy::large_enum_variant` is allowed for the GENERATED module only, and the
+# reason is that the lint's remedy is the wrong remedy here.
+#
+# `OrchestrationEvent` is a `#[serde(tag = "type")]` union whose variants are
+# records of very different sizes; the largest embeds several nested payloads.
+# Clippy suggests boxing the big variants. The generated file cannot be edited,
+# and boxing would mean the generator emits a `Box` that every consumer must
+# unwrap -- a schema change made in Rust that the committed JSON Schema does not
+# describe, which is the mirror image of the divergence ADR 0008 §2.3 exists to
+# prevent.
+#
+# The cost of allowing it is bounded and is not a memory hazard at this trust
+# boundary: an event is decoded from a body already capped at 1 MiB, one at a
+# time, and the enum lives in a process with a 32 MiB `MemoryMax`. The lint is
+# aimed at arrays and enums multiplied by large counts; neither applies.
+#
+# Scoped to `contracts` rather than the crate so a hand-written enum in this
+# binary still gets the lint.
+

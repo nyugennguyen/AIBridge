@@ -48,16 +48,34 @@ fn run() -> Result<String, String> {
         .map_err(|error| format!("cannot read {}: {error}", contracts_directory.display()))?;
     for entry in entries {
         let path = entry
-            .map_err(|error| format!("cannot read an entry of {}: {error}", contracts_directory.display()))?
+            .map_err(|error| {
+                format!(
+                    "cannot read an entry of {}: {error}",
+                    contracts_directory.display()
+                )
+            })?
             .path();
-        let is_contract = path.extension().is_some_and(|extension| extension == "json")
-            && path.file_name().is_some_and(|name| name.to_string_lossy().ends_with(".schema.json"));
+        let is_contract = path
+            .extension()
+            .is_some_and(|extension| extension == "json")
+            && path
+                .file_name()
+                .is_some_and(|name| name.to_string_lossy().ends_with(".schema.json"));
         if is_contract {
-            inputs.insert(path.file_name().expect("checked above").to_string_lossy().into_owned(), path);
+            inputs.insert(
+                path.file_name()
+                    .expect("checked above")
+                    .to_string_lossy()
+                    .into_owned(),
+                path,
+            );
         }
     }
     if inputs.is_empty() {
-        return Err(format!("no *.schema.json under {}", contracts_directory.display()));
+        return Err(format!(
+            "no *.schema.json under {}",
+            contracts_directory.display()
+        ));
     }
 
     let mut settings = TypeSpaceSettings::default();
@@ -74,7 +92,8 @@ fn run() -> Result<String, String> {
     let mut generated_names = Vec::new();
 
     for (file_name, path) in &inputs {
-        let file = fs::File::open(path).map_err(|error| format!("cannot open {}: {error}", path.display()))?;
+        let file = fs::File::open(path)
+            .map_err(|error| format!("cannot open {}: {error}", path.display()))?;
         let root: RootSchema = serde_json::from_reader(file)
             .map_err(|error| format!("cannot parse {} as JSON Schema: {error}", path.display()))?;
 
@@ -85,19 +104,78 @@ fn run() -> Result<String, String> {
             .add_root_schema(root)
             .map_err(|error| format!("typify rejected {}: {error}", path.display()))?;
         let type_id = type_id.ok_or_else(|| {
-            format!("{} has no `title`; the TypeScript generator and typify disagree on naming", path.display())
+            format!(
+                "{} has no `title`; the TypeScript generator and typify disagree on naming",
+                path.display()
+            )
         })?;
         // `get_type` is how typify 0.8 exposes a type's name. There is no
         // `TypeSpace::type_name`; a `TypeId` is an index into the space, and
         // only the `Type` it resolves to carries a name.
         let generated_name = type_space
             .get_type(&type_id)
-            .map_err(|error| format!("typify could not resolve the type id for {}: {error}", path.display()))?
+            .map_err(|error| {
+                format!(
+                    "typify could not resolve the type id for {}: {error}",
+                    path.display()
+                )
+            })?
             .name();
         generated_names.push(format!("{file_name} -> {generated_name}"));
     }
 
     let body = render(&type_space)?;
+
+    // The contract version is derived from the `$id` urn of the inputs, never
+    // restated here. `lib.rs` reads `contracts::CONTRACT_VERSION`, so a bump that
+    // moved `contracts/v1/` to `v2` without this following would fail to compile
+    // rather than leave the binary advertising the version it was built against.
+    //
+    // Agreement across inputs is checked rather than assumed: two files carrying
+    // different `$id` versions is a state a partial directory move produces, and
+    // picking either one silently would make the constant a guess.
+    let mut version: Option<String> = None;
+    for (file_name, path) in &inputs {
+        let file = fs::File::open(path)
+            .map_err(|error| format!("cannot open {}: {error}", path.display()))?;
+        let document: serde_json::Value = serde_json::from_reader(file)
+            .map_err(|error| format!("cannot parse {} as JSON: {error}", path.display()))?;
+        let id = document
+            .get("$id")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| {
+                format!(
+                    "{} has no `$id`; the contract version cannot be derived",
+                    path.display()
+                )
+            })?;
+        let found = id
+            .strip_prefix("urn:aibridge:contracts:")
+            .and_then(|rest| rest.split(':').next())
+            .filter(|segment| !segment.is_empty())
+            .ok_or_else(|| format!("{} has `$id` `{id}`, which does not start with urn:aibridge:contracts:<version>:", path.display()))?;
+        match &version {
+            None => version = Some(found.to_owned()),
+            Some(expected) if expected != found => {
+                return Err(format!(
+                    "{} declares contract version `{found}` but {file_name} declares `{expected}`; all inputs must agree",
+                    path.display()
+                ));
+            }
+            Some(_) => {}
+        }
+    }
+    let contract_version =
+        version.ok_or_else(|| "no contract inputs carried a version".to_owned())?;
+    let version_declaration = format!(
+        "/// The contract version these types were generated from.\n\
+         ///\n\
+         /// Emitted by `aibr-contract-gen`, not written by hand: it is parsed from\n\
+         /// the `$id` urn of the inputs above, so it cannot drift from the\n\
+         /// artefacts it describes.\n\
+         pub const CONTRACT_VERSION: &str = \"{}\";\n\n",
+        contract_version
+    );
 
     let mut header = String::new();
     header.push_str("// @generated — DO NOT EDIT.\n");
@@ -108,28 +186,47 @@ fn run() -> Result<String, String> {
     header.push_str("// Inputs:   contracts/v1/*.schema.json (");
     header.push_str(&inputs.len().to_string());
     header.push_str(" files, in the order listed below)\n");
-    header.push_str("//            ^ generated by scripts/generate-contracts.ts from the Zod schemas\n");
+    header.push_str(
+        "//            ^ generated by scripts/generate-contracts.ts from the Zod schemas\n",
+    );
     header.push_str("//              in src/config/schemas.ts and src/orchestration/schemas.ts,\n");
     header.push_str("//              which are the single source of truth (ADR 0008 §2.3).\n");
     header.push_str("//\n");
     header.push_str("// Regenerate with:\n");
     header.push_str("//     bun run generate:contracts\n");
-    header.push_str("// A hand edit to this file is a build failure, not a review comment: CI runs\n");
-    header.push_str("// `git diff --exit-code contracts/ router/src/contracts.rs` after generation.\n");
+    header.push_str(
+        "// A hand edit to this file is a build failure, not a review comment: CI runs\n",
+    );
+    header.push_str(
+        "// `git diff --exit-code contracts/ router/src/contracts.rs` after generation.\n",
+    );
     header.push_str("//\n");
     header.push_str("// Unknown keys are REJECTED, not stripped: every object schema carries\n");
     header.push_str("// `additionalProperties: false`, which typify renders as\n");
-    header.push_str("// `#[serde(deny_unknown_fields)]`. This makes the router strictly stricter\n");
-    header.push_str("// than the TypeScript engine, whose `z.object` schemas strip unknown keys. The\n");
-    header.push_str("// asymmetry is intentional (ADR 0008 §2.2 Tier 1) and is recorded at ADR 0008\n");
+    header
+        .push_str("// `#[serde(deny_unknown_fields)]`. This makes the router strictly stricter\n");
+    header.push_str(
+        "// than the TypeScript engine, whose `z.object` schemas strip unknown keys. The\n",
+    );
+    header.push_str(
+        "// asymmetry is intentional (ADR 0008 §2.2 Tier 1) and is recorded at ADR 0008\n",
+    );
     header.push_str("// §2.3 so it is not later \"fixed\" into symmetry.\n");
     header.push_str("//\n");
     header.push_str("// What these types do NOT enforce, and no consumer may assume they do:\n");
     header.push_str("//   * `.refine()` / `.superRefine()` invariants from the Zod source. JSON\n");
-    header.push_str("//     Schema cannot express them and they are absent from the artefacts. The\n");
-    header.push_str("//     TypeScript engine remains their sole authority (ADR 0008 §2.2 Tier 2).\n");
-    header.push_str("//   * `format`. ajv-core and typify both treat `format` as an annotation and\n");
-    header.push_str("//     neither asserts it, so `{ \"type\": \"string\", \"format\": \"uri\" }`\n");
+    header.push_str(
+        "//     Schema cannot express them and they are absent from the artefacts. The\n",
+    );
+    header.push_str(
+        "//     TypeScript engine remains their sole authority (ADR 0008 §2.2 Tier 2).\n",
+    );
+    header.push_str(
+        "//   * `format`. ajv-core and typify both treat `format` as an annotation and\n",
+    );
+    header.push_str(
+        "//     neither asserts it, so `{ \"type\": \"string\", \"format\": \"uri\" }`\n",
+    );
     header.push_str("//     generates a `String`. M7.3 must validate URL syntax explicitly.\n");
     header.push_str("//\n");
     header.push_str("// Type name per input file:\n");
@@ -139,7 +236,11 @@ fn run() -> Result<String, String> {
         header.push('\n');
     }
     header.push('\n');
+    header.push_str(&version_declaration);
 
+    // The body lands after the const because `prettyplease` formatted only the
+    // types: splicing a declaration in front of already-formatted text keeps both
+    // halves valid Rust without re-parsing a 3 MB file to put one item on top.
     let rendered = format!("{header}{body}");
 
     // Writing only on change keeps `cargo` and every editor from touching the
@@ -153,13 +254,17 @@ fn run() -> Result<String, String> {
             destination.display()
         ));
     }
-    fs::write(&destination, &rendered).map_err(|error| format!("cannot write {}: {error}", destination.display()))?;
+    fs::write(&destination, &rendered)
+        .map_err(|error| format!("cannot write {}: {error}", destination.display()))?;
     Ok(format!(
         "aibr-contract-gen: wrote {} types from {} inputs to {}",
         // `iter_types` yields `Type<'_>`, and `Type::name()` returns a `String`
         // by value. It is not a `Result` and not a reference, so neither
         // `.cloned()` nor `.ok()` applies.
-        type_space.iter_types().map(|generated| generated.name()).count(),
+        type_space
+            .iter_types()
+            .map(|generated| generated.name())
+            .count(),
         inputs.len(),
         destination.display()
     ))
@@ -176,8 +281,9 @@ fn run() -> Result<String, String> {
 /// `prettyplease` is the same formatter typify's own macro uses, so the committed
 /// file matches what `cargo expand` would produce.
 fn render(type_space: &TypeSpace) -> Result<String, String> {
-    let file: syn::File = syn::parse2(type_space.to_stream())
-        .map_err(|error| format!("typify emitted a token stream that is not a Rust module: {error}"))?;
+    let file: syn::File = syn::parse2(type_space.to_stream()).map_err(|error| {
+        format!("typify emitted a token stream that is not a Rust module: {error}")
+    })?;
     Ok(prettyplease::unparse(&file))
 }
 
@@ -188,14 +294,19 @@ fn render(type_space: &TypeSpace) -> Result<String, String> {
 /// `bun run generate:contracts` cannot be invoked from the wrong directory and
 /// write `contracts.rs` somewhere untracked.
 fn repository_root() -> Result<PathBuf, String> {
-    let manifest_directory = PathBuf::from(
-        std::env::var_os("CARGO_MANIFEST_DIR")
-            .ok_or_else(|| "CARGO_MANIFEST_DIR is unset; run this through `cargo run`".to_owned())?,
-    );
+    let manifest_directory =
+        PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").ok_or_else(|| {
+            "CARGO_MANIFEST_DIR is unset; run this through `cargo run`".to_owned()
+        })?);
     let root = manifest_directory
         .parent()
         .and_then(Path::parent)
-        .ok_or_else(|| format!("cannot derive the repository root from {}", manifest_directory.display()))?;
+        .ok_or_else(|| {
+            format!(
+                "cannot derive the repository root from {}",
+                manifest_directory.display()
+            )
+        })?;
     if !root.join("contracts/v1").is_dir() {
         return Err(format!(
             "{} does not look like the AIBridge repository root: contracts/v1 is missing",

@@ -76,6 +76,10 @@ pub mod auth;
 pub mod bind;
 pub mod config;
 pub mod error;
+/// M7.5's durable admission queue. Storage only — it decides nothing about
+/// retry timing (M7.6), drains nothing (M7.7), delivers nothing (M7.8), and
+/// authorizes nothing (§2.2).
+pub mod outbox;
 pub mod routes;
 pub mod validate;
 

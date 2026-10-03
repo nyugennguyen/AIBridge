@@ -139,6 +139,57 @@ if-addrs = { version = "=0.15.0", default-features = false }
 # process. `getrandom` is a thin wrapper over `getrandom(2)`/`arc4random_buf`.
 getrandom = { version = "=0.4.3", default-features = false }
 
+# --- M7.5: the durable admission queue ------------------------------------------
+#
+# `202` is only truthful if the row is committed before the response is written
+# (`SF-08`). That is not something a comment can assert, so the store is SQLite
+# and this is the dependency that provides it.
+#
+# `bundled` compiles SQLite from source and is REQUIRED, not an optimisation.
+# Without it `rusqlite` links the system `libsqlite3`, whose version is whatever
+# the host happened to install. That matters twice here: M7.9's matrix is a set
+# of Linux and Darwin images this repository does not build, and a `journal_mode
+# = WAL` that silently stays `delete` because the host's library is too old is a
+# durability regression that no test in `router/tests/` would notice, because the
+# tests would be asserting against the host's SQLite and the deployment would be
+# running against a different one. Compiling it in makes the store's behaviour a
+# property of this lockfile.
+#
+# `default-features = false` with an explicit list rather than the crate's
+# defaults. The defaults carry `backup`, `blob`, `series`, `trace`, `functions`,
+# `limits`, `hooks`, `unlock_notify`, `vtab`, `array`, `i128_blob` and the
+# `bundled-full` amalgamation, none of which this store calls; each one is C
+# surface area in a process gated at 32 MiB and in a build matrix that would have
+# to compile it nine times. `bundled` is the only one required.
+#
+# NOT enabled: `column_decltype` (no `SELECT *` in this module -- every query
+# names its columns, which is also what makes the schema readable in a diff) and
+# `modern-full` (it is `modern_sqlite` plus the features refused above).
+#
+# No `tokio` `sync`/`fs`/`io-util` features for this either. The connection is
+# held behind a `std::sync::Mutex` and no `.await` occurs while the lock is held,
+# so the store cannot deadlock against a suspension point, and it avoids adding a
+# runtime feature to buy a `Mutex` that is held for the length of one fsync.
+rusqlite = { version = "=0.40.2", default-features = false, features = ["bundled"] }
+
+# SHA-256, for one thing: the idempotency key of a `/report` row.
+#
+# `default-features = false` leaves `std` off. `Digest::digest` needs nothing from
+# the standard library beyond what `core` has, and the hex encoding is the one in
+# `crate::outbox` rather than a dependency that would exist only to format 32
+# bytes. `asm` is off so the build has no per-target C or asm shim to carry into
+# M7.9's `cargo zigbuild` matrix.
+#
+# Why a digest is needed at all: `/trigger` converges on `job_id`, because one
+# trigger creates one job and a repeated `job_id` is by definition the same job.
+# `/report` is not that shape -- a job produces SEVERAL reports (`running`,
+# `completed`, `failed`) and keying them on `job_id` would make
+# `ON CONFLICT DO NOTHING` silently discard every report after the first, which is
+# a lost callback to a peer rather than a converged retry. The key has to change
+# when the observation changes, and the only part of the observation that changes
+# is the payload.
+sha2 = { version = "=0.11.0", default-features = false }
+
 [dev-dependencies]
 # `Router::oneshot` is how every request test in `router/tests/` is driven: no
 # socket is created, so a test cannot pass because a listener happened to bind and

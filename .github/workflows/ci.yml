@@ -40,6 +40,31 @@ jobs:
       - name: Build
         run: bun run build
 
+      # ADR 0008 section 2.3. The generated contracts are COMMITTED so they are
+      # reviewable in a pull request, which means a hand edit is indistinguishable
+      # from a stale artefact unless something regenerates and diffs. This step is
+      # the whole reason they are committed.
+      #
+      # Its own named step so a failure names the invariant: a regeneration that
+      # moved, rather than a test that happened to fail nearby.
+      - name: Contracts reproducible
+        run: |
+          bun run generate:contracts
+          git diff --exit-code contracts/ router/src/contracts.rs
+
+      # The cross-language half. `router/tests/fixtures.rs` re-derives the
+      # accept/reject vector from the generated Rust types and asserts it equals
+      # the committed one, so this is where a TypeScript/Rust contract drift is
+      # caught. It must run AFTER the reproducibility step: if generation moves
+      # the artefacts, a parity failure would be reported as a parity problem.
+      - name: Rust contract parity
+        run: |
+          bun run generate:parity-vector
+          cd router
+          cargo fmt --check
+          cargo clippy --all-targets -- -D warnings
+          cargo test
+
       - name: CLI smoke test
         run: bun dist/cli.js --help
 

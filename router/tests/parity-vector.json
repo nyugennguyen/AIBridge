@@ -1,0 +1,17 @@
+{
+  "approval.v1.json": true,
+  "artifact.v1.json": true,
+  "command.v1.json": true,
+  "controller-lease.v1.json": true,
+  "dispatch.v1.json": true,
+  "event.v1.json": true,
+  "memory.v1.json": true,
+  "mesh.v1.json": true,
+  "node.v1.json": true,
+  "project.v1.json": true,
+  "role.v1.json": true,
+  "rule.v1.json": true,
+  "run.v1.json": true,
+  "session.v1.json": true,
+  "task.v1.json": true
+}

@@ -1,0 +1,47 @@
+{
+  "schema": "aibridge.bench.mem/1",
+  "generatedAt": "2026-10-03T08:15:23Z",
+  "host": { "os": "Darwin", "arch": "arm64", "kernel": "Darwin 25.6.0", "cpus": "8" },
+  "units": {"rssSource": "ps -o rss= -p <pid> (KiB on macOS and Linux)", "reported": "MiB", "conversion": "MiB = KiB / 1024", "quantity": "absolute level, never a delta"},
+  "measurementRule": "median and p95 of absolute RSS levels; >=1 Hz for >=60 s; never a difference between two samples (ADR 0008 section 1)",
+  "sampling": { "intervalSeconds": 1, "requestedSamples": 60, "ticksObserved": 60, "durationSeconds": 60.0, "shortSample": false, "minimum": { "samples": 60, "intervalSeconds": 1, "durationSeconds": 60 } },
+  "commandLine": "bench/mem.sh --samples 60 --interval 1 --pid aibr-router-stub --out /tmp/stub.XUTTXr/stub.json",
+  "processes": {
+      "aibr-router-stub": {
+        "matcher": "aibr-router-stub",
+        "pids": [62794],
+        "pidCount": 1,
+        "matchKind": "argv",
+        "observedTicks": 60,
+        "absentTicks": 0,
+        "absent": false,
+        "rssMib": {
+          "n": 60,
+          "min": 1.078125,
+          "max": 3.750000,
+          "mean": 2.169792,
+          "stdev": 0.928637,
+          "median": 1.906250,
+          "p5": 1.078125,
+          "p95": 3.562500,
+          "p99": 3.750000
+        }
+      }
+    },
+  "sum": { "primary": true, "definition": "per-tick sum over slots that were alive in at least one tick, summed at a single instant", "slotsIncluded": ["aibr-router-stub"], "completeTicks": 60, "ticksObserved": 60, "rssMib": {
+      "n": 60,
+      "min": 1.078125,
+      "max": 3.750000,
+      "mean": 2.169792,
+      "stdev": 0.928637,
+      "median": 1.906250,
+      "p5": 1.078125,
+      "p95": 3.562500,
+      "p99": 3.750000
+    } },
+  "series": {
+    "aibr-router-stub": [3.687500, 3.750000, 3.375000, 3.406250, 3.515625, 3.500000, 3.531250, 3.562500, 3.562500, 3.562500, 3.562500, 3.562500, 3.562500, 3.562500, 3.562500, 3.562500, 3.562500, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.281250, 1.281250, 1.265625, 1.265625, 1.265625, 1.265625, 1.265625, 1.265625, 1.265625, 1.265625, 1.078125, 1.078125, 1.078125, 1.078125, 1.078125, 1.078125, 1.078125],
+    "sum": [3.687500, 3.750000, 3.375000, 3.406250, 3.515625, 3.500000, 3.531250, 3.562500, 3.562500, 3.562500, 3.562500, 3.562500, 3.562500, 3.562500, 3.562500, 3.562500, 3.562500, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.906250, 1.281250, 1.281250, 1.265625, 1.265625, 1.265625, 1.265625, 1.265625, 1.265625, 1.265625, 1.265625, 1.078125, 1.078125, 1.078125, 1.078125, 1.078125, 1.078125, 1.078125]
+  },
+  "quantity": "router stub alone, loaded"
+}

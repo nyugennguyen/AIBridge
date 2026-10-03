@@ -1,0 +1,24 @@
+{
+  "schema": "aibridge.spike.load-profile/1",
+  "status": "SPIKE-LOCAL PROFILE -- READ Docs/spikes/milestone-7-router-spike.md section 'Protocol deviations' BEFORE CITING ANY FIGURE.",
+  "whyThisFileExists": "Milestone 7 §5.1.1 states that 'the load profile is fixed in bench/baseline/capture-config.json and must not change mid-milestone'. bench/baseline/capture-config.json is a bridge configuration (agent_id, bridge, opencode, security, permissions, projects, agents, timeouts, planning) and contains NO load profile of any kind: no rate, no request mix, no payload. The M7.0 deliverable therefore does not contain the artefact the plan names. Rather than silently editing M7.0's committed baseline config or measuring on an undeclared workload, this spike declares its own profile here, applies it identically to every topology it captures, and reports the missing committed profile as a finding.",
+  "rateJustification": "5/s over HTTP plus 5/s in-process is chosen to pin the allocator plateau without approaching saturation, so the level that varies between captures is the code and not throughput. It is a spike choice, not a reviewed one. If M7.16 adopts a different rate it must re-baseline: the level is a function of the rate, so a rate change invalidates cross-profile comparison in both directions.",
+  "inProcessRatePerSecond": 5,
+  "httpRatePerSecond": 5,
+  "httpMethod": "POST",
+  "httpPath": "/trigger",
+  "warmupSeconds": 20,
+  "sampleSeconds": 60,
+  "sampleIntervalSeconds": 1,
+  "capturesPerQuantity": 3,
+  "payload": {
+    "source_agent_id": "test-vps",
+    "target_agent_id": "dev-main",
+    "capability": "testing",
+    "project_dir": "/Users/mac/Projects/AIBrigde",
+    "prompt": "M7.1 spike load: fixed synthetic trigger payload, identical in every topology.",
+    "callback_url": "http://127.0.0.1:8788/report",
+    "timeout_seconds": 1800,
+    "metadata": { "plan_status": "approved" }
+  }
+}

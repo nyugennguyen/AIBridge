@@ -28,9 +28,16 @@ use aibr_router::config::RouterConfig;
 use aibr_router::routes::{self, AppState};
 
 /// What the process should do, decided by the things above it.
+///
+/// The `RouterConfig` is boxed. `BridgeConfig` is eight nested structs and measures
+/// 448 bytes, so carrying it inline makes `Startup` a 448-byte enum that gets moved
+/// twice — once out of `startup`, once into `serve` — for a value that lives for the
+/// life of the process and is never moved again. This is also why the crate-level
+/// `large_enum_variant` allowance is scoped to the generated module and not to the
+/// crate: a hand-written enum gets the lint, as here.
 enum Startup {
     /// Config loaded, preflight passed, socket bound.
-    Serve(tokio::net::TcpListener, RouterConfig),
+    Serve(tokio::net::TcpListener, Box<RouterConfig>),
     /// Configuration or bind preflight failed. The message is safe to print: both
     /// sources are operator configuration, and neither carries the bearer token
     /// (see [`aibr_router::config::ConfigError`], whose variants cannot hold it).
@@ -81,7 +88,7 @@ async fn startup() -> Startup {
         }
     };
 
-    Startup::Serve(listener, config)
+    Startup::Serve(listener, Box::new(config))
 }
 
 /// Serve until the supervisor asks the process to stop.
@@ -91,7 +98,7 @@ async fn startup() -> Startup {
 /// on the floor — including a `POST /trigger` that M7.5 will have made durable, so
 /// the caller saw no `202` and the work exists. `axum::serve` stops accepting,
 /// finishes in-flight requests, and then returns.
-async fn serve(listener: tokio::net::TcpListener, config: RouterConfig) {
+async fn serve(listener: tokio::net::TcpListener, config: Box<RouterConfig>) {
     let app = routes::build(AppState::from_config(&config));
 
     if let Err(error) = axum::serve(listener, app)

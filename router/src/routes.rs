@@ -129,7 +129,9 @@ impl AppState {
     /// obvious call to omit. A handler that forgets is then a route that answers
     /// without ever having consulted `auth`.
     fn authenticate(&self, headers: &HeaderMap) -> Result<(), ApiError> {
-        let presented = headers.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok());
+        let presented = headers
+            .get(header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok());
         if self.auth.accepts(presented) {
             Ok(())
         } else {
@@ -177,12 +179,21 @@ pub fn build(state: AppState) -> Router {
 /// This is a semantic difference from the engine's route and it is intentional. It
 /// is recorded in `Docs/implementation-reports/m7.3-progress.md` so the M7.7 cutover
 /// does not discover it as a surprise.
-async fn health() -> Response {
-    (
+///
+/// Behind the bearer like everything else. A liveness probe that answers
+/// unauthenticated tells an unauthenticated caller that this process is a live
+/// AIBridge bridge, which is reconnaissance with no cost to the attacker — and the
+/// engine's `/health` currently answers anyone who can reach the socket, because
+/// `createApp()` installs no global auth hook. Enclosing it here is free: a
+/// supervisor already holds the token.
+async fn health(State(state): State<AppState>, headers: HeaderMap) -> Result<Response, ApiError> {
+    state.authenticate(&headers)?;
+
+    Ok((
         StatusCode::OK,
         Json(json!({ "ok": true, "schemaVersion": CONTRACT_VERSION })),
     )
-        .into_response()
+        .into_response())
 }
 
 /// `GET /jobs/{id}` — always `404`, and always after a charset check.
@@ -279,10 +290,7 @@ async fn report(
     // otherwise reach the same `join()`.
     let report: ReportCallback =
         validate::payload(&document, "request body is not a valid ReportCallback")?;
-    validate::require_job_id(
-        &report.job_id,
-        "job_id must match [A-Za-z0-9_-]{1,128}",
-    )?;
+    validate::require_job_id(&report.job_id, "job_id must match [A-Za-z0-9_-]{1,128}")?;
 
     Ok((
         StatusCode::ACCEPTED,
@@ -345,7 +353,8 @@ async fn capped_body(headers: &HeaderMap, body: Body) -> Result<Bytes, ApiError>
 /// a poor place to economise.
 fn mint_job_id() -> Result<String, ApiError> {
     let mut bytes = [0_u8; 16];
-    getrandom::fill(&mut bytes).map_err(|_| ApiError::InvalidPayload("cannot allocate a job id"))?;
+    getrandom::fill(&mut bytes)
+        .map_err(|_| ApiError::InvalidPayload("cannot allocate a job id"))?;
 
     let mut encoded = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
@@ -365,7 +374,9 @@ mod tests {
     #[test]
     fn minted_job_ids_are_usable_job_ids() {
         for _ in 0..64 {
-            assert!(valid_job_id(&mint_job_id().expect("the OS CSPRNG is available")));
+            assert!(valid_job_id(
+                &mint_job_id().expect("the OS CSPRNG is available")
+            ));
         }
     }
 

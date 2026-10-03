@@ -1,13 +1,45 @@
 //! `aibr-router` — the polyglot ingress admission router (ADR 0008).
 //!
-//! M7.2 lays the foundation only: a compile-able crate carrying the generated
-//! contract types. Routes, authentication, authorization and SQLite are M7.3
-//! and later, and are deliberately absent.
+//! M7.3 adds the serving surface: four stateless routes, the structural gate in
+//! front of them, and the preflight that decides whether this process is allowed
+//! to have a listening socket at all. M7.2 laid the contract types underneath.
 //!
-//! What this crate is *not*: an authorization component. ADR 0008 2.2 makes the
-//! router a structural gate — presence, type, enum membership, size bounds,
-//! unknown-key rejection — and reserves every semantic decision for the
-//! TypeScript engine, which re-runs Zod on the delivered payload.
+//! SQLite admission is M7.5. The worker is M7.7. Neither is here.
+//!
+//! # What this crate is NOT: an authorization authority
+//!
+//! This is the constraint the whole module is arranged around, and it is stated
+//! here rather than in a submodule because it is the constraint a future
+//! contributor is most likely to violate by accident.
+//!
+//! ADR 0008 §2.2 splits validation in two:
+//!
+//! | Tier | Component | Question | Authority |
+//! | --- | --- | --- | --- |
+//! | 1 | `aibr-router` | "Is this shaped like a valid request?" | rejection filter ONLY |
+//! | 2 | `aibr worker` (Bun) | "Is this caller allowed to do this?" | SOLE authority |
+//!
+//! Tier 1 may reject a request for being *shaped* wrong. It may never accept one
+//! on the grounds that the request is *allowed*. Concretely, this crate:
+//!
+//! - does **not** call, port, or approximate `assertSourceAuthorized`
+//!   ([`src/security/source-authorization.ts`](../../src/security/source-authorization.ts))
+//! - does **not** decide allowlist membership. [`validate::canonical_project_dir`]
+//!   asks a strictly narrower question — "does this path escape every configured
+//!   project root through a symlink" — and answers it with one indistinguishable
+//!   refusal for every failure, so it discloses nothing about the allowlist and
+//!   grants nothing from it.
+//! - does **not** implement plan approval, and in particular does **not** treat
+//!   `plan_status: "approved"` in `metadata` as a trust signal. `F-05` disposes of
+//!   legacy approval fields as *assertions*; a component with no identity model
+//!   that reads them as credentials relocates that High finding rather than
+//!   closing it (ADR 0008 §2.2).
+//! - does **not** read project contents, and does **not** resolve a job.
+//!
+//! The test `a_structurally_valid_trigger_from_an_unauthorized_source_is_still_admitted`
+//! in `router/tests/gates.rs` asserts that last boundary from the outside. It is
+//! the one test in this crate that exists to fail if somebody later makes the
+//! router smarter than it is allowed to be.
 
 // `large_enum_variant` is allowed HERE, on the generated module, and nowhere
 // else -- a hand-written enum in this crate still gets the lint.
@@ -39,6 +71,13 @@
 // skip a second file later.
 #[rustfmt::skip]
 pub mod contracts;
+
+pub mod auth;
+pub mod bind;
+pub mod config;
+pub mod error;
+pub mod routes;
+pub mod validate;
 
 /// The contract version this binary was generated against.
 ///

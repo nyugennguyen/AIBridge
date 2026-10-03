@@ -9,26 +9,31 @@
       "anyOf": [
         {
           "type": "number",
-          "const": 1
+          "const": 1,
+          "title": "ProjectSchemaVersion0"
         },
         {
           "type": "number",
-          "const": 2
+          "const": 2,
+          "title": "ProjectSchemaVersion1"
         }
       ]
     },
     "projectId": {
       "type": "string",
-      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+      "title": "ProjectProjectId"
     },
     "meshId": {
       "type": "string",
-      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+      "title": "ProjectMeshId"
     },
     "name": {
       "type": "string",
       "minLength": 1,
-      "maxLength": 256
+      "maxLength": 256,
+      "title": "ProjectName"
     },
     "pathBindings": {
       "maxItems": 128,
@@ -40,38 +45,46 @@
             "anyOf": [
               {
                 "type": "number",
-                "const": 1
+                "const": 1,
+                "title": "ProjectPathBindingsSchemaVersion0"
               },
               {
                 "type": "number",
-                "const": 2
+                "const": 2,
+                "title": "ProjectPathBindingsSchemaVersion1"
               }
             ]
           },
           "projectPathId": {
             "type": "string",
-            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+            "title": "ProjectPathBindingsProjectPathId"
           },
           "projectId": {
             "type": "string",
-            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+            "title": "ProjectPathBindingsProjectId"
           },
           "nodeId": {
             "type": "string",
-            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+            "title": "ProjectPathBindingsNodeId"
           },
           "configuredPath": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 4096
+            "maxLength": 4096,
+            "title": "ProjectPathBindingsConfiguredPath"
           },
           "allowedCapabilities": {
             "maxItems": 128,
             "type": "array",
             "items": {
               "type": "string",
-              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
-            }
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "title": "ProjectPathBindingsAllowedCapabilities"
+            },
+            "title": "ProjectPathBindingsAllowedCapabilities"
           }
         },
         "required": [
@@ -83,7 +96,8 @@
           "allowedCapabilities"
         ],
         "additionalProperties": false
-      }
+      },
+      "title": "ProjectPathBindings"
     }
   },
   "required": [

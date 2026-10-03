@@ -1,0 +1,61 @@
+# `aibr-contract-gen` — step two of the ADR 0008 2.3 contract chain.
+#
+# A standalone binary rather than a `build.rs` script, and the reason is the
+# acceptance criterion rather than taste: `build.rs` writes its output into
+# `OUT_DIR`, which is inside `target/` and therefore untracked. `git diff
+# --exit-code router/src/contracts.rs` would then be vacuously clean while the
+# committed file silently aged, and ADR 0008 2.3 requires the artefact to be
+# reviewable in a pull-request diff. A committed generator makes
+# `bun run generate:contracts && git diff --exit-code` one command that means
+# what it says.
+#
+# Kept out of `default-members` (see ../Cargo.toml) so it is never compiled by
+# the router's own build/clippy/fmt gates.
+
+[package]
+name = "aibr-contract-gen"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.94"
+publish = false
+description = "Generate router/src/contracts.rs from contracts/v1/*.schema.json"
+
+[[bin]]
+name = "aibr-contract-gen"
+path = "src/main.rs"
+
+[dependencies]
+schemars = { version = "=0.8.22", default-features = false }
+serde = { version = "=1.0.228", features = ["derive"], default-features = false }
+serde_json = { version = "=1.0.150", features = ["std"], default-features = false }
+# `macro` is disabled deliberately: this crate uses the `TypeSpace` builder API
+# rather than `import_types!`, because the macro inlines its input at compile
+# time and cannot write a committed file. Leaving the feature on would pull the
+# proc-macro toolchain in for nothing.
+typify = { version = "=0.8.0", default-features = false }
+# `prettyplease` renders the `TokenStream` `TypeSpace::to_stream` returns into
+# the text that is written to disk. typify does not re-export it, so it is a
+# direct dependency. Its default features are off because it pulls `syn`'s
+# full feature set through its own manifest.
+prettyplease = { version = "=0.2.36", default-features = false }
+proc-macro2 = { version = "=1.0.106", default-features = false }
+# Pinned to EXACTLY the version typify 0.8.0 and prettyplease 0.2.36 resolve to
+# (2.0.119), not to "latest".
+#
+# This pin is load-bearing and was originally wrong at =3.0.6, which compiles to
+# five errors of the same shape: typify's `ast_struct!` expands against syn 2.x's
+# `syn::File`, and a syn 3.x `File` is a different type, so every macro site
+# reports a mismatched-type error while typify itself is fine. Both syn 2.0.119
+# and syn 3.0.6 then sit in the dependency graph and cargo names neither as the
+# culprit, which is why the diagnostic is worth this comment.
+#
+# `full` is needed because `syn::File` must accept the item list typify emits,
+# and `parsing` + `printing` + `proc-macro` because `render` calls
+# `syn::parse2` on typify's `TokenStream` and hands the result to
+# `prettyplease::unparse`. Those three are what turn a token stream into a
+# parseable, formattable module; without them `syn::parse2` does not exist and
+# the error names a missing function rather than a missing feature.
+#
+# `extra-traits` is deliberately omitted: prettyplease formats, it does not
+# compare, and the extra `Debug` impls cost compile time for nothing.
+syn = { version = "=2.0.119", features = ["full", "parsing", "printing", "proc-macro"], default-features = false }

@@ -7,17 +7,20 @@
   "properties": {
     "id": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "title": "AgentConfigId"
     },
     "url": {
       "type": "string",
-      "format": "uri"
+      "format": "uri",
+      "title": "AgentConfigUrl"
     },
     "capabilities": {
       "type": "array",
       "items": {
         "type": "string",
-        "minLength": 1
+        "minLength": 1,
+        "title": "AgentConfigCapabilities"
       }
     }
   },

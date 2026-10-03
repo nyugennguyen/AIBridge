@@ -7,17 +7,20 @@
   "properties": {
     "id": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "title": "ProjectConfigId"
     },
     "path": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "title": "ProjectConfigPath"
     },
     "capabilities": {
       "type": "array",
       "items": {
         "type": "string",
-        "minLength": 1
+        "minLength": 1,
+        "title": "ProjectConfigCapabilities"
       }
     }
   },

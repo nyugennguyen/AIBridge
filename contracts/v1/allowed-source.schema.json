@@ -7,13 +7,15 @@
   "properties": {
     "source_agent_id": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "title": "AllowedSourceSourceAgentId"
     },
     "capabilities": {
       "type": "array",
       "items": {
         "type": "string",
-        "minLength": 1
+        "minLength": 1,
+        "title": "AllowedSourceCapabilities"
       }
     },
     "requires_plan_approval": {
@@ -21,7 +23,8 @@
       "type": "array",
       "items": {
         "type": "string",
-        "minLength": 1
+        "minLength": 1,
+        "title": "AllowedSourceRequiresPlanApproval"
       }
     }
   },

@@ -9,26 +9,31 @@
       "anyOf": [
         {
           "type": "number",
-          "const": 1
+          "const": 1,
+          "title": "NodeSchemaVersion0"
         },
         {
           "type": "number",
-          "const": 2
+          "const": 2,
+          "title": "NodeSchemaVersion1"
         }
       ]
     },
     "nodeId": {
       "type": "string",
-      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+      "title": "NodeNodeId"
     },
     "meshId": {
       "type": "string",
-      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+      "title": "NodeMeshId"
     },
     "displayName": {
       "type": "string",
       "minLength": 1,
-      "maxLength": 256
+      "maxLength": 256,
+      "title": "NodeDisplayName"
     },
     "enrollment": {
       "oneOf": [
@@ -37,33 +42,39 @@
           "properties": {
             "status": {
               "type": "string",
-              "const": "enrolled"
+              "const": "enrolled",
+              "title": "NodeEnrollment0Status"
             },
             "enrolledAt": {
               "type": "string",
-              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,9})?Z$"
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,9})?Z$",
+              "title": "NodeEnrollment0EnrolledAt"
             }
           },
           "required": [
             "status",
             "enrolledAt"
           ],
-          "additionalProperties": false
+          "additionalProperties": false,
+          "title": "NodeEnrollment0"
         },
         {
           "type": "object",
           "properties": {
             "status": {
               "type": "string",
-              "const": "revoked"
+              "const": "revoked",
+              "title": "NodeEnrollment1Status"
             },
             "enrolledAt": {
               "type": "string",
-              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,9})?Z$"
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,9})?Z$",
+              "title": "NodeEnrollment1EnrolledAt"
             },
             "revokedAt": {
               "type": "string",
-              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,9})?Z$"
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,9})?Z$",
+              "title": "NodeEnrollment1RevokedAt"
             }
           },
           "required": [
@@ -71,7 +82,8 @@
             "enrolledAt",
             "revokedAt"
           ],
-          "additionalProperties": false
+          "additionalProperties": false,
+          "title": "NodeEnrollment1"
         }
       ]
     },
@@ -84,12 +96,14 @@
           "namespace": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 256
+            "maxLength": 256,
+            "title": "NodeExternalReferencesNamespace"
           },
           "id": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 4096
+            "maxLength": 4096,
+            "title": "NodeExternalReferencesId"
           }
         },
         "required": [
@@ -97,7 +111,8 @@
           "id"
         ],
         "additionalProperties": false
-      }
+      },
+      "title": "NodeExternalReferences"
     }
   },
   "required": [

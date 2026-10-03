@@ -10,19 +10,23 @@
     },
     "job_id": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "title": "TriggerResponseJobId"
     },
     "target_agent_id": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "title": "TriggerResponseTargetAgentId"
     },
     "opencode_session_id": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "title": "TriggerResponseOpencodeSessionId"
     },
     "status_url": {
       "type": "string",
-      "format": "uri"
+      "format": "uri",
+      "title": "TriggerResponseStatusUrl"
     },
     "status": {
       "type": "string",
@@ -30,7 +34,8 @@
         "accepted",
         "blocked",
         "failed"
-      ]
+      ],
+      "title": "TriggerResponseStatus"
     },
     "task_id": {
       "type": "string"

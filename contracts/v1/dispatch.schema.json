@@ -9,11 +9,13 @@
       "anyOf": [
         {
           "type": "number",
-          "const": 1
+          "const": 1,
+          "title": "DispatchSchemaVersion0"
         },
         {
           "type": "number",
-          "const": 2
+          "const": 2,
+          "title": "DispatchSchemaVersion1"
         }
       ]
     },
@@ -24,55 +26,67 @@
           "anyOf": [
             {
               "type": "number",
-              "const": 1
+              "const": 1,
+              "title": "DispatchEnvelopeSchemaVersion0"
             },
             {
               "type": "number",
-              "const": 2
+              "const": 2,
+              "title": "DispatchEnvelopeSchemaVersion1"
             }
           ]
         },
         "dispatchId": {
           "type": "string",
-          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+          "title": "DispatchEnvelopeDispatchId"
         },
         "attempt": {
           "type": "integer",
           "exclusiveMinimum": 0,
-          "maximum": 9007199254740991
+          "maximum": 9007199254740991,
+          "title": "DispatchEnvelopeAttempt"
         },
         "projectId": {
           "type": "string",
-          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+          "title": "DispatchEnvelopeProjectId"
         },
         "runId": {
           "type": "string",
-          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+          "title": "DispatchEnvelopeRunId"
         },
         "taskId": {
           "type": "string",
-          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+          "title": "DispatchEnvelopeTaskId"
         },
         "targetNodeId": {
           "type": "string",
-          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+          "title": "DispatchEnvelopeTargetNodeId"
         },
         "installationId": {
           "type": "string",
-          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+          "title": "DispatchEnvelopeInstallationId"
         },
         "runtimeKind": {
           "type": "string",
-          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+          "title": "DispatchEnvelopeRuntimeKind"
         },
         "projectPathId": {
           "type": "string",
-          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+          "title": "DispatchEnvelopeProjectPathId"
         },
         "prompt": {
           "type": "string",
           "minLength": 1,
-          "maxLength": 65536
+          "maxLength": 65536,
+          "title": "DispatchEnvelopePrompt"
         },
         "roleSnapshot": {
           "type": "object",
@@ -81,57 +95,69 @@
               "anyOf": [
                 {
                   "type": "number",
-                  "const": 1
+                  "const": 1,
+                  "title": "DispatchEnvelopeRoleSnapshotSchemaVersion0"
                 },
                 {
                   "type": "number",
-                  "const": 2
+                  "const": 2,
+                  "title": "DispatchEnvelopeRoleSnapshotSchemaVersion1"
                 }
               ]
             },
             "roleId": {
               "type": "string",
-              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "title": "DispatchEnvelopeRoleSnapshotRoleId"
             },
             "templateVersion": {
               "type": "integer",
               "exclusiveMinimum": 0,
-              "maximum": 9007199254740991
+              "maximum": 9007199254740991,
+              "title": "DispatchEnvelopeRoleSnapshotTemplateVersion"
             },
             "projectId": {
               "type": "string",
-              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "title": "DispatchEnvelopeRoleSnapshotProjectId"
             },
             "name": {
               "type": "string",
               "minLength": 1,
-              "maxLength": 256
+              "maxLength": 256,
+              "title": "DispatchEnvelopeRoleSnapshotName"
             },
             "purpose": {
               "type": "string",
               "minLength": 1,
-              "maxLength": 4096
+              "maxLength": 4096,
+              "title": "DispatchEnvelopeRoleSnapshotPurpose"
             },
             "instructions": {
               "type": "string",
               "minLength": 1,
-              "maxLength": 65536
+              "maxLength": 65536,
+              "title": "DispatchEnvelopeRoleSnapshotInstructions"
             },
             "requiredCapabilities": {
               "maxItems": 128,
               "type": "array",
               "items": {
                 "type": "string",
-                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
-              }
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                "title": "DispatchEnvelopeRoleSnapshotRequiredCapabilities"
+              },
+              "title": "DispatchEnvelopeRoleSnapshotRequiredCapabilities"
             },
             "preferredRuntimeKinds": {
               "maxItems": 128,
               "type": "array",
               "items": {
                 "type": "string",
-                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
-              }
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                "title": "DispatchEnvelopeRoleSnapshotPreferredRuntimeKinds"
+              },
+              "title": "DispatchEnvelopeRoleSnapshotPreferredRuntimeKinds"
             },
             "contextSelectionPolicyReference": {
               "type": "object",
@@ -139,12 +165,14 @@
                 "namespace": {
                   "type": "string",
                   "minLength": 1,
-                  "maxLength": 256
+                  "maxLength": 256,
+                  "title": "DispatchEnvelopeRoleSnapshotContextSelectionPolicyReferenceNamespace"
                 },
                 "id": {
                   "type": "string",
                   "minLength": 1,
-                  "maxLength": 4096
+                  "maxLength": 4096,
+                  "title": "DispatchEnvelopeRoleSnapshotContextSelectionPolicyReferenceId"
                 }
               },
               "required": [
@@ -161,16 +189,20 @@
                   "type": "array",
                   "items": {
                     "type": "string",
-                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
-                  }
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                    "title": "DispatchEnvelopeRoleSnapshotPermissionRestrictionsAllowedCapabilities"
+                  },
+                  "title": "DispatchEnvelopeRoleSnapshotPermissionRestrictionsAllowedCapabilities"
                 },
                 "deniedCapabilities": {
                   "maxItems": 128,
                   "type": "array",
                   "items": {
                     "type": "string",
-                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
-                  }
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                    "title": "DispatchEnvelopeRoleSnapshotPermissionRestrictionsDeniedCapabilities"
+                  },
+                  "title": "DispatchEnvelopeRoleSnapshotPermissionRestrictionsDeniedCapabilities"
                 },
                 "approvalRequirements": {
                   "type": "object",
@@ -186,8 +218,10 @@
                       "type": "array",
                       "items": {
                         "type": "string",
-                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
-                      }
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                        "title": "DispatchEnvelopeRoleSnapshotPermissionRestrictionsApprovalRequirementsCapabilities"
+                      },
+                      "title": "DispatchEnvelopeRoleSnapshotPermissionRestrictionsApprovalRequirementsCapabilities"
                     }
                   },
                   "required": [
@@ -212,79 +246,92 @@
                   "properties": {
                     "kind": {
                       "type": "string",
-                      "const": "user"
+                      "const": "user",
+                      "title": "DispatchEnvelopeRoleSnapshotAuthor0Kind"
                     },
                     "userId": {
                       "type": "string",
-                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                      "title": "DispatchEnvelopeRoleSnapshotAuthor0UserId"
                     }
                   },
                   "required": [
                     "kind",
                     "userId"
                   ],
-                  "additionalProperties": false
+                  "additionalProperties": false,
+                  "title": "DispatchEnvelopeRoleSnapshotAuthor0"
                 },
                 {
                   "type": "object",
                   "properties": {
                     "kind": {
                       "type": "string",
-                      "const": "node"
+                      "const": "node",
+                      "title": "DispatchEnvelopeRoleSnapshotAuthor1Kind"
                     },
                     "nodeId": {
                       "type": "string",
-                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                      "title": "DispatchEnvelopeRoleSnapshotAuthor1NodeId"
                     }
                   },
                   "required": [
                     "kind",
                     "nodeId"
                   ],
-                  "additionalProperties": false
+                  "additionalProperties": false,
+                  "title": "DispatchEnvelopeRoleSnapshotAuthor1"
                 },
                 {
                   "type": "object",
                   "properties": {
                     "kind": {
                       "type": "string",
-                      "const": "session"
+                      "const": "session",
+                      "title": "DispatchEnvelopeRoleSnapshotAuthor2Kind"
                     },
                     "sessionId": {
                       "type": "string",
-                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                      "title": "DispatchEnvelopeRoleSnapshotAuthor2SessionId"
                     }
                   },
                   "required": [
                     "kind",
                     "sessionId"
                   ],
-                  "additionalProperties": false
+                  "additionalProperties": false,
+                  "title": "DispatchEnvelopeRoleSnapshotAuthor2"
                 },
                 {
                   "type": "object",
                   "properties": {
                     "kind": {
                       "type": "string",
-                      "const": "system"
+                      "const": "system",
+                      "title": "DispatchEnvelopeRoleSnapshotAuthor3Kind"
                     },
                     "name": {
                       "type": "string",
                       "minLength": 1,
-                      "maxLength": 256
+                      "maxLength": 256,
+                      "title": "DispatchEnvelopeRoleSnapshotAuthor3Name"
                     }
                   },
                   "required": [
                     "kind",
                     "name"
                   ],
-                  "additionalProperties": false
+                  "additionalProperties": false,
+                  "title": "DispatchEnvelopeRoleSnapshotAuthor3"
                 }
               ]
             },
             "createdAt": {
               "type": "string",
-              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,9})?Z$"
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,9})?Z$",
+              "title": "DispatchEnvelopeRoleSnapshotCreatedAt"
             }
           },
           "required": [
@@ -314,26 +361,31 @@
                 "anyOf": [
                   {
                     "type": "number",
-                    "const": 1
+                    "const": 1,
+                    "title": "DispatchEnvelopeRuleSnapshotsSchemaVersion0"
                   },
                   {
                     "type": "number",
-                    "const": 2
+                    "const": 2,
+                    "title": "DispatchEnvelopeRuleSnapshotsSchemaVersion1"
                   }
                 ]
               },
               "ruleId": {
                 "type": "string",
-                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                "title": "DispatchEnvelopeRuleSnapshotsRuleId"
               },
               "templateVersion": {
                 "type": "integer",
                 "exclusiveMinimum": 0,
-                "maximum": 9007199254740991
+                "maximum": 9007199254740991,
+                "title": "DispatchEnvelopeRuleSnapshotsTemplateVersion"
               },
               "projectId": {
                 "type": "string",
-                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                "title": "DispatchEnvelopeRuleSnapshotsProjectId"
               },
               "enabled": {
                 "type": "boolean"
@@ -344,23 +396,28 @@
                   "taskTitlePattern": {
                     "type": "string",
                     "minLength": 1,
-                    "maxLength": 256
+                    "maxLength": 256,
+                    "title": "DispatchEnvelopeRuleSnapshotsMatchTaskTitlePattern"
                   },
                   "requestedCapabilitiesAny": {
                     "maxItems": 128,
                     "type": "array",
                     "items": {
                       "type": "string",
-                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
-                    }
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                      "title": "DispatchEnvelopeRuleSnapshotsMatchRequestedCapabilitiesAny"
+                    },
+                    "title": "DispatchEnvelopeRuleSnapshotsMatchRequestedCapabilitiesAny"
                   },
                   "runtimeKinds": {
                     "maxItems": 128,
                     "type": "array",
                     "items": {
                       "type": "string",
-                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
-                    }
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                      "title": "DispatchEnvelopeRuleSnapshotsMatchRuntimeKinds"
+                    },
+                    "title": "DispatchEnvelopeRuleSnapshotsMatchRuntimeKinds"
                   }
                 },
                 "additionalProperties": false
@@ -372,15 +429,18 @@
                     "properties": {
                       "kind": {
                         "type": "string",
-                        "const": "restrict"
+                        "const": "restrict",
+                        "title": "DispatchEnvelopeRuleSnapshotsEffect0Kind"
                       },
                       "deniedCapabilities": {
                         "maxItems": 128,
                         "type": "array",
                         "items": {
                           "type": "string",
-                          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
-                        }
+                          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                          "title": "DispatchEnvelopeRuleSnapshotsEffect0DeniedCapabilities"
+                        },
+                        "title": "DispatchEnvelopeRuleSnapshotsEffect0DeniedCapabilities"
                       },
                       "requireApprovalForDestructiveEffects": {
                         "type": "boolean"
@@ -395,14 +455,16 @@
                       "requireApprovalForDestructiveEffects",
                       "requireApprovalForExternalEffects"
                     ],
-                    "additionalProperties": false
+                    "additionalProperties": false,
+                    "title": "DispatchEnvelopeRuleSnapshotsEffect0"
                   },
                   {
                     "type": "object",
                     "properties": {
                       "kind": {
                         "type": "string",
-                        "const": "pre_approve"
+                        "const": "pre_approve",
+                        "title": "DispatchEnvelopeRuleSnapshotsEffect1Kind"
                       },
                       "approvedCapabilities": {
                         "minItems": 1,
@@ -410,13 +472,16 @@
                         "type": "array",
                         "items": {
                           "type": "string",
-                          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
-                        }
+                          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                          "title": "DispatchEnvelopeRuleSnapshotsEffect1ApprovedCapabilities"
+                        },
+                        "title": "DispatchEnvelopeRuleSnapshotsEffect1ApprovedCapabilities"
                       },
                       "maximumTimeoutSeconds": {
                         "type": "integer",
                         "exclusiveMinimum": 0,
-                        "maximum": 9007199254740991
+                        "maximum": 9007199254740991,
+                        "title": "DispatchEnvelopeRuleSnapshotsEffect1MaximumTimeoutSeconds"
                       },
                       "allowDestructiveEffects": {
                         "type": "boolean"
@@ -432,7 +497,8 @@
                       "allowDestructiveEffects",
                       "allowExternalEffects"
                     ],
-                    "additionalProperties": false
+                    "additionalProperties": false,
+                    "title": "DispatchEnvelopeRuleSnapshotsEffect1"
                   }
                 ]
               },
@@ -443,79 +509,92 @@
                     "properties": {
                       "kind": {
                         "type": "string",
-                        "const": "user"
+                        "const": "user",
+                        "title": "DispatchEnvelopeRuleSnapshotsAuthor0Kind"
                       },
                       "userId": {
                         "type": "string",
-                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                        "title": "DispatchEnvelopeRuleSnapshotsAuthor0UserId"
                       }
                     },
                     "required": [
                       "kind",
                       "userId"
                     ],
-                    "additionalProperties": false
+                    "additionalProperties": false,
+                    "title": "DispatchEnvelopeRuleSnapshotsAuthor0"
                   },
                   {
                     "type": "object",
                     "properties": {
                       "kind": {
                         "type": "string",
-                        "const": "node"
+                        "const": "node",
+                        "title": "DispatchEnvelopeRuleSnapshotsAuthor1Kind"
                       },
                       "nodeId": {
                         "type": "string",
-                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                        "title": "DispatchEnvelopeRuleSnapshotsAuthor1NodeId"
                       }
                     },
                     "required": [
                       "kind",
                       "nodeId"
                     ],
-                    "additionalProperties": false
+                    "additionalProperties": false,
+                    "title": "DispatchEnvelopeRuleSnapshotsAuthor1"
                   },
                   {
                     "type": "object",
                     "properties": {
                       "kind": {
                         "type": "string",
-                        "const": "session"
+                        "const": "session",
+                        "title": "DispatchEnvelopeRuleSnapshotsAuthor2Kind"
                       },
                       "sessionId": {
                         "type": "string",
-                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                        "title": "DispatchEnvelopeRuleSnapshotsAuthor2SessionId"
                       }
                     },
                     "required": [
                       "kind",
                       "sessionId"
                     ],
-                    "additionalProperties": false
+                    "additionalProperties": false,
+                    "title": "DispatchEnvelopeRuleSnapshotsAuthor2"
                   },
                   {
                     "type": "object",
                     "properties": {
                       "kind": {
                         "type": "string",
-                        "const": "system"
+                        "const": "system",
+                        "title": "DispatchEnvelopeRuleSnapshotsAuthor3Kind"
                       },
                       "name": {
                         "type": "string",
                         "minLength": 1,
-                        "maxLength": 256
+                        "maxLength": 256,
+                        "title": "DispatchEnvelopeRuleSnapshotsAuthor3Name"
                       }
                     },
                     "required": [
                       "kind",
                       "name"
                     ],
-                    "additionalProperties": false
+                    "additionalProperties": false,
+                    "title": "DispatchEnvelopeRuleSnapshotsAuthor3"
                   }
                 ]
               },
               "createdAt": {
                 "type": "string",
-                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,9})?Z$"
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,9})?Z$",
+                "title": "DispatchEnvelopeRuleSnapshotsCreatedAt"
               }
             },
             "required": [
@@ -530,7 +609,8 @@
               "createdAt"
             ],
             "additionalProperties": false
-          }
+          },
+          "title": "DispatchEnvelopeRuleSnapshots"
         },
         "contextManifest": {
           "type": "object",
@@ -545,15 +625,18 @@
                     "properties": {
                       "sourceKind": {
                         "type": "string",
-                        "const": "memory"
+                        "const": "memory",
+                        "title": "DispatchEnvelopeContextManifestReferences0SourceKind"
                       },
                       "sourceId": {
                         "type": "string",
-                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                        "title": "DispatchEnvelopeContextManifestReferences0SourceId"
                       },
                       "contentDigest": {
                         "type": "string",
-                        "pattern": "^sha256:[0-9a-f]{64}$"
+                        "pattern": "^sha256:[0-9a-f]{64}$",
+                        "title": "DispatchEnvelopeContextManifestReferences0ContentDigest"
                       },
                       "sensitivity": {
                         "type": "string",
@@ -562,12 +645,14 @@
                           "internal",
                           "confidential",
                           "restricted"
-                        ]
+                        ],
+                        "title": "DispatchEnvelopeContextManifestReferences0Sensitivity"
                       },
                       "byteCount": {
                         "type": "integer",
                         "minimum": -9007199254740991,
-                        "maximum": 9007199254740991
+                        "maximum": 9007199254740991,
+                        "title": "DispatchEnvelopeContextManifestReferences0ByteCount"
                       }
                     },
                     "required": [
@@ -577,22 +662,26 @@
                       "sensitivity",
                       "byteCount"
                     ],
-                    "additionalProperties": false
+                    "additionalProperties": false,
+                    "title": "DispatchEnvelopeContextManifestReferences0"
                   },
                   {
                     "type": "object",
                     "properties": {
                       "sourceKind": {
                         "type": "string",
-                        "const": "artifact"
+                        "const": "artifact",
+                        "title": "DispatchEnvelopeContextManifestReferences1SourceKind"
                       },
                       "sourceId": {
                         "type": "string",
-                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                        "title": "DispatchEnvelopeContextManifestReferences1SourceId"
                       },
                       "contentDigest": {
                         "type": "string",
-                        "pattern": "^sha256:[0-9a-f]{64}$"
+                        "pattern": "^sha256:[0-9a-f]{64}$",
+                        "title": "DispatchEnvelopeContextManifestReferences1ContentDigest"
                       },
                       "sensitivity": {
                         "type": "string",
@@ -601,12 +690,14 @@
                           "internal",
                           "confidential",
                           "restricted"
-                        ]
+                        ],
+                        "title": "DispatchEnvelopeContextManifestReferences1Sensitivity"
                       },
                       "byteCount": {
                         "type": "integer",
                         "minimum": -9007199254740991,
-                        "maximum": 9007199254740991
+                        "maximum": 9007199254740991,
+                        "title": "DispatchEnvelopeContextManifestReferences1ByteCount"
                       }
                     },
                     "required": [
@@ -616,22 +707,26 @@
                       "sensitivity",
                       "byteCount"
                     ],
-                    "additionalProperties": false
+                    "additionalProperties": false,
+                    "title": "DispatchEnvelopeContextManifestReferences1"
                   },
                   {
                     "type": "object",
                     "properties": {
                       "sourceKind": {
                         "type": "string",
-                        "const": "task"
+                        "const": "task",
+                        "title": "DispatchEnvelopeContextManifestReferences2SourceKind"
                       },
                       "sourceId": {
                         "type": "string",
-                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                        "title": "DispatchEnvelopeContextManifestReferences2SourceId"
                       },
                       "contentDigest": {
                         "type": "string",
-                        "pattern": "^sha256:[0-9a-f]{64}$"
+                        "pattern": "^sha256:[0-9a-f]{64}$",
+                        "title": "DispatchEnvelopeContextManifestReferences2ContentDigest"
                       },
                       "sensitivity": {
                         "type": "string",
@@ -640,12 +735,14 @@
                           "internal",
                           "confidential",
                           "restricted"
-                        ]
+                        ],
+                        "title": "DispatchEnvelopeContextManifestReferences2Sensitivity"
                       },
                       "byteCount": {
                         "type": "integer",
                         "minimum": -9007199254740991,
-                        "maximum": 9007199254740991
+                        "maximum": 9007199254740991,
+                        "title": "DispatchEnvelopeContextManifestReferences2ByteCount"
                       }
                     },
                     "required": [
@@ -655,22 +752,26 @@
                       "sensitivity",
                       "byteCount"
                     ],
-                    "additionalProperties": false
+                    "additionalProperties": false,
+                    "title": "DispatchEnvelopeContextManifestReferences2"
                   },
                   {
                     "type": "object",
                     "properties": {
                       "sourceKind": {
                         "type": "string",
-                        "const": "dispatch"
+                        "const": "dispatch",
+                        "title": "DispatchEnvelopeContextManifestReferences3SourceKind"
                       },
                       "sourceId": {
                         "type": "string",
-                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                        "title": "DispatchEnvelopeContextManifestReferences3SourceId"
                       },
                       "contentDigest": {
                         "type": "string",
-                        "pattern": "^sha256:[0-9a-f]{64}$"
+                        "pattern": "^sha256:[0-9a-f]{64}$",
+                        "title": "DispatchEnvelopeContextManifestReferences3ContentDigest"
                       },
                       "sensitivity": {
                         "type": "string",
@@ -679,12 +780,14 @@
                           "internal",
                           "confidential",
                           "restricted"
-                        ]
+                        ],
+                        "title": "DispatchEnvelopeContextManifestReferences3Sensitivity"
                       },
                       "byteCount": {
                         "type": "integer",
                         "minimum": -9007199254740991,
-                        "maximum": 9007199254740991
+                        "maximum": 9007199254740991,
+                        "title": "DispatchEnvelopeContextManifestReferences3ByteCount"
                       }
                     },
                     "required": [
@@ -694,23 +797,27 @@
                       "sensitivity",
                       "byteCount"
                     ],
-                    "additionalProperties": false
+                    "additionalProperties": false,
+                    "title": "DispatchEnvelopeContextManifestReferences3"
                   },
                   {
                     "type": "object",
                     "properties": {
                       "sourceKind": {
                         "type": "string",
-                        "const": "external"
+                        "const": "external",
+                        "title": "DispatchEnvelopeContextManifestReferences4SourceKind"
                       },
                       "sourceId": {
                         "type": "string",
                         "minLength": 1,
-                        "maxLength": 4096
+                        "maxLength": 4096,
+                        "title": "DispatchEnvelopeContextManifestReferences4SourceId"
                       },
                       "contentDigest": {
                         "type": "string",
-                        "pattern": "^sha256:[0-9a-f]{64}$"
+                        "pattern": "^sha256:[0-9a-f]{64}$",
+                        "title": "DispatchEnvelopeContextManifestReferences4ContentDigest"
                       },
                       "sensitivity": {
                         "type": "string",
@@ -719,12 +826,14 @@
                           "internal",
                           "confidential",
                           "restricted"
-                        ]
+                        ],
+                        "title": "DispatchEnvelopeContextManifestReferences4Sensitivity"
                       },
                       "byteCount": {
                         "type": "integer",
                         "minimum": -9007199254740991,
-                        "maximum": 9007199254740991
+                        "maximum": 9007199254740991,
+                        "title": "DispatchEnvelopeContextManifestReferences4ByteCount"
                       }
                     },
                     "required": [
@@ -734,14 +843,17 @@
                       "sensitivity",
                       "byteCount"
                     ],
-                    "additionalProperties": false
+                    "additionalProperties": false,
+                    "title": "DispatchEnvelopeContextManifestReferences4"
                   }
                 ]
-              }
+              },
+              "title": "DispatchEnvelopeContextManifestReferences"
             },
             "manifestDigest": {
               "type": "string",
-              "pattern": "^sha256:[0-9a-f]{64}$"
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "title": "DispatchEnvelopeContextManifestManifestDigest"
             }
           },
           "required": [
@@ -755,8 +867,10 @@
           "type": "array",
           "items": {
             "type": "string",
-            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
-          }
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+            "title": "DispatchEnvelopeRequestedCapabilities"
+          },
+          "title": "DispatchEnvelopeRequestedCapabilities"
         },
         "permissionEnvelope": {
           "type": "object",
@@ -766,16 +880,20 @@
               "type": "array",
               "items": {
                 "type": "string",
-                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
-              }
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                "title": "DispatchEnvelopePermissionEnvelopeAllowedCapabilities"
+              },
+              "title": "DispatchEnvelopePermissionEnvelopeAllowedCapabilities"
             },
             "deniedCapabilities": {
               "maxItems": 128,
               "type": "array",
               "items": {
                 "type": "string",
-                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
-              }
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                "title": "DispatchEnvelopePermissionEnvelopeDeniedCapabilities"
+              },
+              "title": "DispatchEnvelopePermissionEnvelopeDeniedCapabilities"
             },
             "approvalRequirements": {
               "type": "object",
@@ -791,8 +909,10 @@
                   "type": "array",
                   "items": {
                     "type": "string",
-                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
-                  }
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                    "title": "DispatchEnvelopePermissionEnvelopeApprovalRequirementsCapabilities"
+                  },
+                  "title": "DispatchEnvelopePermissionEnvelopeApprovalRequirementsCapabilities"
                 }
               },
               "required": [
@@ -818,14 +938,16 @@
             "properties": {
               "taskId": {
                 "type": "string",
-                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                "title": "DispatchEnvelopeDependenciesTaskId"
               },
               "failurePolicy": {
                 "type": "string",
                 "enum": [
                   "block",
                   "fail"
-                ]
+                ],
+                "title": "DispatchEnvelopeDependenciesFailurePolicy"
               }
             },
             "required": [
@@ -833,22 +955,26 @@
               "failurePolicy"
             ],
             "additionalProperties": false
-          }
+          },
+          "title": "DispatchEnvelopeDependencies"
         },
         "timeoutSeconds": {
           "type": "integer",
           "exclusiveMinimum": 0,
-          "maximum": 9007199254740991
+          "maximum": 9007199254740991,
+          "title": "DispatchEnvelopeTimeoutSeconds"
         },
         "controllerEpoch": {
           "type": "integer",
           "exclusiveMinimum": 0,
-          "maximum": 9007199254740991
+          "maximum": 9007199254740991,
+          "title": "DispatchEnvelopeControllerEpoch"
         },
         "model": {
           "type": "string",
           "minLength": 1,
-          "maxLength": 256
+          "maxLength": 256,
+          "title": "DispatchEnvelopeModel"
         }
       },
       "required": [
@@ -876,7 +1002,8 @@
     },
     "envelopeDigest": {
       "type": "string",
-      "pattern": "^sha256:[0-9a-f]{64}$"
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "title": "DispatchEnvelopeDigest"
     },
     "state": {
       "type": "string",
@@ -889,11 +1016,13 @@
         "failed",
         "cancelled",
         "timed_out"
-      ]
+      ],
+      "title": "DispatchState"
     },
     "createdAt": {
       "type": "string",
-      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,9})?Z$"
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,9})?Z$",
+      "title": "DispatchCreatedAt"
     },
     "externalReferences": {
       "maxItems": 128,
@@ -904,12 +1033,14 @@
           "namespace": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 256
+            "maxLength": 256,
+            "title": "DispatchExternalReferencesNamespace"
           },
           "id": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 4096
+            "maxLength": 4096,
+            "title": "DispatchExternalReferencesId"
           }
         },
         "required": [
@@ -917,7 +1048,8 @@
           "id"
         ],
         "additionalProperties": false
-      }
+      },
+      "title": "DispatchExternalReferences"
     }
   },
   "required": [

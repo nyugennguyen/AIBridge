@@ -1,0 +1,53 @@
+# Workspace root for the polyglot ingress router (ADR 0008).
+#
+# This file is BOTH the workspace manifest and the `aibr-router` package
+# manifest, so the member crate's sources live directly at `router/src/`. That
+# placement is deliberate: `router/src/contracts.rs` is a committed generated
+# artefact whose path ADR 0008 2.3 fixes, and a separate member directory would
+# put it at `router/aibr-router/src/contracts.rs` instead.
+#
+# This is the only place Rust is permitted in the repository. The guardrail in
+# Docs/implementation-plans/README.md is amended by ADR 0008 4 for `router/`
+# only and stands unchanged for `src/`.
+
+[workspace]
+# `aibr-contract-gen` is the typify step of the contract chain. It is kept out
+# of `default-members` so `cargo build`, `cargo test`, `cargo clippy` and
+# `cargo fmt --check` at this directory never compile it. Those gates are about
+# the shipped router; a codegen tool failing to compile should not look like the
+# router failing its own gate. It is invoked explicitly by
+# `bun run generate:contracts` via `-p aibr-contract-gen`.
+default-members = ["."]
+members = ["contract-gen"]
+
+[package]
+name = "aibr-router"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.94"
+publish = false
+description = "Polyglot ingress admission router for AIBridge (ADR 0008)"
+
+# The router's boundary is JSON over a socket plus the committed schemas in
+# contracts/v1/. It must not acquire an upward import edge into `src/`, and
+# `src/` must not acquire a dependency on this crate; there is no path
+# declaration that could express either, which is the point.
+[dependencies]
+serde = { version = "=1.0.228", features = ["derive"], default-features = false }
+# `std` is required (axum, tokio and SQLite all assume it) but `alloc` is not
+# requested: serde's default features pull `std` in via a path this crate does
+# not otherwise need, so the set is spelled out rather than inherited.
+serde_json = { version = "=1.0.150", features = ["std"], default-features = false }
+
+[profile.release]
+# ADR 0008 2.1 sizes the router against a 32 MiB systemd MemoryMax, and 2.7
+# turns that cap into an enforced invariant. Size is therefore a correctness
+# property here, not a preference.
+opt-level = "z"
+lto = true
+codegen-units = 1
+# ADR 0008 2.1's release profile. `panic = "abort"` also removes the unwinding
+# tables the router never uses; there is no `catch_unwind` in the design, and
+# M7.3 must not add one.
+panic = "abort"
+strip = true

@@ -5,3 +5,8 @@ dist/
 .aibridge/jobs/
 .omo/
 .playwright/
+# Cargo build output. Written here with a leading slash so it anchors to the
+# repository root. A `router/.gitignore` containing `/target/` would anchor to
+# `router/` instead and match nothing, which is how a nested root-anchored
+# pattern silently fails.
+/router/target/

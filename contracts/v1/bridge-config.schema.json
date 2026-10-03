@@ -7,23 +7,27 @@
   "properties": {
     "agent_id": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "title": "BridgeConfigAgentId"
     },
     "bridge": {
       "type": "object",
       "properties": {
         "host": {
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "title": "BridgeConfigBridgeHost"
         },
         "port": {
           "type": "integer",
           "exclusiveMinimum": 0,
-          "maximum": 9007199254740991
+          "maximum": 9007199254740991,
+          "title": "BridgeConfigBridgePort"
         },
         "public_url": {
           "type": "string",
-          "format": "uri"
+          "format": "uri",
+          "title": "BridgeConfigBridgePublicUrl"
         }
       },
       "required": [
@@ -38,12 +42,14 @@
       "properties": {
         "base_url": {
           "type": "string",
-          "format": "uri"
+          "format": "uri",
+          "title": "BridgeConfigOpencodeBaseUrl"
         },
         "server_port": {
           "type": "integer",
           "exclusiveMinimum": 0,
-          "maximum": 9007199254740991
+          "maximum": 9007199254740991,
+          "title": "BridgeConfigOpencodeServerPort"
         },
         "username": {
           "default": "opencode",
@@ -65,7 +71,8 @@
       "properties": {
         "auth_mode": {
           "type": "string",
-          "const": "bearer-token"
+          "const": "bearer-token",
+          "title": "BridgeConfigSecurityAuthMode"
         },
         "allowed_sources": {
           "type": "array",
@@ -74,13 +81,15 @@
             "properties": {
               "source_agent_id": {
                 "type": "string",
-                "minLength": 1
+                "minLength": 1,
+                "title": "BridgeConfigSecurityAllowedSourcesSourceAgentId"
               },
               "capabilities": {
                 "type": "array",
                 "items": {
                   "type": "string",
-                  "minLength": 1
+                  "minLength": 1,
+                  "title": "BridgeConfigSecurityAllowedSourcesCapabilities"
                 }
               },
               "requires_plan_approval": {
@@ -88,7 +97,8 @@
                 "type": "array",
                 "items": {
                   "type": "string",
-                  "minLength": 1
+                  "minLength": 1,
+                  "title": "BridgeConfigSecurityAllowedSourcesRequiresPlanApproval"
                 }
               }
             },
@@ -115,20 +125,23 @@
             "reject",
             "once",
             "always"
-          ]
+          ],
+          "title": "BridgeConfigPermissionsDefaultResponse"
         },
         "allow_tools": {
           "type": "array",
           "items": {
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "title": "BridgeConfigPermissionsAllowTools"
           }
         },
         "require_plan_approval_for_tools": {
           "type": "array",
           "items": {
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "title": "BridgeConfigPermissionsRequirePlanApprovalForTools"
           }
         }
       },
@@ -146,17 +159,20 @@
         "properties": {
           "id": {
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "title": "BridgeConfigProjectsId"
           },
           "path": {
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "title": "BridgeConfigProjectsPath"
           },
           "capabilities": {
             "type": "array",
             "items": {
               "type": "string",
-              "minLength": 1
+              "minLength": 1,
+              "title": "BridgeConfigProjectsCapabilities"
             }
           }
         },
@@ -175,17 +191,20 @@
         "properties": {
           "id": {
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "title": "BridgeConfigAgentsId"
           },
           "url": {
             "type": "string",
-            "format": "uri"
+            "format": "uri",
+            "title": "BridgeConfigAgentsUrl"
           },
           "capabilities": {
             "type": "array",
             "items": {
               "type": "string",
-              "minLength": 1
+              "minLength": 1,
+              "title": "BridgeConfigAgentsCapabilities"
             }
           }
         },
@@ -203,12 +222,14 @@
         "default_job_seconds": {
           "type": "integer",
           "exclusiveMinimum": 0,
-          "maximum": 9007199254740991
+          "maximum": 9007199254740991,
+          "title": "BridgeConfigTimeoutsDefaultJobSeconds"
         },
         "callback_retry_attempts": {
           "type": "integer",
           "minimum": 0,
-          "maximum": 9007199254740991
+          "maximum": 9007199254740991,
+          "title": "BridgeConfigTimeoutsCallbackRetryAttempts"
         }
       },
       "required": [
@@ -227,7 +248,8 @@
           "type": "array",
           "items": {
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "title": "BridgeConfigPlanningRequireApprovalFor"
           }
         }
       },

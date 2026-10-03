@@ -34,7 +34,14 @@
 import { readFile, readdir } from "node:fs/promises"
 import { fileURLToPath } from "node:url"
 import { describe, expect, it } from "vitest"
-import Ajv2020 from "ajv/dist/2020.js"
+// `ajv/dist/2020.js` is CommonJS, so under this package's NodeNext ESM
+// resolution the namespace object arrives with `default` holding the class.
+// Importing it as a bare default gives the MODULE, which has no construct
+// signature -- and the type error says exactly that rather than something about
+// schemas. `Ajv2020.default` is the class.
+import Ajv2020Module from "ajv/dist/2020.js"
+
+const Ajv2020 = Ajv2020Module.default
 import type { ErrorObject, ValidateFunction } from "ajv"
 
 const EXAMPLES_DIRECTORY = fileURLToPath(new URL("./examples/", import.meta.url))

@@ -6,6 +6,34 @@ Replace the Bun engine's HTTP ingress with a native Rust router that owns the li
 
 This milestone **adds** a second programming language for one narrow component. It is authorised by [ADR 0008](../adr/0008-polyglot-ingress-and-admission.md), which also records why durable admission uses the existing SQLite outbox rather than a message broker. The language guardrail in [`README.md:77`](./README.md) is amended, not deleted.
 
+## Execution Scope
+
+Decided 2026-10-03, after M7.0 and M7.1. This records **what this milestone can
+honestly deliver from the reference host**, so no gate report is ever written
+against work that could not be run.
+
+**In scope, fully implemented and verified here:** M7.2 (contract generation),
+M7.3 (router skeleton and the four security gates), M7.4 (`ingress_mode` flag),
+M7.5 (`ingress_outbox`), M7.6 (backoff port and parity), M7.7 (worker drain and
+listener removal), M7.8 (`egress_outbox`, closes `F-02`), M7.12 (bound
+enforcement), M7.13 (TUI decoupling assertion).
+
+**Written but verified only by CI:** M7.9 (static build matrix), M7.10
+(`systemd`/`launchd` supervisor), M7.11 (`nft` + `tailscale0` bind enforcement).
+The reference host is macOS with **no `tailscale0`, no `systemd`, and no `zig`**,
+so these ship as code plus a GitHub Actions workflow that executes them on Linux
+runners. Each is recorded `unverified-on-macOS` with the exact command that
+verifies it. Nothing here may be reported as passing until that workflow is green
+on a real run.
+
+**Not attempted at all:** M7.14 (canary rollout). It needs two live nodes and
+7-day soaks. No substitute exists and none is invented.
+
+**Consequently there is no `milestone-7-completion.md`.** A gate report for this
+milestone would have to assert a total-RSS reduction, a Linux supervision
+behaviour, a tailnet bind, and a multi-day soak that were never observed. The
+honest artefact is a partial-progress report naming what ran and what did not.
+
 ## Prerequisites
 
 - Milestones 0–6 have completion reports and no unresolved blocker/high security findings, **except** the five findings this milestone closes (`F-01`, `F-02`, `F-03`, `F-04`, `F-06`). Their status is a prerequisite item, not a discovery.

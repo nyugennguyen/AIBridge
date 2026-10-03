@@ -17,7 +17,7 @@ use std::path::Path;
 
 use axum::http::StatusCode;
 use serde_json::{json, Value};
-use support::{bearer, config_json, oneshot, request, spawn_router, TempDir};
+use support::{bearer, config_json, oneshot, request, spawn_router_with_store, TempDir};
 
 /// An address that is guaranteed not to be configured on any host.
 ///
@@ -39,7 +39,7 @@ fn an_absent_bind_address_exits_78() {
     let config = scratch.config_path();
     support::write_config(&config, &config_with_host(scratch.path(), ABSENT_ADDRESS));
 
-    let (code, stderr) = spawn_router(&config, support::TOKEN);
+    let (code, stderr) = spawn_router_with_store(&config, support::TOKEN, Some(&scratch));
 
     assert_eq!(
         code,
@@ -60,7 +60,7 @@ fn the_refusal_names_the_address_and_what_the_host_has() {
     let config = scratch.config_path();
     support::write_config(&config, &config_with_host(scratch.path(), ABSENT_ADDRESS));
 
-    let (_, stderr) = spawn_router(&config, support::TOKEN);
+    let (_, stderr) = spawn_router_with_store(&config, support::TOKEN, Some(&scratch));
 
     assert!(
         stderr.contains(ABSENT_ADDRESS),
@@ -92,7 +92,7 @@ fn a_wildcard_bind_address_exits_78() {
         let config = scratch.config_path();
         support::write_config(&config, &config_with_host(scratch.path(), wildcard));
 
-        let (code, stderr) = spawn_router(&config, support::TOKEN);
+        let (code, stderr) = spawn_router_with_store(&config, support::TOKEN, Some(&scratch));
 
         assert_eq!(
             code,
@@ -122,7 +122,7 @@ fn a_hostname_bind_address_exits_78() {
         &config_with_host(scratch.path(), "dev-main.tailnet"),
     );
 
-    let (code, stderr) = spawn_router(&config, support::TOKEN);
+    let (code, stderr) = spawn_router_with_store(&config, support::TOKEN, Some(&scratch));
 
     assert_eq!(
         code,
@@ -154,7 +154,7 @@ fn the_refused_router_bound_nothing() {
         &config_with_host_port(scratch.path(), "0.0.0.0", u64::from(port)),
     );
 
-    let (code, stderr) = spawn_router(&config, support::TOKEN);
+    let (code, stderr) = spawn_router_with_store(&config, support::TOKEN, Some(&scratch));
     assert_eq!(
         code,
         Some(i32::from(aibr_router::bind::EX_CONFIG)),
@@ -182,7 +182,7 @@ fn a_missing_config_exits_78() {
     let scratch = TempDir::new("bind-no-config");
     let absent = scratch.path().join("not-there.json");
 
-    let (code, stderr) = spawn_router(&absent, support::TOKEN);
+    let (code, stderr) = spawn_router_with_store(&absent, support::TOKEN, Some(&scratch));
 
     assert_eq!(
         code,
@@ -236,7 +236,7 @@ fn an_unparseable_config_exits_78() {
     value["a_key_this_contract_does_not_describe"] = Value::Bool(true);
     support::write_config(&config, &value);
 
-    let (code, stderr) = spawn_router(&config, support::TOKEN);
+    let (code, stderr) = spawn_router_with_store(&config, support::TOKEN, Some(&scratch));
 
     assert_eq!(
         code,
@@ -323,7 +323,7 @@ fn the_cgnat_address_of_the_example_config_is_refused_on_a_host_without_tailscal
     let config = scratch.config_path();
     support::write_config(&config, &config_with_host(scratch.path(), "100.64.0.1"));
 
-    let (code, stderr) = spawn_router(&config, support::TOKEN);
+    let (code, stderr) = spawn_router_with_store(&config, support::TOKEN, Some(&scratch));
 
     assert_eq!(
         code,
@@ -406,7 +406,7 @@ fn a_config_failure_does_not_print_the_token() {
     let config = support::write_raw_config(&scratch, "{ not json at all");
 
     let canary = "token-that-must-not-be-printed-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    let (_, stderr) = spawn_router(&config, canary);
+    let (_, stderr) = spawn_router_with_store(&config, canary, Some(&scratch));
 
     assert!(
         !stderr.contains(canary),
@@ -427,7 +427,10 @@ async fn a_router_built_from_a_config_file_answers_health() {
 
     let config = aibr_router::config::RouterConfig::from_file(&config_path, support::TOKEN)
         .expect("the written fixture parses");
-    let router = aibr_router::routes::build(aibr_router::routes::AppState::from_config(&config));
+    let router = aibr_router::routes::build(aibr_router::routes::AppState::from_config(
+        &config,
+        support::outbox(&scratch),
+    ));
 
     let reply = oneshot(router, support::authorized("GET", "/health", json!(null))).await;
 
@@ -452,7 +455,10 @@ async fn handler_state_uses_the_configured_token() {
         let config =
             aibr_router::config::RouterConfig::from_file(&config_path, "the-configured-token")
                 .expect("the written fixture parses");
-        aibr_router::routes::build(aibr_router::routes::AppState::from_config(&config))
+        aibr_router::routes::build(aibr_router::routes::AppState::from_config(
+            &config,
+            support::outbox(&scratch),
+        ))
     };
 
     let accepted = oneshot(

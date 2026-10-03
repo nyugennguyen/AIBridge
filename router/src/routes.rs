@@ -2,10 +2,22 @@
 //!
 //! | Method | Path | This router answers |
 //! | --- | --- | --- |
-//! | `GET` | `/health` | `200 {ok, schemaVersion}` |
-//! | `POST` | `/trigger` | `202 {accepted, job_id, status_url, schemaVersion}` |
+//! | `GET` | `/health` | `200 {ok, schemaVersion, queue}` |
+//! | `POST` | `/trigger` | `202 {accepted, job_id, target_agent_id, status_url, schemaVersion}` |
 //! | `GET` | `/jobs/{id}` | `404 {error, schemaVersion}` — always |
 //! | `POST` | `/report` | `202 {accepted, schemaVersion}` |
+//!
+//! # What a `202` means, since M7.5: the row is committed
+//!
+//! [`crate::outbox`] returns from `admit` only after `COMMIT` has returned, and the
+//! two admitting handlers build their `202` bodies from values that only exist
+//! after that call. A store failure is [`ApiError::StoreUnavailable`], a `503`.
+//!
+//! The ordering is the whole of `SF-08` and it is worth stating what it costs: the
+//! caller waits for an `fsync` (`synchronous = FULL`) before it learns whether its
+//! request was accepted, and a `503` is a correct answer rather than a degraded one.
+//! The alternative ordering — build the response, admit, then send — would hand a
+//! caller a `202` for a row that may never exist.
 //!
 //! # Every route is behind the bearer, including reads
 //!
@@ -19,7 +31,8 @@
 //! # What a `202` does and does not mean
 //!
 //! **It means: this body is shaped correctly, it carries a version this binary
-//! speaks, and its bearer matched.** Nothing else.
+//! speaks, its bearer matched, and the work is committed to
+//! [`crate::outbox`].** Nothing else.
 //!
 //! **It does not mean the caller is authorized**, and there are three things this
 //! crate deliberately does not check that the worker does. Every one of them would
@@ -91,6 +104,7 @@ use crate::auth::Bearer;
 use crate::config::RouterConfig;
 use crate::contracts::{ReportCallback, TriggerRequest};
 use crate::error::ApiError;
+use crate::outbox::{Admission, IngressOutbox};
 use crate::validate::{self, MAX_BODY_BYTES};
 use crate::CONTRACT_VERSION;
 
@@ -124,11 +138,32 @@ pub struct AppState {
     /// `dependencies.config.agent_id` for exactly this field), and the router
     /// still cannot tell whether the caller may dispatch.
     pub agent_id: Arc<str>,
+    /// The durable admission queue.
+    ///
+    /// **Not optional and not defaulted.** There is no `Option<IngressOutbox>` and
+    /// no in-memory constructor reachable from here, because either would be a
+    /// `202` from a process that has not committed anything — see
+    /// [`crate::outbox`]'s module docs for the failure that produces. The store
+    /// arrives already-open from `main`, which opens it with
+    /// [`IngressOutbox::open`] and exits `78` if it cannot.
+    ///
+    /// Behind an `Arc` for the same reason as the rest of this struct: every request
+    /// clones the state, and a `Connection` is not `Clone`. The `Arc` is not
+    /// optional either — `IngressOutbox` is itself a `Mutex<Connection>`, and
+    /// handing the connection to two threads directly would move the concurrency
+    /// control out of the type that documents it.
+    pub outbox: Arc<IngressOutbox>,
 }
 
 impl AppState {
-    /// Derive handler state from loaded configuration.
-    pub fn from_config(config: &RouterConfig) -> Self {
+    /// Derive handler state from loaded configuration and an **already open** store.
+    ///
+    /// Takes the store as an argument rather than opening one, and that is the
+    /// boundary of M7.5: opening happens in `main`, once, before any socket exists,
+    /// so a store that cannot be opened is an exit `78` rather than a `503` that
+    /// arrives one request at a time. Which of the two an operator sees is the
+    /// difference between "fix the config" and "the router is degraded".
+    pub fn from_config(config: &RouterConfig, outbox: Arc<IngressOutbox>) -> Self {
         Self {
             auth: Arc::new(config.bearer.clone()),
             project_roots: Arc::new(config.project_roots.clone()),
@@ -137,6 +172,7 @@ impl AppState {
             // `RouterConfig`'s own definition), so the configured agent_id is
             // `config.bridge.agent_id` -- not a field of `RouterConfig` itself.
             agent_id: Arc::from(config.bridge.agent_id.as_str()),
+            outbox,
         }
     }
 
@@ -155,6 +191,31 @@ impl AppState {
         } else {
             Err(ApiError::Unauthorized)
         }
+    }
+
+    /// Commit `admission`, or refuse the request with a `503`.
+    ///
+    /// **The one place a store failure becomes a response.** A method on
+    /// [`AppState`] rather than a free function so both admitting routes have
+    /// exactly one call to make, the same reason [`AppState::authenticate`] is a
+    /// method.
+    ///
+    /// The [`crate::outbox::StoreError`] is mapped away and discarded:
+    /// `crate::error`'s rule is that no error body carries anything but a
+    /// closed-set string, and a `rusqlite` message quoted into a response would be
+    /// exactly the oracle that rule exists to prevent. The detail is not lost — it
+    /// goes to stderr, which `main`'s startup path prints and this request path
+    /// cannot reach without a logger this 4 MiB component does not have (M7.10 owns
+    /// the destination).
+    ///
+    /// `?` at a point where the `202` has not been composed, which is the ordering
+    /// `SF-08` requires: returning `Err` here cannot produce a `202` later in the
+    /// handler, because there is no code after this point that builds one.
+    fn admit(&self, admission: Admission) -> Result<(), ApiError> {
+        self.outbox
+            .admit(&admission, crate::outbox::now_ms())
+            .map(|_| ())
+            .map_err(|_| ApiError::StoreUnavailable)
     }
 }
 
@@ -204,16 +265,51 @@ pub fn build(state: AppState) -> Router {
 /// engine's `/health` currently answers anyone who can reach the socket, because
 /// `createApp()` installs no global auth hook. Enclosing it here is free: a
 /// supervisor already holds the token.
+///
+/// # It also reports the queue, and it can fail
+///
+/// `M7.5`'s `queue` block is `depth`, `pending`, `sending`, `failed` and
+/// `oldest_pending_age_ms` — [`crate::outbox::QueueStats`] verbatim, read inside
+/// the response. Depth and oldest-age are the two numbers that together distinguish
+/// a quiet queue from a stuck worker: a depth of 40 with an oldest age that has not
+/// moved in ten minutes is a worker that died holding a claim, and neither number
+/// says so alone.
+///
+/// `failed` is reported rather than hidden. A pile of retained terminal rows is the
+/// plan's poison-payload row made visible to an operator, and a health endpoint
+/// that omitted it would make a silently growing pile invisible.
+///
+/// **A store that cannot be read is a `503` here too**, and deliberately so: a
+/// health endpoint that answered `200 {ok: true}` while the queue was unreadable is
+/// exactly the "healthy empty queue" lie the store's module docs refuse. A
+/// supervisor reading `503` restarts, which is the right response to a store this
+/// process cannot use.
 async fn health(State(state): State<AppState>, headers: HeaderMap) -> Result<Response, ApiError> {
     state.authenticate(&headers)?;
 
+    let stats = state
+        .outbox
+        .stats(crate::outbox::now_ms())
+        .map_err(|_| ApiError::StoreUnavailable)?;
+
     Ok((
         StatusCode::OK,
-        Json(json!({ "ok": true, "schemaVersion": CONTRACT_VERSION })),
+        Json(json!({
+            "ok": true,
+            "schemaVersion": CONTRACT_VERSION,
+            "queue": {
+                "depth": stats.depth,
+                "pending": stats.pending,
+                "sending": stats.sending,
+                "failed": stats.failed,
+                // `null` for an empty queue, which is the honest answer: there is no
+                // oldest row, as opposed to an oldest row of age zero.
+                "oldest_pending_age_ms": stats.oldest_pending_age_ms,
+            }
+        })),
     )
         .into_response())
 }
-
 /// `GET /jobs/{id}` — always `404`, and always after a charset check.
 ///
 /// The `404` for a malformed id is deliberate and is *not* a shortcut. This
@@ -264,14 +360,25 @@ async fn trigger(
     // `F-04`: resolve symlinks, then require containment in a configured root.
     validate::canonical_project_dir(&trigger.project_dir, &state.project_roots)?;
 
-    // Below this line there is no store. See the module docs: the `job_id` below
-    // is an admission correlation token, not a reference to a durable record, and
-    // `status_url` is a string, not a link to anything the router can serve. M7.5
-    // replaces this with the durable write and M7.7 makes `/jobs/{id}` real.
+    // Every gate has now run and every one of them refused. Nothing below this line
+    // writes a row for a request that failed the structural gate, which is what keeps
+    // `assertSourceAuthorized`'s refusal (a *worker* decision, §2.2) from having to
+    // reason about rows it did not create.
     let job_id = match trigger.job_id.as_ref() {
         Some(supplied) => std::borrow::Cow::Borrowed(supplied.deref()),
         None => std::borrow::Cow::Owned(mint_job_id()?),
     };
+
+    // The commit, and it happens before a single byte of the `202` below is
+    // composed. `status_url` is still a string and not a link to anything this
+    // process can serve — `GET /jobs/{id}` remains a `404` until M7.7 — but the
+    // *job* it names is a committed row from here on, which is the part `SF-08` is
+    // about.
+    state.admit(Admission::trigger(
+        &job_id,
+        &job_id,
+        &payload_json(&document),
+    ))?;
 
     Ok((
         StatusCode::ACCEPTED,
@@ -293,6 +400,10 @@ async fn trigger(
 /// fabricate a lifecycle event, which is why the engine's route correlates rather
 /// than transitions ([`src/server/routes/report.ts:27`](../../src/server/routes/report.ts)).
 /// Nothing about that changes here, because nothing about it runs here.
+///
+/// What M7.5 adds is the commit, keyed on the payload rather than on `job_id`: a
+/// job produces several reports and they must not collapse into one row. See
+/// [`Admission::report`].
 async fn report(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -311,6 +422,12 @@ async fn report(
     let report: ReportCallback =
         validate::payload(&document, "request body is not a valid ReportCallback")?;
     validate::require_job_id(&report.job_id, "job_id must match [A-Za-z0-9_-]{1,128}")?;
+
+    // Committed before the `202`, exactly as on `/trigger`. The `202` body carries no
+    // job id, so this is the one route where a caller cannot correlate its own
+    // submission — it is the peer's report about *this router's* job, and the
+    // worker is what correlates it.
+    state.admit(Admission::report(&report.job_id, &payload_json(&document)))?;
 
     Ok((
         StatusCode::ACCEPTED,
@@ -353,6 +470,29 @@ async fn capped_body(headers: &HeaderMap, body: Body) -> Result<Bytes, ApiError>
     axum::body::to_bytes(body, MAX_BODY_BYTES)
         .await
         .map_err(|_| ApiError::PayloadTooLarge)
+}
+
+/// The admitted payload, as JSON: the re-serialised document with the envelope key
+/// already removed.
+///
+/// **The re-serialised `document`, not the request bytes.** M7.7's worker re-parses
+/// this against `triggerRequestSchema` / `reportCallbackSchema`, both of which
+/// reject unknown keys, and `schemaVersion` is not a key of either payload — so
+/// storing the raw bytes would store a document the worker cannot read. Storing
+/// `document` also means the row holds a payload that is byte-identical for
+/// identical requests, which is what lets a `/report` retry converge through
+/// `ON CONFLICT` instead of arriving as a second row.
+///
+/// It cannot fail: the value was parsed from JSON a few lines earlier, so
+/// serialising it back is infallible, and `serde_json::to_string` on a `Value`
+/// allocates into a `String` rather than writing through a fallible writer.
+fn payload_json(document: &serde_json::Value) -> String {
+    // The only way `to_string` on a `Value` fails is a non-finite float, and this
+    // document came out of `serde_json::from_slice`, which cannot produce one. So a
+    // panic here is unreachable rather than merely unlikely, and the alternative --
+    // threading a `Result` into both handlers for an error that cannot occur -- is
+    // the one this codebase keeps refusing.
+    serde_json::to_string(document).expect("a Value parsed from JSON re-serialises")
 }
 
 /// Mint an admission correlation token.

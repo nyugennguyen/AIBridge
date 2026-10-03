@@ -3,8 +3,11 @@
 //! M7.3 adds the serving surface: four stateless routes, the structural gate in
 //! front of them, and the preflight that decides whether this process is allowed
 //! to have a listening socket at all. M7.2 laid the contract types underneath.
+//! M7.5 makes admission durable: [`outbox`] is the `ingress_outbox` store and
+//! [`routes`] commits to it before it writes a `202`.
 //!
-//! SQLite admission is M7.5. The worker is M7.7. Neither is here.
+//! The worker is M7.7. The backoff schedule that a worker would drain against is
+//! M7.6's, and this crate does not compute a delay.
 //!
 //! # What this crate is NOT: an authorization authority
 //!
@@ -79,6 +82,9 @@ pub mod error;
 /// M7.5's durable admission queue. Storage only — it decides nothing about
 /// retry timing (M7.6), drains nothing (M7.7), delivers nothing (M7.8), and
 /// authorizes nothing (§2.2).
+///
+/// The store is the reason a `202` in [`routes`] is truthful, and its module docs
+/// are the specification for every durability claim this crate makes.
 pub mod outbox;
 pub mod routes;
 pub mod validate;

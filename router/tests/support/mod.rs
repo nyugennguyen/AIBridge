@@ -28,8 +28,10 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
 
 use aibr_router::auth::Bearer;
+use aibr_router::outbox::IngressOutbox;
 use aibr_router::routes::AppState;
 use axum::body::Body;
 use axum::http::{header, HeaderMap, Request, StatusCode};
@@ -154,8 +156,41 @@ pub fn config_json(project_root: &Path) -> Value {
     })
 }
 
-/// Handler state for `project_root`, with the canary bearer.
-pub fn state(project_root: &Path) -> AppState {
+/// A **file-backed** admission store inside `scratch`.
+///
+/// # Why every route test gets a real file and not `open_in_memory`
+///
+/// This is the most load-bearing fixture in the suite after `TOKEN`, so the
+/// reasoning is recorded here rather than left implicit.
+///
+/// A `:memory:` SQLite database ignores `journal_mode` — `PRAGMA journal_mode` on
+/// one returns `memory`, never `wal` — and nothing it holds survives the
+/// connection. A route test running against one would assert that the router
+/// *called* `admit`; it could assert nothing about durability, because the store it
+/// was talking to had no durability to lose. Since M7.5 the property under test in
+/// every route test is precisely `SF-08` — the row is committed before the `202` —
+/// so the store those tests use has to be a store that can fail to commit.
+///
+/// The one place `open_in_memory` is appropriate is a test that is *about* the
+/// store's refusals, which needs no committed row at all.
+///
+/// The file lives inside `scratch`, so `TempDir`'s `Drop` removes it — including
+/// the `-wal` and `-shm` sidecars, which is a second reason not to point these at
+/// `/tmp` directly.
+pub fn outbox(scratch: &TempDir) -> Arc<IngressOutbox> {
+    let path = scratch.path().join("ingress-outbox.sqlite");
+    Arc::new(
+        IngressOutbox::create(&path)
+            .unwrap_or_else(|error| panic!("cannot provision {}: {error}", path.display())),
+    )
+}
+
+/// Handler state for `project_root`, the canary bearer, and `outbox`.
+///
+/// `outbox` is a parameter rather than something built here because a test that
+/// asserts on the rows it admitted needs a handle to the same store the router
+/// wrote to, and a test that wants a *failing* store needs to inject one.
+pub fn state(project_root: &Path, outbox: Arc<IngressOutbox>) -> AppState {
     AppState {
         auth: std::sync::Arc::new(Bearer::new(TOKEN).expect("the canary token is not empty")),
         project_roots: std::sync::Arc::new(vec![canonical(project_root)]),
@@ -165,12 +200,24 @@ pub fn state(project_root: &Path) -> AppState {
         // `the_accepted_shapes_are_stable`, so a divergence between the fixture
         // config and this state is a test failure rather than a silent mismatch.
         agent_id: std::sync::Arc::from(CONFIGURED_AGENT_ID),
+        outbox,
     }
 }
 
-/// A fresh router. `oneshot` consumes the `Router`, so each request gets its own.
-pub fn app(project_root: &Path) -> Router {
-    aibr_router::routes::build(state(project_root))
+/// A fresh router over `outbox`. `oneshot` consumes the `Router`, so each request
+/// gets its own.
+pub fn app(project_root: &Path, outbox: Arc<IngressOutbox>) -> Router {
+    aibr_router::routes::build(state(project_root, outbox))
+}
+
+/// `app` plus the store it was built over, for the common shape of a route test.
+///
+/// Fewer moving parts at the call site than three lines per test, and it cannot be
+/// used to accidentally get a store-less router: `AppState` has no constructor
+/// that omits one.
+pub fn app_with_store(project_root: &Path, scratch: &TempDir) -> (Router, Arc<IngressOutbox>) {
+    let outbox = outbox(scratch);
+    (app(project_root, outbox.clone()), outbox)
 }
 
 /// `realpath`, because `/tmp` is a symlink on macOS.
@@ -362,6 +409,11 @@ impl TempDir {
     /// writing JSON over a directory fails with `EISDIR` — an error that names neither
     /// the fixture nor the mistake. A file-path helper that creates nothing keeps the
     /// two apart at the call site.
+    ///
+    /// Two reasons it creates nothing, and the durability tests need the second one:
+    /// the `EISDIR` above, and that a path guaranteed *not* to exist is the fixture
+    /// for asserting the admission store is never created at a path the operator did
+    /// not provision.
     pub fn config_path(&self) -> PathBuf {
         self.path.join("config.json")
     }
@@ -401,9 +453,43 @@ impl Drop for TempDir {
 /// exists, so no amount of library-level testing can cover that half of ADR 0008 §8
 /// layer 1.
 pub fn spawn_router(config_path: &Path, token: &str) -> (Option<i32>, String) {
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_aibr-router"))
+    spawn_router_with_store(config_path, token, None)
+}
+
+/// `spawn_router`, optionally with a pre-provisioned admission store.
+///
+/// M7.5 made the store a startup prerequisite: `main` opens it BEFORE the bind
+/// preflight and exits `78` if it is unusable. Every test that spawns the binary
+/// therefore has to give it one, including the bind tests whose subject is the
+/// *address* — without it they fail on the store and never reach the preflight,
+/// which is exactly the two failures seen when the store landed.
+///
+/// `scratch: None` is for tests that assert a startup refusal happens before the
+/// store is consulted (a bad config, say). Passing a scratch dir provisions a real
+/// file-backed store at `<scratch>/ingress-outbox.sqlite`, because a test asserting
+/// on startup behaviour should not depend on ambient environment state.
+pub fn spawn_router_with_store(
+    config_path: &Path,
+    token: &str,
+    scratch: Option<&TempDir>,
+) -> (Option<i32>, String) {
+    let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_aibr-router"));
+    command
         .env("AIBRIDGE_CONFIG", config_path)
-        .env("AIBRIDGE_BEARER_TOKEN", token)
+        .env("AIBRIDGE_BEARER_TOKEN", token);
+    if let Some(scratch) = scratch {
+        command.env(
+            aibr_router::outbox::INGRESS_OUTBOX_ENV,
+            scratch.path().join("ingress-outbox.sqlite"),
+        );
+        // Provision it here. `main` REFUSES a store file that does not exist
+        // rather than creating an empty one, so the file has to exist before the
+        // child starts.
+        let path = scratch.path().join("ingress-outbox.sqlite");
+        IngressOutbox::create(&path)
+            .unwrap_or_else(|error| panic!("cannot provision {}: {error}", path.display()));
+    }
+    let output = command
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .output()

@@ -1,0 +1,182 @@
+name: Milestone 7 CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  # Runs on demand against any branch. The push/PR triggers alone left this
+  # workflow unable to verify a feature branch, which is how M7.9-M7.11 shipped
+  # as `unverified-on-macOS` with the CI that would have verified them never
+  # having executed.
+  workflow_dispatch:
+
+jobs:
+  packaging-and-verification:
+    name: Musl Matrix, Packaging, Systemd & Nftables Verification
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl,aarch64-unknown-linux-musl,x86_64-unknown-linux-gnu
+
+      - name: Install Zig and cargo-zigbuild
+        uses: korandador/setup-zig@v1
+        with:
+          zig-version: 0.13.0
+
+      - name: Install cargo-zigbuild & tools
+        run: |
+          cargo install --locked cargo-zigbuild
+          sudo apt-get update
+          sudo apt-get install -y nftables systemd binutils-multiarch libsystemd-dev
+
+      - name: Document reference host status
+        run: |
+          echo "=== Milestone 7 Verification Scope ==="
+          echo "Per Docs/implementation-plans/milestone-7-polyglot-ingress.md §Execution Scope:"
+          echo "M7.9 (static musl build matrix), M7.10 (systemd units), and M7.11 (nftables tailscale0 bind enforcement)"
+          echo "are documented as 'unverified-on-macOS' on the reference host (Darwin arm64) due to lack of systemd, nftables, and tailscale0."
+          echo "This Linux CI job provides official execution and verification."
+      - name: Build musl targets matrix with cargo zigbuild
+        run: |
+          bash scripts/build-matrix.sh x86_64-unknown-linux-musl aarch64-unknown-linux-musl x86_64-unknown-linux-gnu
+
+      - name: Verify zero NEEDED shared libraries on musl targets (readelf -d)
+        run: |
+          echo "Checking x86_64-unknown-linux-musl binary..."
+          x86_bin="dist-bin/aibr-router-x86_64-unknown-linux-musl"
+          test -f "$x86_bin"
+          readelf -d "$x86_bin" || true
+          # Assert 0 NEEDED entries
+          needed_x86=$(readelf -d "$x86_bin" | grep -c "(NEEDED)" || true)
+          echo "x86_64-unknown-linux-musl NEEDED count: $needed_x86"
+          if [ "$needed_x86" -ne 0 ]; then
+            echo "Error: x86_64-unknown-linux-musl has $needed_x86 dynamic dependencies, expected 0 (static binary)"
+            exit 1
+          fi
+
+          echo "Checking aarch64-unknown-linux-musl binary..."
+          arm_bin="dist-bin/aibr-router-aarch64-unknown-linux-musl"
+          test -f "$arm_bin"
+          readelf -d "$arm_bin" || true
+          needed_arm=$(readelf -d "$arm_bin" | grep -c "(NEEDED)" || true)
+          echo "aarch64-unknown-linux-musl NEEDED count: $needed_arm"
+          if [ "$needed_arm" -ne 0 ]; then
+            echo "Error: aarch64-unknown-linux-musl has $needed_arm dynamic dependencies, expected 0 (static binary)"
+            exit 1
+          fi
+
+          echo "Static binary verification passed: 0 NEEDED entries on musl targets."
+
+      - name: Verify binary size <= 2 MiB
+        run: |
+          for bin in dist-bin/aibr-router-x86_64-unknown-linux-musl dist-bin/aibr-router-aarch64-unknown-linux-musl; do
+            size_bytes=$(stat -c%s "$bin")
+            size_mb=$(echo "$size_bytes / 1048576" | bc -l)
+            echo "$bin size: $size_bytes bytes (~${size_mb} MB)"
+            if [ "$size_bytes" -gt 2097152 ]; then
+              echo "Error: $bin exceeds 2 MiB bound ($size_bytes bytes)"
+              exit 1
+            fi
+          done
+
+      - name: Verify systemd unit files with the real parser
+        run: |
+          # No `|| true` and no grep stand-in for the parser. The previous version
+          # of this step grepped for "Restart=always" and swallowed every
+          # systemd-analyze error, which is a check that cannot fail and would not
+          # have noticed that both units referenced flags the binary did not have.
+          #
+          # The units ExecStartPre a binary that is not installed here, so
+          # systemd-analyze reports those as missing executables. That is expected
+          # on a builder and is the only class of message tolerated below; a unit
+          # syntax error still fails the job.
+          systemd-analyze verify packaging/systemd/aibr-router.service packaging/systemd/aibr-worker.service 2>&1 \
+            | tee /tmp/systemd-verify.log
+          if grep -qvE "Command .* is not executable|No such file or directory|does not exist" /tmp/systemd-verify.log; then
+            echo "Error: systemd-analyze reported a unit error beyond the missing-router-binary class:"
+            grep -vE "Command .* is not executable|No such file or directory|does not exist" /tmp/systemd-verify.log
+            exit 1
+          fi
+          echo "systemd unit syntax verified by systemd-analyze."
+
+      - name: Exercise the provisioning contract the units depend on
+        run: |
+          # Both systemd units and both launchd wrappers run `aibr-router
+          # --init-store` and `--preflight` before the process that needs them.
+          # Those flags did not exist when the units were first written, and no
+          # test drove the binary's argv, so this step is the one that would have
+          # caught it.
+          set -euo pipefail
+          BIN=./target/release/aibr-router
+          cargo build --release -p aibr-router
+          WORK="$(mktemp -d)"
+          export AIBRIDGE_CONFIG="$PWD/bench/baseline/capture-config.json"
+          export AIBRIDGE_BEARER_TOKEN=ci-canary-token-must-not-appear-in-logs
+          export AIBRIDGE_INGRESS_OUTBOX="$WORK/ingress_outbox"
+
+          echo "-- --init-store provisions"
+          "$BIN" --init-store
+          test -f "$AIBRIDGE_INGRESS_OUTBOX"
+
+          echo "-- --init-store is idempotent (a unit runs it on every boot)"
+          "$BIN" --init-store
+          echo "-- exit 0 on the second run: the store survived"
+
+          echo "-- --preflight passes with a provisioned store"
+          "$BIN" --preflight
+          echo "-- exit 0 from --preflight"
+
+          echo "-- --preflight refuses a missing store rather than creating one"
+          export AIBRIDGE_INGRESS_OUTBOX="$WORK/absent.sqlite"
+          if "$BIN" --preflight; then
+            echo "Error: --preflight exited 0 with no store present"
+            exit 1
+          fi
+          test ! -e "$WORK/absent.sqlite" || { echo "Error: --preflight created the store"; exit 1; }
+
+          echo "-- an unknown flag refuses instead of silently serving"
+          if "$BIN" --prefligh; then
+            echo "Error: an unknown flag was accepted"
+            exit 1
+          fi
+          rm -rf "$WORK"
+
+      - name: Verify nftables rules syntax
+        run: |
+          echo "Verifying nftables syntax..."
+          sudo nft -c -f packaging/nftables/aibridge.nft
+          echo "nftables syntax verification passed."
+
+      - name: Record what this runner cannot verify
+        run: |
+          cat <<'NOTE'
+          === What this job does NOT verify ===
+          These are recorded rather than asserted, so a green run is not read as
+          more than it is:
+
+          * launchd supervision cannot be exercised in CI: a Linux runner has no
+            launchd. The macOS supervisors (packaging/launchd/*.plist and their
+            two wrappers) are covered only by `plutil -lint`, `bash -n` and
+            shellcheck, on a macOS host.
+          * tailscale0. The four-layer tailnet bind enforcement (plan M7.11) needs
+            a real tailnet interface; a GitHub runner has no tailscale0 and no
+            CGNAT address to bind. Only the ruleset's syntax is checked here.
+          * systemd runtime behaviour. `systemd-analyze verify` parses the units.
+            It does not start them, so Restart=always, MemoryMax enforcement and
+            Type=notify readiness are asserted by the router's own test suite
+            (router/tests/cli_modes.rs, router/tests/notify.rs), not here.
+          NOTE
+
+      - name: Test installer script on Linux
+        run: |
+          shellcheck scripts/install.sh
+          bash -n scripts/install.sh
+          # Dry run with --help and --version
+          ./scripts/install.sh --help
+          ./scripts/install.sh --version

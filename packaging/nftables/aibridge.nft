@@ -1,0 +1,15 @@
+#!/usr/sbin/nft -f
+# AIBridge Tailnet ingress bind enforcement (ADR 0008 §8 / M7.11)
+# Enforces that ingress port 8787 is accessible ONLY via tailscale0.
+
+table inet aibridge {
+    chain input {
+        type filter hook input priority filter; policy accept;
+
+        # Accept traffic to router ingress port 8787 only on tailscale0 interface
+        iifname "tailscale0" tcp dport 8787 accept
+
+        # Drop all other traffic targeting router ingress port 8787
+        tcp dport 8787 drop
+    }
+}

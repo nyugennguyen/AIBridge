@@ -28,6 +28,15 @@
           "type": "string",
           "format": "uri",
           "title": "BridgeConfigBridgePublicUrl"
+        },
+        "ingress_mode": {
+          "default": "engine",
+          "type": "string",
+          "enum": [
+            "engine",
+            "router"
+          ],
+          "title": "BridgeConfigBridgeIngressMode"
         }
       },
       "required": [

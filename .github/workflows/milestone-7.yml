@@ -177,7 +177,7 @@ jobs:
           fi
           echo "binary size within the 2 MiB bound"
 
-- name: Record what this runner cannot verify
+      - name: Record what this runner cannot verify
         if: always()
         run: |
           cat <<'NOTE'

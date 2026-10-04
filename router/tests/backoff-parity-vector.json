@@ -1,0 +1,18 @@
+[
+  { "failed_attempts": 1, "expected_delay_ms": 1000, "exceeds_max": false },
+  { "failed_attempts": 2, "expected_delay_ms": 2000, "exceeds_max": false },
+  { "failed_attempts": 3, "expected_delay_ms": 4000, "exceeds_max": false },
+  { "failed_attempts": 4, "expected_delay_ms": 8000, "exceeds_max": false },
+  { "failed_attempts": 5, "expected_delay_ms": 16000, "exceeds_max": false },
+  { "failed_attempts": 6, "expected_delay_ms": 32000, "exceeds_max": false },
+  { "failed_attempts": 7, "expected_delay_ms": 64000, "exceeds_max": false },
+  { "failed_attempts": 8, "expected_delay_ms": 128000, "exceeds_max": true },
+  { "failed_attempts": 9, "expected_delay_ms": 300000, "exceeds_max": true },
+  { "failed_attempts": 10, "expected_delay_ms": 300000, "exceeds_max": true },
+  { "failed_attempts": 11, "expected_delay_ms": 300000, "exceeds_max": true },
+  { "failed_attempts": 12, "expected_delay_ms": 300000, "exceeds_max": true },
+  { "failed_attempts": 13, "expected_delay_ms": 300000, "exceeds_max": true },
+  { "failed_attempts": 14, "expected_delay_ms": 300000, "exceeds_max": true },
+  { "failed_attempts": 15, "expected_delay_ms": 300000, "exceeds_max": true },
+  { "failed_attempts": 16, "expected_delay_ms": 300000, "exceeds_max": true }
+]

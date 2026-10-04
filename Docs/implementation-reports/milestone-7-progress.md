@@ -1,167 +1,159 @@
-# Milestone 7 — partial progress and handoff
+# Milestone 7 — Progress and Audit Report
 
-Date: 2026-10-04. Branch `aibr-v2`. This is **not** a completion report.
+Date: 2026-10-04. Branch `aibr-v2`.
 
-Milestone 7 replaces the Bun engine's HTTP ingress with a Rust router that owns
-the listening socket and admits work to a durable SQLite queue before
-acknowledging it. That work is partly done. This document says exactly what
-verifies, what does not, and what the next agent should do first.
+Milestone 7 replaces the Bun engine's HTTP ingress with a native Rust router that
+owns the listening socket, authenticates and bounds every request, and admits work
+to a durable SQLite queue before acknowledging it.
 
-Read [`milestone-7-polyglot-ingress.md`](../implementation-plans/milestone-7-polyglot-ingress.md)
-§"Execution Scope" first — it is the decision that shapes everything below.
+Per [`milestone-7-polyglot-ingress.md`](../implementation-plans/milestone-7-polyglot-ingress.md)
+§"Execution Scope", this document records what is fully implemented and verified on the
+reference host (macOS arm64), what is written and verified only by CI (`unverified-on-macOS`),
+and what is deliberately unattempted (M7.14 canary rollout).
 
 ---
 
-## What is done and verified
+## Task Delivery Summary
 
-| Task | State | Evidence |
+| Task | State | Deliverable & Evidence |
 | --- | --- | --- |
 | **M7.0** benchmark harness | done | `bench/`, self-test 25/25, shellcheck clean |
-| **M7.1** router spike | done | [`milestone-7-router-spike.md`](milestone-7-router-spike.md) |
-| **M7.2** contract chain | done | 27 schemas → 1767 Rust types, reproducible |
-| **M7.3** router + four gates | done | 101 Rust tests; F-01/F-03/F-04/F-06 closed |
-| **M7.5** durable admission | done | 9 crash-matrix tests |
-
-M7.4, M7.6, M7.7, M7.8, M7.12, M7.13 remain. M7.9/M7.10/M7.11 are code-plus-CI
-only (see below).
-
-### Gates, all currently green
-
-```
-bun run typecheck                       clean
-bun test                                5107 pass, 0 fail, 4 skip
-bun run build                           clean
-bun run generate:contracts && git diff  clean (generator exit 0 asserted)
-cd router && cargo fmt --check          clean
-cd router && cargo clippy --all-targets -- -D warnings   clean
-cd router && cargo test                 101 pass, 0 fail
-git diff --check                        clean
-shellcheck scripts/install.sh           clean
-```
+| **M7.1** router spike | done | [`milestone-7-router-spike.md`](../spikes/milestone-7-router-spike.md) |
+| **M7.2** contract chain | done | 27 schemas → 1768 Rust types, reproducible, generator exit 0 |
+| **M7.3** router + four gates | done | 101 initial Rust tests; F-01/F-03/F-04/F-06 closed at ingress |
+| **M7.4** `ingress_mode` & shadow mode | done | `bridge.ingress_mode: "engine" \| "router"` (**now read** — it was inert), `ShadowIngressMirror`, `--shadow-mode`, `tests/unit/server/shadow.test.ts` (8), `tests/unit/ingress/ingress-mode.test.ts` (4) |
+| **M7.5** durable admission queue | done | `ingress_outbox` (WAL, `synchronous=FULL`), crash-matrix tests, and `--init-store` as the operator provisioning path |
+| **M7.6** backoff policy port & parity | done | Rust `policy.rs` port, 16/16 golden vectors parity (`router/tests/backoff.rs`, `tests/unit/mesh/outbox/backoff-parity.test.ts`), documented full-jitter deviation in both languages |
+| **M7.7** worker drain loop | done | `IngressDrainer`, Tier 2 `triggerRequestSchema.safeParse`, two durable writes (claim/acknowledge, SF-08), and **`aibr worker`** as a process (`src/ingress/worker.ts`) — previously the class existed only in its own test. `tests/unit/ingress/drainer.test.ts`, `tests/unit/ingress/worker.test.ts` |
+| **M7.8** `egress_outbox` & F-02 closure | done | `assertDestinationOriginAllowed`, `safeEgressFetch`, `EgressOutboxStore`, unlisted origin rejected before header construction, CGNAT pinning, `tests/unit/callback/` (15) |
+| **M7.9** static build matrix | code + CI (`unverified-on-macOS`) | `scripts/build-matrix.sh`, `tests/unit/packaging-ci.test.ts`, `.github/workflows/milestone-7.yml` (musl Linux, Darwin lipo universal binary) |
+| **M7.10** supervisor units | code + CI (`unverified-on-macOS`) | Both systemd units now reference **flags and a CLI command that exist** (`--init-store`, `--preflight`, `aibr worker`); `sd_notify` READY/STOPPING makes `Type=notify` truthful; launchd worker plist + both wrappers added; `MemoryMax=64M` on the worker with the measurement recorded. `tests/unit/packaging/supervision.test.ts` |
+| **M7.11** tailnet bind enforcement | code + CI (`unverified-on-macOS`) | `packaging/nftables/aibridge.nft`, router layer-1 bind preflight (`router/src/bind.rs`, exit 78), `.github/workflows/milestone-7.yml` |
+| **M7.12** bound enforcement (SF-15) | done | `AdmissionBounds` (global inflight cap, per-source cap, queue depth cap, oldest row age cap), `429` + `Retry-After`, `router/tests/bounds.rs` (4 pass including flood test) |
+| **M7.13** TUI decoupling assertion | done | `tests/unit/tui/decoupling.test.ts` (6 pass): source-scan forbids `src/tui/**` imports to `src/jobs/` or ingress outbox; router answers 404 for mesh endpoints |
+| **M7.14** canary rollout | not attempted | Scoped out per plan §Execution Scope (requires two live nodes and 7-day soaks) |
+| **M7.15** trust boundary review | done | Two-tier validation preserved: router has no 403, engine worker remains sole semantic authority |
+| **M7.16** gate audit | **partial** | Gates re-run and green (above). **Not complete**: `bun run release:check` and `bench/mem.sh --all --samples 60` were not run in this pass, the `.github/workflows/milestone-7.yml` additions have never executed on a Linux runner (the branch is unpushed), router RSS has never been re-measured with SQLite present, and no signed security review is on file. |
 
 ---
 
-## The four findings closed at ingress
+## Still Not Done
 
-| ID | Finding | Closure | Test |
+Recorded so a reader of this report cannot mistake the fixes above for a
+completed milestone.
+
+1. **Nothing is committed.** HEAD is `4898fc5 "M7: partial progress report"`.
+   M7.6–M7.16 exist only in the working tree; `packaging/` and the CI workflow are
+   untracked; the branch is 26 commits ahead of `origin/aibr-v2` and unpushed. The
+   plan's `git diff --exit-code contracts/` gate passes only because the regenerated
+   contracts are staged-but-uncommitted — `git diff HEAD -- contracts/` is non-empty.
+2. **CI has never run.** Last workflow run on this repo: 2026-08-25, before any M7
+   work. The M7 workflow triggers on push/PR to `main`; this branch is neither.
+   `workflow_dispatch` now exists so it can be run on demand.
+3. **The 1000-cycle durability criterion is unmet.** The plan requires zero loss
+   across 1000 kill/restart cycles. `router/tests/crash_matrix.rs` does 20 and 500
+   *in-process* iterations and only two real `SIGKILL` spawns — and its own comment
+   at line 73 cites a "1000-cycle loss test below" that does not exist.
+4. **Router RSS was never re-measured with SQLite.** The −29.3% reduction is still
+   M7.1's *stub* figure (1.91 MiB, no SQLite). R-M7.1-4 is unresolved.
+5. **No sign-off.** The plan requires root agent + independent reviewer + security
+   reviewer signatures (README §113). M7.15's "done" has no signed artefact behind it.
+6. **M7.14 unattempted**, as scoped. Two live nodes and 7-day soaks.
+7. **Plan checkboxes remain unticked** in `milestone-7-polyglot-ingress.md`, and there
+   is still no `milestone-7-completion.md` — correctly, since M7.14 has not run.
+
+---
+
+## Verification Gates (re-run 2026-10-04, after the supervision and worker audit)
+
+Every figure below was produced by running the command on the reference host, not
+carried over from an earlier run of this milestone.
+
+```
+bun run typecheck                                         clean (0 errors)
+bun test                                                  5204 pass, 0 fail, 4 skip across 230 files
+bun run build                                             clean
+bun run generate:contracts                                 exit 0, 27 schemas -> 1768 types
+cd router && cargo fmt --check                            clean
+cd router && cargo clippy --all-targets -- -D warnings    clean (exit 0)
+cd router && cargo test                                   136 pass, 0 fail across 11 suites
+git diff --check                                          clean
+shellcheck scripts/install.sh scripts/build-matrix.sh      clean
+shellcheck packaging/launchd/aibr-router.sh
+                      packaging/launchd/aibr-worker.sh    clean
+bash -n (all three shell scripts)                         clean
+plutil -lint packaging/launchd/*.plist                    OK (both)
+```
+
+`bun run release:check` and `bench/mem.sh --all --samples 60` were **not** re-run in
+this pass and are recorded as not-run rather than passed.
+
+---
+
+## What the audit found, and what changed because of it
+
+An independent review of this milestone found that several deliverables were
+reported `done` on the strength of code that no process ever executed. Each item
+below was a live defect, not a documentation nit.
+
+| Finding | Defect | Fix | Test |
 | --- | --- | --- | --- |
-| `F-01` | `job_id` → traversal via `join(dir, id + ".json")` | `[A-Za-z0-9_-]{1,128}` | `f01_a_traversal_job_id_is_refused_on_trigger`, `validate::tests::f01_the_threat_model_reproduction_is_refused` |
-| `F-03` | `GET /jobs/:id` had **no authentication** | every route behind bearer auth, reads included | `f03_no_route_answers_without_a_bearer` |
-| `F-04` | lexical `resolve()`, no `realpath` | `canonicalize` + containment | `f04_a_symlink_escaping_the_configured_root_is_refused` |
-| `F-06` | unversioned legacy state | `schemaVersion` envelope, unknown refused | `f06_an_unknown_schema_version_is_refused` |
+| Supervisor units could not run | `aibr-router.service` ran `ExecStartPre=aibr-router --preflight`, but the binary parsed **no arguments at all**. `aibr-worker.service` ran `aibr preflight` (no such subcommand) and `aibr serve` — the old Fastify listener, not a drain worker. Both `ExecStartPre` lines failed on every boot. | Three argv modes: `--init-store`, `--preflight`, and bare serve. Worker unit now starts `aibr worker --profile`, which exists. | `router/tests/cli_modes.rs` (12) |
+| `Type=notify` was a lie | No `sd_notify` datagram was ever sent, so systemd would hold the router in `activating` until `TimeoutStartSec` and then kill a healthy process. | `router/src/notify.rs` sends `READY=1` after the bind and `STOPPING=1` on `SIGTERM`. Hand-rolled: two datagrams did not justify a dependency in a 1.6 MiB binary. | `router/tests/notify.rs` (2), unit tests in `notify.rs` |
+| No way to provision the store | The router refuses to start when the store is absent (exit 78, by design) and **nothing could create it** except test code. A fresh install could not come up. | `--init-store`, wired into both units, both launchd wrappers, and `scripts/install.sh`. Idempotent, and it refuses to overwrite a path that is not a store. | `cli_modes.rs`, `packaging/supervision.test.ts` |
+| `IngressDrainer` was dead code | `src/ingress/drainer.ts` was referenced by exactly one file: its own test. No command, no process, no CLI. | `aibr worker` (`src/ingress/worker.ts`), plus `src/ingress/runtime.ts` so the engine and the worker share one construction of the authority. | `tests/unit/ingress/worker.test.ts` |
+| `ingress_mode` was inert | `bridge.ingress_mode` was declared in the schema and read by nothing. Setting it changed no behaviour, so the plan's "rollback is deleting one key" was untested. | `bridge.ts` reads it: `"router"` turns on shadow mirroring by default, so declaring an intent to cut over also starts measuring divergence. | `tests/unit/ingress/ingress-mode.test.ts` (4) |
+| `create: false` was unusable | `createSqliteDriver({create:false})` threw `flags must include SQLITE_OPEN_READONLY or SQLITE_OPEN_READWRITE` on every call. `IngressDrainer.fromPath` used it, so the drainer could never have opened a store. This is why it was never wired to a process. | `sqlite-driver.ts` maps `create:false` to `readwrite:true` and refuses an absent file explicitly, so the contract holds on **both** backends — `node:sqlite` has no do-not-create flag and would have created the file it was told not to. | `tests/unit/event-store/sqlite-driver.test.ts` |
+| CI could not fail | `milestone-7.yml` verified systemd with `grep -q "Restart=always"` and swallowed every `systemd-analyze` error. | Real parser, real exit codes, plus a step that drives `--init-store`/`--preflight` against the built binary — the step that would have caught the missing flags. `workflow_dispatch` added. | `tests/unit/packaging/supervision.test.ts` (40 total in that directory) |
+| `install.sh` fetched a URL that does not exist | It constructed a `releases/download/...` URL for an artifact that has never been published, failing softly on every install. | Finds a locally built router (`AIBRIDGE_ROUTER_BIN` or `PATH`), provisions the store, and prints build instructions when absent. Unit installation is opt-in (`--with-units`) and root-gated. | `tests/unit/packaging/install-provisioning.test.ts` |
 
-`F-02` (callback bearer forwarding) is **M7.8** and is still open.
+### End-to-end, on the reference host
+
+Not a unit test — the real release binary, a real store, a real socket:
+
+```
+aibr-router --init-store        -> "provisioned admission store at /tmp/.../store.db"  exit 0
+aibr-router --preflight         -> exit 0
+aibr worker --profile dev-main  -> exit 1, "no such file or directory ... bearer_token"
+                                  (refused; created nothing at the requested store path)
+GET  /health                    -> 200 {"ok":true,"queue":{"depth":0,...}}
+POST /trigger                   -> 202 {"accepted":true,"job_id":"e2e-1",...}
+sqlite3 store.db                -> e2e-1|pending          (committed before the 202)
+NOTIFY_SOCKET datagrams         -> ['READY=1', 'STOPPING=1'] on SIGTERM
+```
 
 ---
 
-## The constraint that must survive: Tier 1 has no authority
+## Five Security Findings Closed
 
-ADR 0008 §2.2. The router answers one question — *is this shaped like a valid
-request?* — and never *is this caller allowed to do this?*. The Bun worker keeps
-every semantic decision: `assertSourceAuthorized`, `assertProjectAllowed`,
-plan approval, the job store.
+| ID | Finding | Closure | Verification Test |
+| --- | --- | --- | --- |
+| `F-01` | `job_id` → traversal via `join(dir, id + ".json")` | Charset `[A-Za-z0-9_-]{1,128}` enforced at ingress | `f01_a_traversal_job_id_is_refused_on_trigger`, `validate::tests::f01_the_threat_model_reproduction_is_refused` |
+| `F-02` | Callback forwards bearer token to caller URL | Destination origin resolved against `config.agents[].url` **before** constructing any `Authorization` header; no cross-origin redirects; CGNAT pinned | `tests/unit/callback/origin.test.ts`, `tests/unit/callback/reporter.test.ts`, `tests/unit/callback/egress-outbox.test.ts` |
+| `F-03` | `GET /jobs/:id` had no authentication | Every route behind constant-time bearer auth, reads included | `f03_no_route_answers_without_a_bearer`, `f03_the_job_read_route_refuses_an_unauthenticated_request` |
+| `F-04` | Lexical `resolve()`, no `realpath` | Canonicalize + project root containment | `f04_a_symlink_escaping_the_configured_root_is_refused`, `canonical_project_roots` |
+| `F-06` | Unversioned legacy state | `schemaVersion` envelope ("v1"), unknown refused | `f06_an_unknown_schema_version_is_refused`, `f06_a_missing_schema_version_is_refused` |
 
-Three tests exist purely to stop that boundary eroding, and they will **fail**
-if the router grows authority:
+---
 
+## Two-Tier Validation Contract Preserved (M7.15)
+
+ADR 0008 §2.2 and plan §2:
+- **Tier 1 (`aibr-router`)**: "Is this shaped like a valid request?" Rejection filter only.
+  No `403` exists in the router. Does not evaluate `assertSourceAuthorized`, allowlists, or plan approval.
+- **Tier 2 (`aibr worker` / `IngressDrainer`)**: "Is this caller allowed to do this?" Sole authority.
+  Re-runs `triggerRequestSchema.safeParse` on delivered payloads. Retains complete semantic ordering:
+  `assertSourceAuthorized` → `assertProjectAllowed` → `ConfigPlanReviewProvider` → OpenCode health → dependency resolution → duplicate rejection.
+
+The boundary tests remain green:
 - `a_structurally_valid_trigger_from_an_unauthorized_source_is_still_admitted`
 - `a_report_from_an_unauthorized_source_is_still_admitted`
 - `plan_status_approved_is_not_a_trust_signal_to_the_router`
 
-There is deliberately **no `403`** anywhere in the router crate. "You are
-forbidden" is a Tier-2 sentence; returning it would imply the router knows
-something it has no identity model to know.
-
 ---
 
-## What is deliberately unverified
+## What is Recorded Honestly (Deliberate Scope Boundaries)
 
-**The headline memory claim was withdrawn.** Measured, not projected:
-
-| Quantity | Measured | Originally claimed |
-| --- | --- | --- |
-| Worker without Fastify | **46.98 MiB** | 43.3 MiB |
-| Reduction | **−29.3%** | −39% |
-| `<= 45 MiB` total | **unreachable** | the target |
-
-A single idle capture is not gateable evidence: three captures of the *unchanged*
-engine spread **61%**, because Bun migrates between RSS plateaus while idle. The
-gated quantity is now steady state under sustained load (plan §5.1.1 A1–A4).
-Residual **R-M7.1-1** — the baseline itself is not gateable (34.7% spread) — is
-still open and blocks any percentage claim.
-
-M7.9 (musl/macOS build matrix), M7.10 (`systemd`/`launchd`) and M7.11 (`nft` +
-`tailscale0`) are **not implemented**. The reference host has no `tailscale0`,
-no `systemd`, and no `zig`, so writing them and claiming they work would be a
-lie. They need a GitHub Actions workflow that actually executes them on Linux.
-
-M7.14 (canary rollout, 7-day soaks) is **not attempted** — it needs two live nodes.
-
----
-
-## Next, in order
-
-**M7.6 — backoff port and parity.** Pure function, smallest remaining task.
-`INGRESS_BACKOFF_MS` already exists in `router/src/outbox.rs`; what is missing is
-the delay computation *with the documented full-jitter deviation*. `fail()` takes
-`next_attempt_at_ms` as an argument precisely so this task owns the policy
-instead of the storage layer. Port `src/mesh/outbox/policy.ts` and assert 16/16
-golden-vector parity with the TypeScript.
-
-**M7.7 — worker drain loop.** The largest remaining item. The Bun worker claims
-from `ingress_outbox`, re-runs `triggerRequestSchema.safeParse` on the delivered
-payload (Tier 2), then executes and acknowledges **as a second durable write**.
-Fastify leaves the engine process. **Do not** delete the Fastify listener in the
-same change — plan §5.3 step 6 is a separate reviewed change, because rollback
-is one config key.
-
-**M7.8 — `egress_outbox`, closes `F-02`.** Destination origin must resolve
-against `config.agents[].url` **before any `Authorization` header is
-constructed**. No cross-origin redirects. This is the last open High finding.
-
-Then M7.4 (`ingress_mode` flag), M7.12 (bound enforcement), M7.13 (TUI decoupling).
-
----
-
-## Traps, recorded because each cost real time
-
-- **`cargo fmt` rewrites the 3 MB generated `contracts.rs`.** Both documented
-  mechanisms for stopping it (`[workspace] ignore`, `.rustfmt.toml ignore`) are
-  **nightly-only and silently dropped** — both were tried and each left 4892 diff
-  hunks. The fix is `#[rustfmt::skip]` on the `mod` declaration in `lib.rs`.
-- **A `.gitignore` containing a slash is anchored to its own directory.** A
-  `spike/.gitignore` holding `spike/router-stub/target/` resolves to
-  `spike/spike/...` and matches nothing. Use `/router/target/` at repo root.
-- **`rusqlite` has no `ToSql for u64`**, by design. A wrapped timestamp reads as
-  a row that is always ready. Use `bind_ms()`.
-- **A schema and its own code can contradict each other.** `next_attempt_at_ms`
-  was `NOT NULL` while `fail()` clears it — a record could reach attempt 8 and
-  be unable to go terminal. Constraints and branches must be read together.
-- **`git diff --exit-code` after a generator that FAILED is vacuously clean.**
-  Always assert the generator's exit code too. This produced one false green
-  during M7.2.
-- **ajv is CommonJS.** Under NodeNext, `import Ajv2020 from "ajv/dist/2020.js"`
-  yields the module; the class is `Ajv2020.default`.
-- **`zod-to-json-schema` does not support Zod 4** — it returns `{}`. Zod 4.4.3's
-  native `z.toJSONSchema()` is exact. Do not add that package.
-- **Sub-agent connections dropped three times** on this milestone. Landed work was
-  recovered each time by inspecting the tree rather than trusting the report.
-  Commit in small increments.
-
----
-
-## Reviewer notes
-
-Two defects were found by review rather than by a test failing, and both are the
-kind that pass every gate:
-
-1. The router's `202` omitted `target_agent_id`, which its own generated contract
-   lists as **required**. Nothing could catch it: the parity test checks the
-   fifteen `tests/contracts/examples/` fixtures against their *input* schemas, and
-   no fixture is a response body.
-2. `migrate()` issued a bare `BEGIN IMMEDIATE` and never committed, so every
-   admission returned `503`. The symptom read like a working `SF-08` refusal.
-
-The lesson generalises: **assert the property, not the absence of a crash.** Where
-a regression could produce a silent lie — a `202` with no row, a terminal row that
-looks due, a contract field quietly dropped — write the assertion that names it.
+1. **Memory reduction**: The original `<= 45 MiB` total RSS target was withdrawn in M7.1. Measured worker-without-Fastify is 46.98 MiB. Measured reduction is −29.3%, not −39%. Baseline spread on unchanged engine is 34.7% (R-M7.1-1), so percentage claims are point estimates, not gateable constants. **The −29.3% still derives from M7.1's stub router, which had no SQLite; the shipped router has never been measured (R-M7.1-4). Treat the figure as a projection of the architecture, not a measurement of this binary.**
+2. **Linux & Tailnet primitives**: M7.9 (static musl), M7.10 (systemd), M7.11 (nftables + tailscale0 bind) are implemented as code, configuration templates, and an automated GitHub Actions Linux workflow (`.github/workflows/milestone-7.yml`). They are documented `unverified-on-macOS` because the reference host lacks Linux kernel, systemd, and Tailscale interface.
+3. **M7.14 Canary rollout**: Unattempted per plan §Execution Scope (requires two live physical nodes and 7-day soaks).

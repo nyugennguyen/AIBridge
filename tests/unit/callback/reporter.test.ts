@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { CallbackReporter } from "../../../src/callback/reporter.js"
+import { CrossOriginRedirectError, UnlistedOriginError } from "../../../src/callback/origin.js"
 import type { ReportCallback } from "../../../src/callback/types.js"
 
 const report: ReportCallback = {
@@ -24,7 +25,13 @@ describe("CallbackReporter", () => {
       calls.push(init ?? {})
       return new Response(null, { status: attempts < 3 ? 503 : 200 })
     }
-    const reporter = new CallbackReporter({ attempts: 3, baseDelayMs: 1, fetcher, sleep: async () => undefined })
+    const reporter = new CallbackReporter({
+      attempts: 3,
+      baseDelayMs: 1,
+      agents: [{ id: "dev-main", url: "http://dev-main.tailnet:8787" }],
+      fetcher,
+      sleep: async () => undefined,
+    })
 
     await reporter.send("http://dev-main.tailnet:8787/report", report, "secret")
 
@@ -42,5 +49,49 @@ describe("CallbackReporter", () => {
     })
 
     await expect(reporter.send("http://dev-main.tailnet:8787/report", report, "secret")).rejects.toThrow("Callback failed")
+  })
+
+  it("F-02: rejects callback to an unlisted origin BEFORE constructing any Authorization header", async () => {
+    let fetchCalled = false
+    const fetcher = async (_url: string, _init?: RequestInit): Promise<Response> => {
+      fetchCalled = true
+      return new Response(null, { status: 200 })
+    }
+
+    const reporter = new CallbackReporter({
+      attempts: 3,
+      baseDelayMs: 1,
+      agents: [{ id: "dev-main", url: "http://dev-main.tailnet:8787" }],
+      fetcher,
+      sleep: async () => undefined,
+    })
+
+    await expect(
+      reporter.send("http://evil-attacker.com/steal", report, "secret-bearer-token"),
+    ).rejects.toThrow(UnlistedOriginError)
+
+    // fetcher MUST NOT be called; no credential or network request to attacker
+    expect(fetchCalled).toBe(false)
+  })
+
+  it("F-02: refuses cross-origin redirect without forwarding bearer token", async () => {
+    const fetcher = async (_url: string, _init?: RequestInit): Promise<Response> => {
+      return new Response(null, {
+        status: 302,
+        headers: { location: "http://evil-site.com/intercept" },
+      })
+    }
+
+    const reporter = new CallbackReporter({
+      attempts: 3,
+      baseDelayMs: 1,
+      agents: [{ id: "dev-main", url: "http://dev-main.tailnet:8787" }],
+      fetcher,
+      sleep: async () => undefined,
+    })
+
+    await expect(
+      reporter.send("http://dev-main.tailnet:8787/report", report, "secret-bearer-token"),
+    ).rejects.toThrow(CrossOriginRedirectError)
   })
 })

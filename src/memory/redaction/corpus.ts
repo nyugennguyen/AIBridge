@@ -424,6 +424,19 @@ const FALSE_POSITIVES: readonly RedactionCorpusCase[] = Object.freeze([
   {
     name: "fp-url-path-tail",
     kind: "false_positive",
+    // The host is `example.com`, RFC 2606's reserved documentation domain, and
+    // the path keeps the `T.../B.../...` shape Slack uses for incoming webhooks --
+    // because the SHAPE is what this case is about, not the vendor.
+    //
+    // This case previously named Slack's real webhook host. GitHub's push
+    // protection read the URL as a live credential and refused to push the branch
+    // at all, and it does this per-commit: the string had to leave every commit in
+    // the range, not just the tip. It was never a credential -- the segments were
+    // Slack's documented placeholders -- but a scanner cannot be argued with from a
+    // commit message, and a corpus fixture that blocks `git push` is a bad fixture.
+    // The reserved domain leaves the case identical in every way the redactor can
+    // observe -- checked against the real detector, which still fires
+    // `unclassified_high_entropy_token` on it.
     text: `post the alert to https://hooks.example.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX please`,
     expectedRuleIds: ["unclassified_high_entropy_token"],
     expectedStatus: "redacted",
@@ -447,6 +460,7 @@ const NEAR_MISSES: readonly RedactionCorpusCase[] = Object.freeze([
   {
     name: "nm-slack-webhook-short-path",
     kind: "near_miss",
+    // Reserved documentation domain, same reason as `fp-url-path-tail` above.
     text: `post the alert to https://hooks.example.com/services/T1/B2/xY9 please, it is the staging hook`,
     expectedRuleIds: [],
     expectedStatus: "none",

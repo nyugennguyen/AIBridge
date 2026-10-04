@@ -98,7 +98,12 @@ fn send_abstract(payload: &str, name: &str) -> io::Result<usize> {
     use std::os::unix::net::SocketAddr;
 
     let address = SocketAddr::from_abstract_name(name.as_bytes())?;
-    UnixDatagram::unbound()?.send_to(payload.as_bytes(), &address)
+    // `send_to_addr`, not `send_to`: the latter takes `AsRef<Path>`, and an
+    // abstract-namespace socket has no path. This arm is `cfg(target_os =
+    // "linux")`, so a macOS build never type-checks it -- the first Linux CI run
+    // is what caught the wrong method, which is precisely why M7.9's build matrix
+    // exists.
+    UnixDatagram::unbound()?.send_to_addr(payload.as_bytes(), &address)
 }
 
 #[cfg(not(target_os = "linux"))]

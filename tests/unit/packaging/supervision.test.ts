@@ -244,4 +244,51 @@ describe("milestone-7 workflow — verification that can fail", () => {
     expect(workflow).toMatch(/launchd[\s\S]{0,200}(cannot|not)[\s\S]{0,80}CI/i)
     expect(workflow).toContain("tailscale0")
   })
+
+  it("references only actions from the pinned allowlist", async () => {
+    // This workflow shipped with `korandador/setup-zig`, an action that does not
+    // exist. Nothing caught it, because the workflow had never run — the job
+    // failed in 3 seconds at "Unable to resolve action". An unpinned `uses:` is
+    // therefore not a style question: a wrong repository name is a red build that
+    // looks like a packaging failure.
+    //
+    // The allowlist cannot prove a repository exists (that needs the network), but
+    // it forces a new third-party action past a test failure and a human read,
+    // which is exactly what the invented reference skipped.
+    const ALLOWLIST: readonly string[] = [
+      "actions/checkout",
+      "dtolnay/rust-toolchain",
+      "mlugg/setup-zig",
+    ]
+
+    const workflow = await load()
+    const references = [...workflow.matchAll(/uses:\s*([^\s@]+)@(\S+)/g)].map(
+      ([, repository, ref]) => ({ repository: repository!, ref: ref! }),
+    )
+
+    expect(references.length, "the workflow should reference some actions").toBeGreaterThan(0)
+    for (const { repository, ref } of references) {
+      expect(
+        ALLOWLIST,
+        `${repository}@${ref} is not on the allowlist. Verify the action exists and ` +
+          `owns the step, then add it here deliberately.`,
+      ).toContain(repository)
+    }
+  })
+
+  it("pins every action reference to an immutable ref or a documented branch", async () => {
+    const workflow = await load()
+    const references = [...workflow.matchAll(/uses:\s*([^\s@]+)@(\S+)/g)].map(
+      ([, , ref]) => ref!,
+    )
+    for (const ref of references) {
+      // `dtolnay/rust-toolchain@stable` is that action's documented usage: it
+      // resolves the toolchain itself and is not a mutable tag in the usual sense.
+      const immutable = /^v\d+(\.\d+)*$/.test(ref) || ref === "stable"
+      expect(
+        immutable,
+        `uses: ...@${ref} is neither a version tag nor the documented \`stable\` ref`,
+      ).toBe(true)
+    }
+  })
 })

@@ -8,7 +8,7 @@ This milestone is a release-hardening track. It does not weaken earlier gates or
 
 ## Prerequisites
 
-- Milestones 0–7 have completion reports and no unresolved blocker/high security findings.
+- Milestones 0–6 have completion reports; Milestone 7 has provisional progress sign-off (`Docs/implementation-reports/milestone-7-progress.md`) with five High security findings closed (`F-01`, `F-02`, `F-03`, `F-04`, `F-06`) and outstanding items bound to Milestone 8 as tracked technical debt (see §"Milestone 7 Carry-Forward").
 - All persisted and wire formats have explicit versions.
 - Supported operating limits can be measured using deterministic load/fault harnesses.
 - Public extension points are limited to interfaces already proven by first-party implementations.
@@ -26,6 +26,11 @@ Milestone 7 introduced a second language and two new durable stores. These items
 | **M7-C3** | Router version, bind-preflight result, and outbox integrity status in the support bundle, without payload contents. | M8.4 | The bundle spans two processes and two languages now. "Recent redacted errors" must merge structured Rust spans with TypeScript log lines and preserve correlation IDs across them. |
 | **M7-C4** | The five build targets for `aibr-router`. | M8.9 | M8.9 covers macOS and Debian/Ubuntu for the npm package. It must additionally clean-machine install, upgrade, and uninstall the router on both Linux arches, and verify `readelf -d` reports zero `NEEDED` on the musl targets. |
 | **M7-C5** | Resource/load limits must cover the ingress path. | M8.5 | This task is also the **named revisit condition** for ADR 0008 §2.4's JSON-only serialization decision. It must measure whether any payload class's serialized size dominates ingress cost at documented supported load, then either confirm JSON or open a versioned binary-format contract. |
+| **M7-C6** | `aibr-router` binary bound on `x86_64-unknown-linux-musl` (measured 2,222,768 bytes vs 2,097,152 bound; +125 KB overage). | M8.9 | M7 CI size gate fails on x86_64 due to bundled SQLite. M8.9 must resolve via an architectural decision: dynamic SQLite linkage on supported Linux distros, outbox store sidecar, or formal ADR 0008 §5 amendment. The bound remains unweakened until decided. |
+| **M7-C7** | 1000-cycle kill/restart durability validation for `ingress_outbox`. | M8.2 / M8.1 | M7 crash matrix verified only 20 + 500 in-process cycles and 2 SIGKILL spawns. Full 1000-cycle kill/restart zero-loss verification under real process SIGKILL must be implemented and asserted in M8.2 recovery test harness. |
+| **M7-C8** | Measured router steady-state RSS under sustained load with SQLite (`bench/mem.sh --all --samples 60`). | M8.5 | M7's −29.3% RSS reduction derived from M7.1's stub router without SQLite. M8.5 must capture true steady-state RSS under sustained load with SQLite WAL checkpoints and establish enforced resource caps. |
+| **M7-C9** | `EgressOutboxStore` integration into live report callback pipeline. | M8.2 | F-02 credential leak is closed in-memory at header construction, but durable outbox delivery remains library-only (`src/callback/egress-outbox.ts`). M8.2 must wire durable egress outbox retry/drain into `src/callback/reporter.ts`. |
+| **M7-C10** | Formal M7 multi-signature audit and M7.14 canary soak closure. | M8.10 | Milestone 7 progress report lacks formal 3-signature review (README §113), and M7.14 (canary rollout + 7-day soaks) was unattempted. M8.10 release candidate audit must absorb final soak verification and formal multi-sign-off. |
 
 ### Unassigned
 
@@ -45,15 +50,15 @@ Milestone 7 introduced a second language and two new durable stores. These items
 | Task | Dependency | Sub-agent and model | Deliverable | Verification |
 | --- | --- | --- | --- | --- |
 | M8.1 Failure-mode inventory and recovery runbooks | M0–M6 | `architect` — `gpt-6-astra high` | Recovery objectives and operator steps for process, disk, DB, migration, network, node, and controller failures | Tabletop exercises using packaged builds |
-| M8.2 Database integrity, backup, and repair tooling | M8.1 | `subsystem-builder` — `gpt-5.6-sol high` | Check, backup, safe restore, projection rebuild, outbox repair, and unsupported-version diagnostics | Corruption corpus and interrupted-restore tests |
+| M8.2 Database integrity, backup, and repair tooling | M8.1 | `subsystem-builder` — `gpt-5.6-sol high` | Check, backup, safe restore, projection rebuild, outbox repair, M7 ingress/egress outbox repair & pipeline integration (M7-C1/M7-C9), 1000-cycle kill/restart test (M7-C7), and unsupported-version diagnostics | Corruption corpus, interrupted-restore tests, and 1000-cycle zero-loss process kill/restart suite |
 | M8.3 Structured observability | M8.1 | `feature-builder` — `gpt-5.6-terra high` | Redacted logs, metrics interface, trace/correlation fields, health/readiness, event-loop/storage/backlog signals | Golden logs contain required IDs and seeded secrets never appear |
 | M8.4 Diagnostics bundle | M8.2–M8.3 | `feature-builder` — `gpt-5.6-terra high` | User-previewable support bundle with config shape, versions, health, recent redacted errors, and integrity status | Bundle schema and secret/path redaction tests |
-| M8.5 Resource/load limits | M4–M6 | `test-engineer` + `subsystem-builder` — `gpt-5.6-sol high` | Benchmarks and enforced caps for nodes, sessions, events, buffers, artifacts, fan-out, queues, and retention | Soak/load/flood tests establish documented supported limits |
+| M8.5 Resource/load limits | M4–M6 | `test-engineer` + `subsystem-builder` — `gpt-5.6-sol high` | Benchmarks and enforced caps for nodes, sessions, events, buffers, artifacts, fan-out, queues, retention, and measured router steady-state RSS with SQLite under load (M7-C8) | Soak/load/flood tests establish documented supported limits; `bench/mem.sh --all --samples 60` |
 | M8.6 Upgrade and rollback framework | M8.2 | `subsystem-builder` — `gpt-5.6-sol high` | Preflight, backup, ordered migrations, compatibility window, rollback boundary, and failure recovery | Upgrade from released fixtures; downgrade refusal/rollback tests |
 | M8.7 Adapter and terminal SDK | Proven interfaces | `architect` + `feature-builder` — `gpt-6-astra high` / `gpt-5.6-terra high` | Public packages/types, lifecycle docs, sample adapter, conformance runner, compatibility policy | Sample third-party-style adapter passes without internal imports |
 | M8.8 Herdr backend experiment | M8.7 | `feature-builder` — `gpt-5.6-terra high` | Time-boxed adapter spike and adopt/defer/reject ADR | No production dependency unless conformance and security gates pass |
-| M8.9 Packaging/platform matrix | M8.2–M8.7 | `fixture-worker` + `test-engineer` — `gpt-5.6-luna medium` / `gpt-5.6-sol high` | npm package, installer, clean-machine setup/upgrade/uninstall tests for macOS and Debian/Ubuntu | Packed artifact smoke tests; no source-tree dependency |
-| M8.10 Release candidate audit | All | `security-reviewer` + `independent-reviewer` — `gpt-6-astra xhigh/high` | Security, privacy, operations, API compatibility, and release readiness report | All release blockers resolved and acceptance suite passes twice from clean state |
+| M8.9 Packaging/platform matrix | M8.2–M8.7 | `fixture-worker` + `test-engineer` — `gpt-5.6-luna medium` / `gpt-5.6-sol high` | npm package, installer, clean-machine setup/upgrade/uninstall tests for macOS and Debian/Ubuntu, router 5 build targets (M7-C4), and x86_64 2 MiB binary bound resolution (M7-C6) | Packed artifact smoke tests; no source-tree dependency; `readelf -d` clean; binary bound gate resolved |
+| M8.10 Release candidate audit | All | `security-reviewer` + `independent-reviewer` — `gpt-6-astra xhigh/high` | Security, privacy, operations, API compatibility, release readiness report, and formal multi-sign-off with soak validation (M7-C10) | All release blockers resolved, acceptance suite passes twice from clean state, README §113 signatures on file |
 
 ## Recovery Requirements
 

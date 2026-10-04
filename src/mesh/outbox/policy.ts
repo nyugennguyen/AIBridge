@@ -35,6 +35,12 @@
  *     synchronisation this deployment cannot produce. Recorded here because a
  *     future multi-controller change must revisit it, not because it was
  *     considered and forgotten.
+ *     **Documented deviation for M7 (ADR 0008 §2.5 / M7.6):** The Rust ingress
+ *     router applies full jitter (`sleep = rand(0, min(300s, 2^n * 1s))`)
+ *     because multiple ingress routers fan into one durable store during
+ *     rolling upgrades (M7.14), where store recovery contention is real. The
+ *     mesh engine retains this un-jittered schedule because single-controller
+ *     invariants still hold.
  *
  * ### The threshold, and why 8
  *

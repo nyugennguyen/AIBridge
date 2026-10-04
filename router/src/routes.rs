@@ -104,7 +104,7 @@ use crate::auth::Bearer;
 use crate::config::RouterConfig;
 use crate::contracts::{ReportCallback, TriggerRequest};
 use crate::error::ApiError;
-use crate::outbox::{Admission, IngressOutbox};
+use crate::outbox::{Admission, AdmissionBounds, IngressOutbox};
 use crate::validate::{self, MAX_BODY_BYTES};
 use crate::CONTRACT_VERSION;
 
@@ -153,6 +153,8 @@ pub struct AppState {
     /// handing the connection to two threads directly would move the concurrency
     /// control out of the type that documents it.
     pub outbox: Arc<IngressOutbox>,
+    /// Queue admission bounds (M7.12, SF-15).
+    pub bounds: AdmissionBounds,
 }
 
 impl AppState {
@@ -173,7 +175,13 @@ impl AppState {
             // `config.bridge.agent_id` -- not a field of `RouterConfig` itself.
             agent_id: Arc::from(config.bridge.agent_id.as_str()),
             outbox,
+            bounds: AdmissionBounds::default(),
         }
+    }
+
+    pub fn with_bounds(mut self, bounds: AdmissionBounds) -> Self {
+        self.bounds = bounds;
+        self
     }
 
     /// The one place authentication happens.
@@ -216,6 +224,30 @@ impl AppState {
             .admit(&admission, crate::outbox::now_ms())
             .map(|_| ())
             .map_err(|_| ApiError::StoreUnavailable)
+    }
+}
+
+static INFLIGHT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+pub const MAX_INFLIGHT: u32 = 64;
+
+struct InflightGuard;
+
+impl InflightGuard {
+    fn acquire(cap: u32) -> Result<Self, ApiError> {
+        let prev = INFLIGHT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if prev >= cap {
+            INFLIGHT.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            return Err(ApiError::TooManyRequests {
+                retry_after_secs: 1,
+            });
+        }
+        Ok(Self)
+    }
+}
+
+impl Drop for InflightGuard {
+    fn drop(&mut self) {
+        INFLIGHT.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
     }
 }
 
@@ -344,6 +376,7 @@ async fn trigger(
     headers: HeaderMap,
     body: Body,
 ) -> Result<Response, ApiError> {
+    let _inflight = InflightGuard::acquire(MAX_INFLIGHT)?;
     state.authenticate(&headers)?;
     let bytes = capped_body(&headers, body).await?;
 
@@ -359,6 +392,13 @@ async fn trigger(
 
     // `F-04`: resolve symlinks, then require containment in a configured root.
     validate::canonical_project_dir(&trigger.project_dir, &state.project_roots)?;
+
+    // Bound enforcement (M7.12, SF-15)
+    state.outbox.assert_bounds(
+        &trigger.source_agent_id,
+        crate::outbox::now_ms(),
+        state.bounds,
+    )?;
 
     // Every gate has now run and every one of them refused. Nothing below this line
     // writes a row for a request that failed the structural gate, which is what keeps
@@ -409,6 +449,7 @@ async fn report(
     headers: HeaderMap,
     body: Body,
 ) -> Result<Response, ApiError> {
+    let _inflight = InflightGuard::acquire(MAX_INFLIGHT)?;
     state.authenticate(&headers)?;
     let bytes = capped_body(&headers, body).await?;
 
@@ -421,6 +462,13 @@ async fn report(
     // otherwise reach the same `join()`.
     let report: ReportCallback =
         validate::payload(&document, "request body is not a valid ReportCallback")?;
+    // Bound enforcement (M7.12, SF-15)
+    state.outbox.assert_bounds(
+        &report.source_agent_id,
+        crate::outbox::now_ms(),
+        state.bounds,
+    )?;
+
     validate::require_job_id(&report.job_id, "job_id must match [A-Za-z0-9_-]{1,128}")?;
 
     // Committed before the `202`, exactly as on `/trigger`. The `202` body carries no

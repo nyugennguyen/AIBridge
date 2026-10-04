@@ -558,3 +558,49 @@ async fn a_store_that_cannot_write_answers_503_rather_than_202() {
         reply.text()
     );
 }
+
+/// M7.8: `egress_outbox` exists in the provisioned store and enforces the foreign key
+/// to `ingress_outbox(job_id)`.
+#[tokio::test]
+async fn egress_outbox_foreign_key_is_enforced() {
+    let scratch = TempDir::new("egress-fk");
+    let store_path = scratch.path().join("ingress-outbox.sqlite");
+    let _store = IngressOutbox::create(&store_path).expect("provisioned");
+
+    let connection = rusqlite::Connection::open(&store_path).expect("direct connection opens");
+    connection
+        .pragma_update(None, "foreign_keys", "ON")
+        .expect("foreign keys ON");
+
+    // An egress row referencing an absent job_id is rejected by foreign key constraint
+    let absent_insert = connection.execute(
+        "INSERT INTO egress_outbox (
+            outbox_id, job_id, destination_url, destination_origin, payload_json,
+            created_at_ms, next_attempt_at_ms, attempts, status
+         ) VALUES ('egress-1', 'nonexistent-job', 'http://peer:8787/report', 'http://peer:8787', '{}', 1000, 1000, 0, 'pending')",
+        [],
+    );
+    assert!(
+        absent_insert.is_err(),
+        "egress_outbox must refuse rows referencing an un-admitted job_id"
+    );
+
+    // Now admit the job into ingress_outbox
+    let store = IngressOutbox::open(&store_path).expect("open");
+    store
+        .admit(&Admission::trigger("valid-job-id", "subject", "{}"), 1)
+        .expect("admit succeeded");
+
+    // Now insert an egress row referencing the admitted job_id -> succeeds
+    let valid_insert = connection.execute(
+        "INSERT INTO egress_outbox (
+            outbox_id, job_id, destination_url, destination_origin, payload_json,
+            created_at_ms, next_attempt_at_ms, attempts, status
+         ) VALUES ('egress-1', 'valid-job-id', 'http://peer:8787/report', 'http://peer:8787', '{}', 1000, 1000, 0, 'pending')",
+        [],
+    );
+    assert!(
+        valid_insert.is_ok(),
+        "egress_outbox must accept rows referencing an admitted job_id"
+    );
+}

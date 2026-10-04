@@ -201,6 +201,7 @@ pub fn state(project_root: &Path, outbox: Arc<IngressOutbox>) -> AppState {
         // config and this state is a test failure rather than a silent mismatch.
         agent_id: std::sync::Arc::from(CONFIGURED_AGENT_ID),
         outbox,
+        bounds: aibr_router::outbox::AdmissionBounds::default(),
     }
 }
 

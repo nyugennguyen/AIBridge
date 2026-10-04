@@ -134,15 +134,10 @@ pub const MESH_OUTBOX_MAX_ATTEMPTS: u32 = 8;
 /// The delay after the Nth failed attempt, in milliseconds. Index 0 is after
 /// attempt 1. Ported from `DELIVERY_BACKOFF_MS`.
 ///
-/// **The table is here; the function that indexes it is not.** Turning an attempt
-/// count into a delay is M7.6's, because that is where the plan's one documented
-/// deviation lives — full jitter (`sleep = rand(0, min(300s, 2^n * 1s))`) on the
-/// strength that ingress has many routers fanning into one store during the M7.14
-/// rolling upgrade, where the engine's un-jittered schedule was justified by there
-/// being exactly one controller per run. Shipping the index function here would
-/// make M7.6's actual change — adding jitter — a rewrite of this file rather than
-/// of the policy module, and the deviation would end up recorded in the wrong
-/// file.
+/// **The table is here; the policy functions are in [`crate::policy`].**
+/// [`crate::policy::backoff_delay_ms`] computes the deterministic delay, and
+/// [`crate::policy::jittered_backoff_delay_ms`] implements the documented
+/// full-jitter deviation (`sleep = rand(0, min(300s, 2^n * 1s))`) for M7.6.
 ///
 /// `router/tests/outbox.rs` asserts the plan's last crash-window row against this
 /// table, which is the claim that matters: over a ten-minute partition the
@@ -335,6 +330,27 @@ pub struct QueueStats {
     /// an oldest age that is not moving is a stuck worker, and neither number alone
     /// distinguishes that from a quiet queue.
     pub oldest_pending_age_ms: Option<u64>,
+}
+
+/// Admission queue bound limits (M7.12, SF-15).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AdmissionBounds {
+    /// Maximum unacknowledged rows (pending + sending).
+    pub max_queue_depth: u64,
+    /// Maximum unacknowledged rows per `source_agent_id`.
+    pub max_per_source: u64,
+    /// Maximum age in ms of oldest pending row before backpressure.
+    pub max_queue_age_ms: u64,
+}
+
+impl Default for AdmissionBounds {
+    fn default() -> Self {
+        Self {
+            max_queue_depth: 1_000,
+            max_per_source: 50,
+            max_queue_age_ms: 0,
+        }
+    }
 }
 
 /// Why the store could not be used.
@@ -1180,6 +1196,62 @@ impl IngressOutbox {
                 .map(|created| now_ms.saturating_sub(u64::try_from(created).unwrap_or(0))),
         })
     }
+    /// Count unacknowledged records for a given `source_agent_id` (M7.12).
+    pub fn count_pending_for_source(&self, source_agent_id: &str) -> Result<u64, StoreError> {
+        let connection = self.lock()?;
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM ingress_outbox
+                 WHERE status IN ('pending', 'sending')
+                   AND json_extract(payload_json, '$.source_agent_id') = ?",
+                params![source_agent_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|val| u64::try_from(val).unwrap_or(u64::MAX))
+            .map_err(|error| StoreError::Write {
+                operation: "count_pending_for_source",
+                detail: error.to_string(),
+            })
+    }
+
+    /// Enforce queue bounds before admission (M7.12, SF-15).
+    pub fn assert_bounds(
+        &self,
+        source_agent_id: &str,
+        now_ms: u64,
+        bounds: AdmissionBounds,
+    ) -> Result<(), crate::error::ApiError> {
+        let stats = self
+            .stats(now_ms)
+            .map_err(|_| crate::error::ApiError::StoreUnavailable)?;
+
+        if stats.depth >= bounds.max_queue_depth {
+            return Err(crate::error::ApiError::TooManyRequests {
+                retry_after_secs: 5,
+            });
+        }
+
+        if bounds.max_queue_age_ms > 0 {
+            if let Some(age) = stats.oldest_pending_age_ms {
+                if age > bounds.max_queue_age_ms {
+                    return Err(crate::error::ApiError::TooManyRequests {
+                        retry_after_secs: 15,
+                    });
+                }
+            }
+        }
+
+        let source_count = self
+            .count_pending_for_source(source_agent_id)
+            .map_err(|_| crate::error::ApiError::StoreUnavailable)?;
+        if source_count >= bounds.max_per_source {
+            return Err(crate::error::ApiError::TooManyRequests {
+                retry_after_secs: 10,
+            });
+        }
+
+        Ok(())
+    }
 
     /// The `CREATE TABLE` and its index, as the migration runs them.
     ///
@@ -1222,6 +1294,27 @@ impl IngressOutbox {
 
         CREATE INDEX ingress_outbox_claimable
           ON ingress_outbox (status, next_attempt_at_ms);
+
+        CREATE TABLE egress_outbox (
+          outbox_id          TEXT    PRIMARY KEY,
+          job_id             TEXT    NOT NULL REFERENCES ingress_outbox(job_id),
+          destination_url    TEXT    NOT NULL,
+          destination_origin TEXT    NOT NULL,
+          payload_json       TEXT    NOT NULL,
+          created_at_ms      INTEGER NOT NULL,
+          next_attempt_at_ms INTEGER,
+          attempts           INTEGER NOT NULL DEFAULT 0,
+          claim_token        TEXT,
+          claimed_at_ms      INTEGER,
+          status             TEXT    NOT NULL
+            CHECK (status IN ('pending', 'sending', 'delivered', 'failed')),
+          last_error         TEXT,
+          terminal_error     TEXT,
+          CHECK (attempts >= 0)
+        ) STRICT;
+
+        CREATE INDEX egress_outbox_claimable
+          ON egress_outbox (status, next_attempt_at_ms);
     ";
 
     fn lock(&self) -> Result<MutexGuard<'_, Connection>, StoreError> {

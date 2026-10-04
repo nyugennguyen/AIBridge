@@ -59,6 +59,7 @@
 // `MemoryMax`. The lint targets enums multiplied by large counts, and this is
 // neither.
 #![allow(clippy::large_enum_variant)]
+#![allow(clippy::derivable_impls)]
 
 // `#[rustfmt::skip]` on the `mod` line, not rustfmt's `ignore` config.
 //
@@ -79,6 +80,8 @@ pub mod auth;
 pub mod bind;
 pub mod config;
 pub mod error;
+/// M7.10's `sd_notify` readiness, so `Type=notify` is truthful.
+pub mod notify;
 /// M7.5's durable admission queue. Storage only — it decides nothing about
 /// retry timing (M7.6), drains nothing (M7.7), delivers nothing (M7.8), and
 /// authorizes nothing (§2.2).
@@ -86,6 +89,8 @@ pub mod error;
 /// The store is the reason a `202` in [`routes`] is truthful, and its module docs
 /// are the specification for every durability claim this crate makes.
 pub mod outbox;
+/// M7.6 backoff policy and full-jitter delay computation.
+pub mod policy;
 pub mod routes;
 pub mod validate;
 

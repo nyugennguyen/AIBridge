@@ -87,6 +87,8 @@ pub enum ApiError {
     /// process's stderr, and the caller learns the one thing it can act on, which is
     /// that the work was not accepted and may be resubmitted.
     StoreUnavailable,
+    /// Queue or inflight bound exceeded (M7.12, SF-15, `429`).
+    TooManyRequests { retry_after_secs: u32 },
 }
 
 impl ApiError {
@@ -104,6 +106,7 @@ impl ApiError {
             Self::NotFound => StatusCode::NOT_FOUND,
             Self::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             Self::StoreUnavailable => StatusCode::SERVICE_UNAVAILABLE,
+            Self::TooManyRequests { .. } => StatusCode::TOO_MANY_REQUESTS,
         }
     }
 
@@ -134,6 +137,9 @@ impl ApiError {
             Self::StoreUnavailable => {
                 Cow::Borrowed("the router cannot durably accept work right now; retry")
             }
+            Self::TooManyRequests { .. } => {
+                Cow::Borrowed("too many requests; queue or rate bound exceeded; retry later")
+            }
         }
     }
 }
@@ -150,6 +156,12 @@ impl IntoResponse for ApiError {
             response.headers_mut().insert(
                 header::WWW_AUTHENTICATE,
                 header::HeaderValue::from_static(WWW_AUTHENTICATE),
+            );
+        }
+        if let Self::TooManyRequests { retry_after_secs } = self {
+            response.headers_mut().insert(
+                header::RETRY_AFTER,
+                header::HeaderValue::from(retry_after_secs),
             );
         }
 

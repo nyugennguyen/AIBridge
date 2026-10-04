@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process"
 import { existsSync } from "node:fs"
 import { readFile } from "node:fs/promises"
 import { describe, expect, it } from "vitest"
+import { parse as parseYaml } from "yaml"
 
 const ROUTER_UNIT = "packaging/systemd/aibr-router.service"
 const WORKER_UNIT = "packaging/systemd/aibr-worker.service"
@@ -206,6 +207,43 @@ describe("launchd supervision", () => {
 
 describe("milestone-7 workflow — verification that can fail", () => {
   const load = () => read(".github/workflows/milestone-7.yml")
+
+  it("is valid YAML, so a formatting slip cannot silently disable every check", async () => {
+    // A real parse, not a regex. One under-indented `- name:` made GitHub reject
+    // the whole file ("This run likely failed because of a workflow file issue"),
+    // which cost a CI cycle and reported *nothing* about the milestone -- the most
+    // dangerous possible outcome for a workflow whose job is to verify things.
+    const workflow = parseYaml(await load())
+
+    expect(typeof workflow, "the file must parse as a YAML mapping").toBe("object")
+    expect(workflow.jobs, "a workflow with no jobs verifies nothing").toBeDefined()
+
+    const jobs = workflow.jobs as Record<string, { steps?: unknown[] }>
+    for (const [name, job] of Object.entries(jobs)) {
+      expect(Array.isArray(job.steps), `job ${name} has no steps array`).toBe(true)
+      expect((job.steps ?? []).length, `job ${name} has no steps`).toBeGreaterThan(0)
+      for (const step of job.steps ?? []) {
+        const record = step as Record<string, unknown>
+        expect(
+          typeof record.name === "string" && typeof record.run === "string" || typeof record.uses === "string",
+          `a step in ${name} has neither a run script nor a uses:`,
+        ).toBe(true)
+      }
+    }
+  })
+
+  it("gives every step a name, so a red step is identifiable in the UI", async () => {
+    const workflow = parseYaml(await load())
+    const jobs = workflow.jobs as Record<string, { steps?: Array<Record<string, unknown>> }>
+    for (const [jobName, job] of Object.entries(jobs)) {
+      for (const step of job.steps ?? []) {
+        expect(
+          typeof step.name,
+          `a step in ${jobName} has no name: ${JSON.stringify(step).slice(0, 80)}`,
+        ).toBe("string")
+      }
+    }
+  })
 
   it("can be run on demand against a branch", async () => {
     expect(await load()).toContain("workflow_dispatch")

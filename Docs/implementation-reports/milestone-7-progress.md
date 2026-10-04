@@ -79,20 +79,64 @@ completed milestone.
 ## What the first CI run found (2026-10-04)
 
 The M7 workflow had never executed. Its first run failed, and every failure was a
-real defect that local verification could not see:
+real defect that local verification could not see. Five runs later, on PR #2:
+
+| Step | Result |
+| --- | --- |
+| Build musl targets matrix (`cargo zigbuild`) | **pass** |
+| Zero `NEEDED` shared libraries (`readelf -d`) | **pass** — 0 on both musl targets |
+| Measure binary size vs 2 MiB | reports `OVER BOUND by 125616 bytes` |
+| `systemd-analyze verify` (real parser, errors fatal) | **pass** |
+| Provisioning contract (`--init-store` / `--preflight`, live binary) | **pass** — provisions, idempotent, refuses a missing store, refuses an unknown flag |
+| `nft -c -f` ruleset syntax | **pass** |
+| **Enforce the 2 MiB binary bound** | **FAIL** — 2,222,768 > 2,097,152 |
+
+`ci.yml` (`verify (1.3.14)`, 5218 bun tests + cargo parity) is **green**.
+
+### Defects the first run found
 
 | Failure | Cause | Fix |
 | --- | --- | --- |
-| Job failed in 3 s: `Unable to resolve action korandador/setup-zig` | The workflow referenced an action repository that does not exist | `mlugg/setup-zig@v2`; two tests now pin every `uses:` to an allowlist and an immutable ref |
+| Job died in 3 s: `Unable to resolve action korandador/setup-zig` | The workflow referenced an action repository that does not exist | `mlugg/setup-zig@v2`; two tests pin every `uses:` to an allowlist and an immutable ref |
 | Both jobs: `error[E0277] … SocketAddr: AsRef<Path>` at `notify.rs:101` | My `send_to` was wrong for the Linux abstract-namespace arm — and that arm is `cfg(target_os = "linux")`, so **136 macOS tests, clippy and fmt all passed on code that cannot build on Linux** | `send_to_addr`; verified locally with `rustc --target x86_64-unknown-linux-musl --emit=metadata` (exit 0) |
-| `Build musl targets matrix` passed while producing nothing | `build_target ... \|\| true` and a `Warning:` for a missing artefact | Both removed: a target that fails to cross-compile is now a failure |
-| `Verify binary size` failed at 2,222,768 bytes | The `<= 2 MiB` gate, genuinely missed | Reported NOT MET above; the bound was not moved |
+| `Build musl targets matrix` went green while producing nothing | `build_target ... \|\| true` and a `Warning:` for a missing artefact | Both removed: a failed cross-compile is now a failure |
+| `This run likely failed because of a workflow file issue` | An under-indented `- name:` invalidated the whole file — **no step ran**, so a run reported nothing about the milestone | Two tests now parse the workflow with a real YAML parser |
+| Size step failed and `set -e` abandoned the run | The systemd, provisioning and nftables checks were reported `skipped` | The size step records a verdict; a final `if: always()` gate enforces it, so every check runs and the job still ends red |
+| `Exercise the provisioning contract` died on `could not find Cargo.toml` | The step ran `cargo build` at the repo root; the workspace is `router/` | `--manifest-path router/Cargo.toml`, after verifying the whole contract locally against the same binary |
 
-`ci.yml` (`verify (1.3.14)`) is **green** on the current head.
+The `notify.rs` item is the one worth carrying forward: **a platform-gated code
+path is unverified code**, and the build matrix is the only thing that verifies
+it. That is the whole argument for M7.9 existing.
 
-The Linux arm of `notify.rs` is the item worth carrying forward: **a
-platform-gated code path is unverified code**, and the build matrix is the only
-thing that verifies it. That is the whole argument for M7.9 existing.
+The `SQLITE_OMIT_JSON` result is the second: a size "optimisation" silently broke
+admission (503 on every write) while `the_store_is_wal_and_synchronous_full`
+still passed. A durability test that checks only the journal would have shipped a
+broken queue.
+
+---
+
+## The 2 MiB criterion: NOT MET, with the measurement
+
+`x86_64-unknown-linux-musl` is **2,222,768 bytes**; `aarch64` is 2,085,456. The
+bound is 2,097,152. The x86_64 target misses by 125,616 bytes and the aarch64
+target passes by 11,696 — the same source, different libc, on either side of the
+line.
+
+Both reductions were measured and rejected rather than shipped, recorded in
+`scripts/build-matrix.sh`:
+
+- **`SQLITE_OMIT_*`** — the safe subset (FTS3/4/5, RTREE, load_extension,
+  deprecated, progress callback, trace, shared cache, TCL, compile diagnostics)
+  bought **19,360 bytes**: 1.2%, against a 125,616 gap. It also has a sharper
+  edge than it looks — `SQLITE_OMIT_JSON` makes every write answer `503`, because
+  the store's SQL uses JSON functions.
+- **`regress` with trimmed default features** — byte-identical binary. No win.
+
+The honest conclusion is that this is an architecture question, not a compiler
+flag: link SQLite dynamically, or move the store behind a sidecar. Both change
+the deployment story ADR 0008 §5 fixed, so this is a milestone-8 item rather than
+something to solve by moving the bound. Until then the criterion is reported
+**not met**.
 
 ---
 

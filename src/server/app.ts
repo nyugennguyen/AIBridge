@@ -11,6 +11,7 @@ import { registerHealthRoute } from "./routes/health.js"
 import { registerJobsRoute } from "./routes/jobs.js"
 import { registerReportRoute } from "./routes/report.js"
 import { registerTriggerRoute } from "./routes/trigger.js"
+import type { ShadowIngressMirror } from "./shadow.js"
 
 export interface AppDependencies {
   config: BridgeConfig
@@ -20,6 +21,7 @@ export interface AppDependencies {
   callbackReporter: CallbackReporter
   monitorSession: (job: JobRecord) => Promise<void>
   taskGraphSyncer: TaskGraphSyncer
+  shadowMirror?: ShadowIngressMirror
   /**
    * The orchestration kernel's legacy compatibility seam.
    *

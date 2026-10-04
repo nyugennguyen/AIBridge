@@ -34,7 +34,7 @@ export class InMemoryJobStore implements JobStore {
 export function testConfig(): BridgeConfig {
   return {
     agent_id: "test-vps",
-    bridge: { host: "0.0.0.0", port: 8787, public_url: "http://test-vps.tailnet:8787" },
+    bridge: { host: "0.0.0.0", port: 8787, public_url: "http://test-vps.tailnet:8787", ingress_mode: "engine" },
     opencode: { base_url: "http://127.0.0.1:4096", server_port: 4096, username: "opencode", password_env: "OPENCODE_SERVER_PASSWORD" },
     security: {
       auth_mode: "bearer-token",

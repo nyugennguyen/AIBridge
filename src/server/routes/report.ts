@@ -9,7 +9,10 @@ export function registerReportRoute(app: FastifyInstance, dependencies: AppDepen
   app.post("/report", async (request, reply) => {
     if (!auth.validate(request.headers.authorization)) return reply.code(401).send({ error: "Unauthorized" })
     const parsed = reportCallbackSchema.safeParse(request.body)
-    if (!parsed.success) return reply.code(400).send({ error: "Invalid report payload", details: parsed.error.issues })
+    if (!parsed.success) {
+      dependencies.shadowMirror?.mirrorReport(request.body, false)
+      return reply.code(400).send({ error: "Invalid report payload", details: parsed.error.issues })
+    }
 
     const report = parsed.data
     if (report.target_agent_id !== dependencies.config.agent_id) return reply.code(404).send({ error: "Target agent not found here" })
@@ -41,6 +44,7 @@ export function registerReportRoute(app: FastifyInstance, dependencies: AppDepen
         await dependencies.jobManager.markFailed(job.id, error instanceof Error ? error.message : "Execution failed")
       }
     }
+    dependencies.shadowMirror?.mirrorReport(request.body, true)
     return reply.code(202).send({ accepted: true })
   })
 }

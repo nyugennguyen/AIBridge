@@ -217,14 +217,35 @@ export function createSqliteDriver(options?: string | SqliteDriverOptions): Sqli
 
   if (dbPath !== ":memory:") {
     const resolved = resolve(dbPath)
-    mkdirSync(dirname(resolved), { recursive: true })
+    if (opts.create === false) {
+      // `create: false` is a durability contract, not a preference: the ingress
+      // worker opens the router's admission store with it so that a deleted or
+      // never-provisioned queue is an error. Checking here is what makes the
+      // contract hold on BOTH backends — `node:sqlite` has no "do not create"
+      // flag at all and would happily create the file it was told not to.
+      if (!existsSync(resolved)) {
+        throw new Error(
+          `SQLite database ${dbPath} does not exist, and create:false forbids creating it. ` +
+            `A store that appears from nothing is a queue that has lost every row it admitted.`,
+        )
+      }
+    } else {
+      mkdirSync(dirname(resolved), { recursive: true })
+    }
   }
 
   if (backend === "bun") {
     const { Database } = require("bun:sqlite")
     const db = new Database(dbPath, {
-      readonly: opts.readonly,
+      readonly: opts.readonly ?? false,
       create: opts.create ?? true,
+      // `bun:sqlite` derives its open flags from the options and nothing else:
+      // `readonly: false` is not a request to open read-write, and with
+      // `create: false` the flags end up carrying neither SQLITE_OPEN_READONLY
+      // nor SQLITE_OPEN_READWRITE, which SQLite rejects. `readwrite` is the flag
+      // that says "this file exists, open it for writing" — the exact intent of
+      // `create: false`.
+      ...(opts.create === false && opts.readonly !== true ? { readwrite: true } : {}),
     })
     return new BaseSqliteDriver(dbPath, "bun", db)
   }

@@ -27,6 +27,7 @@ export const bridgeConfigSchema = z.object({
     host: z.string().min(1),
     port: z.number().int().positive(),
     public_url: z.url(),
+    ingress_mode: z.enum(["engine", "router"]).default("engine"),
   }),
   opencode: z.object({
     base_url: z.url(),

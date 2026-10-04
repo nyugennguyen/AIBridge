@@ -126,8 +126,13 @@ jobs:
           # test drove the binary's argv, so this step is the one that would have
           # caught it.
           set -euo pipefail
-          BIN=./target/release/aibr-router
-          cargo build --release -p aibr-router
+          # The workspace is `router/`, not the repository root: `cargo build` at the
+          # root dies with "could not find Cargo.toml in ... or any parent directory",
+          # which is how the first run of this step failed. A wrong path here is a bug
+          # in the step, not a broken checkout.
+          BIN=./router/target/release/aibr-router
+          cargo build --release --manifest-path router/Cargo.toml
+          test -x "$BIN"
           WORK="$(mktemp -d)"
           export AIBRIDGE_CONFIG="$PWD/bench/baseline/capture-config.json"
           export AIBRIDGE_BEARER_TOKEN=ci-canary-token-must-not-appear-in-logs

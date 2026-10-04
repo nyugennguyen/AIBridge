@@ -61,6 +61,38 @@ completed milestone.
 6. **M7.14 unattempted**, as scoped. Two live nodes and 7-day soaks.
 7. **Plan checkboxes remain unticked** in `milestone-7-polyglot-ingress.md`, and there
    is still no `milestone-7-completion.md` — correctly, since M7.14 has not run.
+8. **The `<= 2 MiB` binary criterion is NOT MET.** Measured on the first Linux CI
+   run: `x86_64-unknown-linux-musl` is **2,222,768 bytes (2.12 MiB)**, over the
+   bound by 125,616. The `readelf -d` half of the same gate passes — zero
+   `NEEDED` on both musl targets. The delta from M7.1's 558 KiB stub is bundled
+   SQLite, which is precisely the unknown R-M7.1-4 named. Two reductions were
+   measured and rejected: a safe `SQLITE_OMIT_*` subset bought 19,360 bytes
+   (1.2%, not enough) and `SQLITE_OMIT_JSON` silently broke admission (503 on
+   every write) while `the_store_is_wal_and_synchronous_full` still passed;
+   trimming `regress`'s default features produced a byte-identical binary.
+   Recorded in `scripts/build-matrix.sh` so the next attempt starts from the
+   measurements. Closing it is an architecture decision (dynamic linking, or a
+   store sidecar), not a compiler flag.
+
+---
+
+## What the first CI run found (2026-10-04)
+
+The M7 workflow had never executed. Its first run failed, and every failure was a
+real defect that local verification could not see:
+
+| Failure | Cause | Fix |
+| --- | --- | --- |
+| Job failed in 3 s: `Unable to resolve action korandador/setup-zig` | The workflow referenced an action repository that does not exist | `mlugg/setup-zig@v2`; two tests now pin every `uses:` to an allowlist and an immutable ref |
+| Both jobs: `error[E0277] … SocketAddr: AsRef<Path>` at `notify.rs:101` | My `send_to` was wrong for the Linux abstract-namespace arm — and that arm is `cfg(target_os = "linux")`, so **136 macOS tests, clippy and fmt all passed on code that cannot build on Linux** | `send_to_addr`; verified locally with `rustc --target x86_64-unknown-linux-musl --emit=metadata` (exit 0) |
+| `Build musl targets matrix` passed while producing nothing | `build_target ... \|\| true` and a `Warning:` for a missing artefact | Both removed: a target that fails to cross-compile is now a failure |
+| `Verify binary size` failed at 2,222,768 bytes | The `<= 2 MiB` gate, genuinely missed | Reported NOT MET above; the bound was not moved |
+
+`ci.yml` (`verify (1.3.14)`) is **green** on the current head.
+
+The Linux arm of `notify.rs` is the item worth carrying forward: **a
+platform-gated code path is unverified code**, and the build matrix is the only
+thing that verifies it. That is the whole argument for M7.9 existing.
 
 ---
 

@@ -1,0 +1,81 @@
+[Unit]
+Description=AIBridge Ingress Drain Worker (aibr worker)
+Documentation=file:/usr/local/share/doc/aibridge/packaging/systemd/aibr-worker.service
+# The worker claims rows from the same admission store the router admits into, so
+# the router's unit must come first. Wants= (not Requires=) because a router
+# restart must not take the drain down with it: unsent rows stay durable.
+After=network.target
+After=aibr-router.service
+Wants=aibr-router.service
+
+[Service]
+# Type=simple: this process listens on no socket and sends no readiness datagram.
+# There is nothing for a supervisor to wait for, and asking it to wait for one
+# would mean holding the unit in "activating" until a timeout.
+Type=simple
+
+# Same three variables as aibr-router.service, from the same optional env file:
+# AIBRIDGE_CONFIG, AIBRIDGE_BEARER_TOKEN, AIBRIDGE_INGRESS_OUTBOX. The store path
+# must be identical in both units or the two processes drain different queues.
+EnvironmentFile=-/etc/aibridge/router.env
+Environment=AIBRIDGE_INGRESS_OUTBOX=%S/aibridge/ingress_outbox
+# The profile the drain loop runs under (the same profile name used by
+# `aibr status --profile <name>`). Not defaulted here: a guessed profile name
+# would start a worker attached to nothing, and the check below turns that into a
+# visible refusal instead.
+Environment=AIBRIDGE_WORKER_PROFILE=
+
+# `aibr` is a Bun entrypoint (dist/cli.js) whose shebang is `#!/usr/bin/env bun`,
+# so bun must be on PATH or ExecStart fails with 127. Adjust this line if bun is
+# installed somewhere else (for example /root/.bun/bin for a root unit).
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+
+StateDirectory=aibridge
+StateDirectoryMode=0700
+
+# Pre-step 1: provision the admission store. The worker claims rows from it, and
+# neither this process nor the router will create it (M7.5), so the first start on
+# a fresh host needs this. Idempotent: exit 0 if already provisioned, exit 78 if
+# the path exists but is not a valid store — which fails the unit before the drain
+# loop starts rather than letting it poll a file it cannot write.
+ExecStartPre=/usr/local/bin/aibr-router --init-store
+# Pre-step 2: what the previous pre-start line pretended to do. There is no
+# `preflight` subcommand in the CLI, so that line was a guaranteed failure dressed
+# up as a check. What this actually verifies is narrow, and is stated rather than
+# implied: AIBRIDGE_CONFIG is set and names a readable file, the token is
+# non-empty, and AIBRIDGE_WORKER_PROFILE is set. It does NOT validate config
+# against the schema, does not check the bind address, and does not open the
+# store — those belong to the router binary's own preflight mode, and re-running
+# it here would couple this unit's start to an address it does not use.
+ExecStartPre=/bin/sh -c 'test -r "${AIBRIDGE_CONFIG:-}" && test -n "${AIBRIDGE_BEARER_TOKEN:-}" && test -n "${AIBRIDGE_WORKER_PROFILE:-}"'
+
+# The drain worker: claims rows from ingress_outbox, executes them, acknowledges.
+# This is deliberately not the pre-migration HTTP listener command, which held a
+# Fastify socket -- the whole point of M7.7 is that this process holds none.
+ExecStart=/usr/local/bin/aibr worker --profile ${AIBRIDGE_WORKER_PROFILE}
+Restart=always
+RestartSec=2
+
+# 64 MiB, not the plan's 32M, and that difference is a measurement rather than a
+# preference. The plan's 32M figure was derived from the ROUTER's 1.94 MiB
+# capture (ADR 0008 §2.7); this process measured 46.98 MiB (median of six capture
+# medians, spread 6.35%) with Fastify already removed. At MemoryMax=32M the kernel
+# OOM-kills the unit on every start and Restart=always turns that into a crash
+# loop that looks like a broken image. Raising this to 64M is therefore not fixing
+# a regression: aibr-router.service keeps MemoryMax=32M, and the router's 32M cap
+# remains the enforced invariant for the router's 1.94 MiB. Raise this again only
+# against a fresh measurement of THIS process.
+MemoryMax=64M
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target

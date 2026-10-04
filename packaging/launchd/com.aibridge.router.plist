@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  launchd has no ExecStartPre, so the two pre-steps the systemd unit runs before
+  aibr-router (--init-store, then --preflight) live in aibr-router.sh instead.
+  The order is the same and the binary is the same, which is the point: a
+  platform-specific preflight would be a second preflight, and a second
+  preflight drifts.
+
+  Environment comes from /etc/aibridge/router.env via the wrapper, so one file
+  configures both platforms. It must define AIBRIDGE_CONFIG,
+  AIBRIDGE_BEARER_TOKEN and AIBRIDGE_INGRESS_OUTBOX.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.aibridge.router</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/aibr-router.sh</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+    <key>HardResourceLimits</key>
+    <dict>
+        <key>ResidentSetSize</key>
+        <integer>33554432</integer>
+    </dict>
+    <key>SoftResourceLimits</key>
+    <dict>
+        <key>ResidentSetSize</key>
+        <integer>33554432</integer>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>/var/log/aibridge-router.log</string>
+    <key>StandardErrorPath</key>
+    <string>/var/log/aibridge-router.err</string>
+</dict>
+</plist>

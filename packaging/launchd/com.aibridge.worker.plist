@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  The ingress drain worker, mirroring packaging/systemd/aibr-worker.service.
+
+  Two numbers differ from the router plist on purpose:
+    * ThrottleInterval 10 -- KeepAlive restarts a process that exits, and this one
+      exits 78 whenever the admission store is unusable. Without a throttle, a
+      misconfigured host becomes a respawn loop.
+    * ResidentSetSize 67108864 (64 MiB) -- the plan's 32M figure came from the
+      ROUTER's 1.94 MiB capture. The worker measured 46.98 MiB with Fastify
+      already removed, so 32 MiB would kill it on every start. The router keeps
+      its 32 MiB cap; see the unit for the full reasoning.
+
+  The pre-steps live in aibr-worker.sh because launchd has no ExecStartPre.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.aibridge.worker</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/aibr-worker.sh</string>
+    </array>
+    <!--
+      Environment comes from /etc/aibridge/router.env, sourced by the wrapper.
+      AIBRIDGE_INGRESS_OUTBOX must name the SAME store the router admits into; two
+      different paths would be two queues, one of which nothing drains.
+    -->
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+    <key>HardResourceLimits</key>
+    <dict>
+        <key>ResidentSetSize</key>
+        <integer>67108864</integer>
+    </dict>
+    <key>SoftResourceLimits</key>
+    <dict>
+        <key>ResidentSetSize</key>
+        <integer>67108864</integer>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>/var/log/aibridge-worker.log</string>
+    <key>StandardErrorPath</key>
+    <string>/var/log/aibridge-worker.err</string>
+</dict>
+</plist>

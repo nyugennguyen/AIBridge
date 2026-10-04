@@ -1,0 +1,79 @@
+[Unit]
+Description=AIBridge Polyglot Ingress Router (aibr-router)
+Documentation=file:/usr/local/share/doc/aibridge/packaging/systemd/aibr-router.service
+After=network-online.target tailscaled.service
+Wants=network-online.target tailscaled.service
+
+[Service]
+Type=notify
+# Type=notify is truthful only because the router sends READY=1 to $NOTIFY_SOCKET
+# after the socket is bound and STOPPING=1 on SIGTERM. Without those datagrams
+# systemd would hold this unit in "activating" until TimeoutStartSec and then
+# kill a healthy process.
+#
+# The two ExecStartPre lines are ordered, and the order is the design:
+#
+#   1. --init-store  provisions the admission store named by
+#                    $AIBRIDGE_INGRESS_OUTBOX. The router opens that store but
+#                    never creates it (M7.5), and exits 78 when it is missing, so
+#                    a fresh install could not come up at all without this step.
+#   2. --preflight   loads config, opens the provisioned store, and checks the
+#                    bind address. It never binds.
+#
+# Both are idempotent: exit 0 when the store is already provisioned or the
+# preflight already passes, exit 78 when the path exists but is not a valid store
+# or the address is unusable. Because both run before ExecStart, a misconfigured
+# host fails here — before this process ever holds a socket — rather than binding
+# and answering 503 to every caller. Do not collapse these into one line, and do
+# not drop --preflight: --init-store succeeding says nothing about the address.
+ExecStartPre=/usr/local/bin/aibr-router --init-store
+ExecStartPre=/usr/local/bin/aibr-router --preflight
+ExecStart=/usr/local/bin/aibr-router
+Restart=always
+RestartSec=2
+
+# StateDirectory=aibridge creates /var/lib/aibridge (chowned to the unit's User)
+# before ExecStartPre runs, so --init-store has a supervisor-created, correctly
+# owned home and never has to create one itself. The path below is written with
+# the %S specifier rather than a literal /var/lib so it follows the distro's
+# StateDirectory root instead of assuming one.
+StateDirectory=aibridge
+StateDirectoryMode=0700
+Environment=AIBRIDGE_INGRESS_OUTBOX=%S/aibridge/ingress_outbox
+
+# Three variables are required, and none of them belongs in this file:
+#
+#   AIBRIDGE_CONFIG          absolute path to config.json
+#   AIBRIDGE_BEARER_TOKEN    the shared secret; never commit it, never inline it
+#   AIBRIDGE_INGRESS_OUTBOX  absolute path to the admission store; the line above
+#                            is the default and an operator override wins, because
+#                            EnvironmentFile= is applied after Environment=
+#
+# Create /etc/aibridge/router.env mode 0600 before enabling this unit; the leading
+# "-" means "optional file, do not fail if absent" so the unit can be inspected on
+# a host that has not been configured yet.
+EnvironmentFile=-/etc/aibridge/router.env
+
+# 32 MiB against a 1.94 MiB measurement (ADR 0008 §2.7): the cap is the invariant,
+# not a target. A router that grows past it is killed and the suite fails.
+MemoryMax=32M
+
+# Tailscale-only ingress (CGNAT 100.64.0.0/10). Requires systemd >= 235; on older
+# systemd these two lines are ignored, which is why the nftables ruleset and the
+# router's own address preflight are separate layers rather than alternatives.
+IPAddressDeny=any
+IPAddressAllow=100.64.0.0/10
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

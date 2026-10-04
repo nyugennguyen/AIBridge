@@ -73,17 +73,30 @@ jobs:
 
           echo "Static binary verification passed: 0 NEEDED entries on musl targets."
 
-      - name: Verify binary size <= 2 MiB
+      - name: Measure binary size against the 2 MiB bound
+        id: size
+        # Deliberately does NOT fail the job. The bound is currently MISSED
+        # (2,222,768 bytes on x86_64 musl) and `set -e` would abandon the run here,
+        # skipping the systemd, provisioning and nftables checks -- which are the
+        # verifications this milestone actually needs. So this step records the
+        # verdict and the final gate below enforces it: every check runs and
+        # reports, and the job still ends red.
         run: |
+          set -uo pipefail
+          echo "size_bound_bytes=2097152" >> "$GITHUB_OUTPUT"
+          worst=0
           for bin in dist-bin/aibr-router-x86_64-unknown-linux-musl dist-bin/aibr-router-aarch64-unknown-linux-musl; do
             size_bytes=$(stat -c%s "$bin")
-            size_mb=$(echo "$size_bytes / 1048576" | bc -l)
-            echo "$bin size: $size_bytes bytes (~${size_mb} MB)"
-            if [ "$size_bytes" -gt 2097152 ]; then
-              echo "Error: $bin exceeds 2 MiB bound ($size_bytes bytes)"
-              exit 1
-            fi
+            echo "$bin size: $size_bytes bytes"
+            [ "$size_bytes" -gt "$worst" ] && worst=$size_bytes
           done
+          echo "worst_size_bytes=$worst" >> "$GITHUB_OUTPUT"
+          if [ "$worst" -gt 2097152 ]; then
+            echo "OVER BOUND by $((worst - 2097152)) bytes. See scripts/build-matrix.sh for the two measured-and-rejected reductions; the bound was not moved."
+            echo "verdict=fail" >> "$GITHUB_OUTPUT"
+          else
+            echo "verdict=pass" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Verify systemd unit files with the real parser
         run: |
@@ -153,7 +166,19 @@ jobs:
           sudo nft -c -f packaging/nftables/aibridge.nft
           echo "nftables syntax verification passed."
 
-      - name: Record what this runner cannot verify
+      - name: Enforce the 2 MiB binary bound
+        if: always()
+        # The one gate this job fails on, run LAST so that a size regression cannot
+        # hide the systemd, provisioning and nftables results behind it.
+        run: |
+          if [ "${{ steps.size.outputs.verdict }}" != "pass" ]; then
+            echo "::error::M7.9 binary size bound NOT met: ${{ steps.size.outputs.worst_size_bytes }} bytes > ${{ steps.size.outputs.size_bound_bytes }}"
+            exit 1
+          fi
+          echo "binary size within the 2 MiB bound"
+
+- name: Record what this runner cannot verify
+        if: always()
         run: |
           cat <<'NOTE'
           === What this job does NOT verify ===

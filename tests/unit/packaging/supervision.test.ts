@@ -239,6 +239,34 @@ describe("milestone-7 workflow — verification that can fail", () => {
     expect(workflow).toContain("2097152")
   })
 
+  it("enforces the size bound LAST, so a size miss cannot hide the other checks", async () => {
+    // The bound is currently missed. With `set -e` in a failing size step, every
+    // step after it is skipped -- which is how the first run reported a red job
+    // while the systemd, provisioning and nftables verifications never ran at all.
+    // The size step now records a verdict and a final `if: always()` gate fails
+    // the job, so every check reports AND the job still ends red.
+    const workflow = await load()
+
+    const measureAt = workflow.indexOf("Measure binary size")
+    const enforceAt = workflow.indexOf("Enforce the 2 MiB binary bound")
+    const systemdAt = workflow.indexOf("Verify systemd unit files")
+    const provisioningAt = workflow.indexOf("Exercise the provisioning contract")
+
+    expect(measureAt).toBeGreaterThan(-1)
+    expect(enforceAt).toBeGreaterThan(measureAt)
+    expect(systemdAt).toBeGreaterThan(measureAt)
+    expect(provisioningAt).toBeGreaterThan(measureAt)
+    expect(enforceAt).toBeGreaterThan(systemdAt)
+    expect(enforceAt).toBeGreaterThan(provisioningAt)
+
+    // The measuring step must not be the thing that fails the job.
+    const measureStep = workflow.slice(measureAt, systemdAt)
+    expect(measureStep).not.toMatch(/^\s*exit 1$/m)
+    expect(measureStep).toContain("GITHUB_OUTPUT")
+    // ...and the enforcing step must run even when an earlier step failed.
+    expect(workflow.slice(enforceAt, enforceAt + 400)).toContain("if: always()")
+  })
+
   it("says which checks genuinely cannot run in CI", async () => {
     const workflow = await load()
     expect(workflow).toMatch(/launchd[\s\S]{0,200}(cannot|not)[\s\S]{0,80}CI/i)

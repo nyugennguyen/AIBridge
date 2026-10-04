@@ -14,7 +14,10 @@ export function registerTriggerRoute(app: FastifyInstance, dependencies: AppDepe
     if (!auth.validate(request.headers.authorization)) return reply.code(401).send({ error: "Unauthorized" })
 
     const parsed = triggerRequestSchema.safeParse(request.body)
-    if (!parsed.success) return reply.code(400).send({ error: "Invalid trigger payload", details: parsed.error.issues })
+    if (!parsed.success) {
+      dependencies.shadowMirror?.mirrorTrigger(request.body, false)
+      return reply.code(400).send({ error: "Invalid trigger payload", details: parsed.error.issues })
+    }
     const trigger = parsed.data
 
     if (trigger.target_agent_id !== dependencies.config.agent_id) return reply.code(404).send({ error: "Target agent not found here" })
@@ -112,6 +115,7 @@ export function registerTriggerRoute(app: FastifyInstance, dependencies: AppDepe
         await dependencies.jobManager.markFailed(job.id, error instanceof Error ? error.message : "Session monitor failed")
       })
 
+      dependencies.shadowMirror?.mirrorTrigger(request.body, true)
       return reply.code(202).send(
         triggerResponseSchema.parse({
           accepted: true,

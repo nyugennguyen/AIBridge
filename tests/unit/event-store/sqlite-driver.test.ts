@@ -234,4 +234,30 @@ describe("SqliteDriver", () => {
       expect(() => driver.exec("SELECT 1")).toThrow("closed")
     })
   })
+
+  describe("create: false is a contract, not a preference", () => {
+    it("refuses to create an absent database", () => {
+      const absent = join(tmpdir(), `test-driver-absent-${Date.now()}.db`)
+      expect(() => createSqliteDriver({ path: absent, create: false })).toThrow(/does not exist/)
+      expect(existsSync(absent)).toBe(false)
+    })
+
+    it("opens an existing database read-write", () => {
+      tempDbPath = join(tmpdir(), `test-driver-existing-${Date.now()}.db`)
+      const created = createSqliteDriver({ path: tempDbPath })
+      created.exec("CREATE TABLE t (n INTEGER)")
+      created.close()
+
+      const opened = createSqliteDriver({ path: tempDbPath, create: false })
+      opened.run("INSERT INTO t (n) VALUES (1)")
+      expect(opened.get<{ n: number }>("SELECT n FROM t")?.n).toBe(1)
+      opened.close()
+    })
+
+    it("does not create the parent directory either", () => {
+      const nested = join(tmpdir(), `test-driver-nested-${Date.now()}`, "queue.db")
+      expect(() => createSqliteDriver({ path: nested, create: false })).toThrow(/does not exist/)
+      expect(existsSync(join(tmpdir(), `test-driver-nested-${Date.now()}`))).toBe(false)
+    })
+  })
 })

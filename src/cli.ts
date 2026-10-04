@@ -16,6 +16,7 @@
  */
 
 import { validateProfileName } from "./host/paths.js"
+import { readSecret } from "./host/profile-store.js"
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -49,7 +50,15 @@ export interface CliDeps {
     readonly stderr?: string
   }>
   /** Serve the bridge for a given profile. */
-  readonly serveBridge: (profile: string) => Promise<void>
+  readonly serveBridge: (profile: string, options?: { readonly shadowMode?: boolean }) => Promise<void>
+  /**
+   * Run the Tier 2 ingress drain loop for a profile until a signal arrives.
+   *
+   * Resolves on `SIGINT`/`SIGTERM`. Binds no socket: ingress belongs to the
+   * router once cut over, and a worker that could accept requests would be a
+   * second authority (ADR 0008 §2.2).
+   */
+  readonly runWorker: (profile: string) => Promise<void>
   /** Query status of a tmux profile. */
   readonly statusProfile: (profile: string) => Promise<{
     readonly kind: "healthy" | "session_missing" | "bridge_unavailable"
@@ -69,7 +78,7 @@ export interface CliDeps {
 
 const PROG = "aibr"
 
-const COMMANDS = ["setup", "start", "serve", "status", "tui"] as const
+const COMMANDS = ["setup", "start", "serve", "worker", "status", "tui"] as const
 
 const ALL_COMMANDS = [...COMMANDS, "_opencode"] as const
 
@@ -100,6 +109,8 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
       knownFlags.push("--help")
     } else if (arg === "--version" || arg === "-v") {
       knownFlags.push("--version")
+    } else if (arg === "--shadow-mode") {
+      knownFlags.push("--shadow-mode")
     } else if (arg.startsWith("-")) {
       unknownFlags.push(arg)
     } else if (command === null) {
@@ -132,13 +143,15 @@ function helpText(): string {
     "  setup    Interactive host setup (profile optional)",
     "  start    Start opencode + bridge in tmux",
     "  serve    Run the bridge server",
+    "  worker   Drain the router's admission queue (no listener)",
     "  status   Check tmux session and bridge health",
     "  tui      Open the interactive local UI",
     "",
     "Options:",
-    "  --profile, -p <name>   Profile name (required for start/serve/status/tui)",
+    "  --profile, -p <name>   Profile name (required for start/serve/worker/status/tui)",
     "  --help, -h             Show this help",
     "  --version, -v          Show version",
+    "  --shadow-mode          Run in shadow mode (mirroring ingress to router)",
     "",
   ].join("\n")
 }
@@ -281,10 +294,21 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<Cl
   // ── serve ──────────────────────────────────────────────────────────
   if (command === "serve") {
     try {
-      await deps.serveBridge(profile)
+      await deps.serveBridge(profile, { shadowMode: args.hasFlag("--shadow-mode") })
       return 0
     } catch (err) {
       deps.writer(`Error: ${err instanceof Error ? err.message : "serve failed"}\n`)
+      return 1
+    }
+  }
+
+  // ── worker ─────────────────────────────────────────────────────────
+  if (command === "worker") {
+    try {
+      await deps.runWorker(profile)
+      return 0
+    } catch (err) {
+      deps.writer(`Error: ${err instanceof Error ? err.message : "worker failed"}\n`)
       return 1
     }
   }
@@ -391,17 +415,40 @@ async function createRealDeps(): Promise<CliDeps> {
       )
     },
 
-    serveBridge: async (profile: string) => {
+    serveBridge: async (profile: string, serveOptions?: { readonly shadowMode?: boolean }) => {
       const paths = resolveProfilePaths(profile)
       const configPath = `${paths.configDir}/config.json`
-      const { readSecret } = await import("./host/profile-store.js")
       const bridge = await startBridge({
         configPath,
         stateDir: paths.stateDir,
         bearerToken: await readSecret(`${paths.secretsDir}/bearer_token`),
         environment: process.env as Record<string, string>,
+        shadowMode: serveOptions?.shadowMode,
       })
       await bridge.app.listen({ host: bridge.config.bridge.host, port: bridge.config.bridge.port })
+    },
+
+    runWorker: async (profile: string) => {
+      const { startIngressWorker } = await import("./ingress/worker.js")
+      const paths = resolveProfilePaths(profile)
+      const worker = await startIngressWorker({
+        configPath: `${paths.configDir}/config.json`,
+        stateDir: paths.stateDir,
+        bearerToken: await readSecret(`${paths.secretsDir}/bearer_token`),
+        environment: process.env as Record<string, string>,
+      })
+
+      // `Restart=always` sends SIGTERM; a drain loop that ignored it would be
+      // killed mid-claim on every deploy, and the row would sit in 'sending'
+      // until `recoverStale` noticed the lease had expired.
+      await new Promise<void>((resolve) => {
+        const onSignal = (): void => {
+          worker.stop()
+          resolve()
+        }
+        process.once("SIGINT", onSignal)
+        process.once("SIGTERM", onSignal)
+      })
     },
 
     statusProfile: async (profile: string) => {

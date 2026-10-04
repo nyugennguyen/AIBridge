@@ -26,6 +26,7 @@ function fakeDeps(overrides?: {
   setupRunner?: CliDeps["runSetup"]
   startRunner?: CliDeps["startProfile"]
   serveRunner?: CliDeps["serveBridge"]
+  workerRunner?: CliDeps["runWorker"]
   statusRunner?: CliDeps["statusProfile"]
   opencodeRunner?: CliDeps["runOpencode"]
   tuiRunner?: NonNullable<CliDeps["runTui"]>
@@ -51,6 +52,7 @@ function fakeDeps(overrides?: {
         sessionName: "aibridge-p",
       })),
       serveBridge: overrides?.serveRunner ?? (async () => {}),
+      runWorker: overrides?.workerRunner ?? (async () => {}),
       statusProfile: overrides?.statusRunner ?? (async () => ({
         kind: "healthy" as const,
         sessionName: "aibridge-p",
@@ -362,6 +364,46 @@ describe("cli serve", () => {
 
     // The CLI itself should not leak process.env values
     expect(output).not.toMatch(/OPENCODE_SERVER_PASSWORD=\S+(?!.*failed)/)
+  })
+})
+
+// ── worker command ──────────────────────────────────────────────────────
+
+describe("cli worker", () => {
+  it("requires --profile flag", async () => {
+    const { exitCode, output } = await captureRun(["worker"])
+
+    expect(exitCode).not.toBe(0)
+    expect(output).toContain("--profile")
+  })
+
+  it("runs the drain loop for the named profile", async () => {
+    let receivedProfile: string | undefined
+    const { exitCode } = await captureRun(["worker", "--profile", "dev-main"], {
+      workerRunner: async (profile) => {
+        receivedProfile = profile
+      },
+    })
+
+    expect(receivedProfile).toBe("dev-main")
+    expect(exitCode).toBe(0)
+  })
+
+  it("returns nonzero and explains when the store cannot be opened", async () => {
+    const { exitCode, output } = await captureRun(["worker", "--profile", "dev-main"], {
+      workerRunner: async () => {
+        throw new Error("AIBRIDGE_INGRESS_OUTBOX is required")
+      },
+    })
+
+    expect(exitCode).not.toBe(0)
+    expect(output).toContain("AIBRIDGE_INGRESS_OUTBOX")
+  })
+
+  it("is listed in help output", async () => {
+    const { output } = await captureRun(["--help"])
+
+    expect(output).toContain("worker")
   })
 })
 

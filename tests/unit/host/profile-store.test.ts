@@ -27,7 +27,7 @@ function makePaths(overrides?: Partial<ProfilePaths>): ProfilePaths {
 function validBridgeConfig(overrides?: Partial<BridgeConfig>): BridgeConfig {
   return {
     agent_id: "test-vps",
-    bridge: { host: "0.0.0.0", port: 8787, public_url: "http://localhost:8787" },
+    bridge: { host: "0.0.0.0", port: 8787, public_url: "http://localhost:8787", ingress_mode: "engine" },
     opencode: {
       base_url: "http://localhost:4096",
       server_port: 4096,

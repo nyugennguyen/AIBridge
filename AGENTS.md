@@ -40,6 +40,14 @@ Each module has `types.ts` (interfaces), implementation files, and mirrors in `t
 - **Dependency injection**: `createApp()` takes `AppDependencies` object. No global state in routes.
 - **Fastify inject**: Integration tests use `app.inject()` — no real HTTP server needed.
 
+## Debugging
+
+**Load the `debugging-aibr-v2` skill before debugging anything in this repo.** It records
+where the docs and the source disagree — commands the runbook documents that do not exist,
+`aibr bundle --preview` being broken, there being no log files, and why `aibr status` reporting
+`healthy` proves almost nothing. Located at `.opencode/skills/debugging-aibr-v2/`
+(mirrored to `.claude/skills/` and `.agents/skills/`).
+
 ## Testing
 
 - Unit tests: `tests/unit/{module}/` — test individual classes/functions in isolation.

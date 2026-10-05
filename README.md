@@ -444,9 +444,13 @@ rm -rf ~/.local/state/aibridge
 
 ---
 
-## Maintainer and Release Verification
+## Release Procedure & Automated CI/CD Publishing
 
-Run the full verification gate before releasing:
+AIBridge uses automated CI/CD to validate and publish releases to npm whenever a new version is released on `main`.
+
+### 1. Pre-Release Verification
+
+Run the full verification gate locally:
 
 ```bash
 bun run release:check
@@ -458,9 +462,41 @@ This verifies:
 3. Vitest test suite execution
 4. Typecheck (`tsc --noEmit`)
 5. Shellcheck and syntax validation of install scripts
-6. CLI help and dry-run packaging
+6. Contract parity and CLI smoke checks
+7. Package tarball dry-run packaging
 
----
+### 2. Version Bump
+
+Update the version number across the repository:
+- `package.json`: `"version": "x.y.z"`
+- `src/cli.ts`: default version constants
+- `CHANGELOG.md`: document new features, fixes, and changes under `## [x.y.z]`
+
+### 3. Merge or Push to `main`
+
+```bash
+git add package.json src/cli.ts CHANGELOG.md
+git commit -m "chore(release): prepare vx.y.z"
+git push origin main
+```
+
+### 4. Automated Publishing
+
+Whenever code is pushed to `main`:
+- The **CI** workflow (`.github/workflows/ci.yml`) runs the full `verify` gate (tests, typecheck, build, contract parity).
+- The automated **`publish`** job inspects the repository version against the latest published version on the npm registry (`npm view @nyugennguyen/aibridge version`).
+- If the version has been bumped, it validates the release package and publishes `@nyugennguyen/aibridge` to npm automatically.
+- Authentication supports npm Automation Tokens (`NPM_TOKEN` stored in GitHub repository secrets) and npm OIDC Trusted Publishing with cryptographic provenance.
+
+### 5. Tagging the Release
+
+Create the corresponding git tag and GitHub Release:
+
+```bash
+git tag vx.y.z
+git push origin vx.y.z
+gh release create vx.y.z --title "AIBridge vx.y.z" --notes "Release notes..."
+```
 
 ## License
 

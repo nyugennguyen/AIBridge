@@ -51,9 +51,18 @@ export class SdkOpencodeClientAdapter implements OpencodeClient {
   }
 
   async getSessionStatus(sessionId: string): Promise<SessionStatus> {
+    try {
+      const statusRes = await (this.client.session as unknown as { status?: () => Promise<{ data?: Record<string, { type?: SessionStatus }> }> }).status?.()
+      if (statusRes?.data !== undefined) {
+        const state = statusRes.data[sessionId]
+        return state?.type ?? "idle"
+      }
+    } catch {
+      // fallback to session.get
+    }
     const response = await this.client.session.get({ sessionID: sessionId }, { throwOnError: true })
     const data = response.data as { status?: { type?: SessionStatus } }
-    return data.status?.type ?? "unknown"
+    return data.status?.type ?? "idle"
   }
 
   async replyPermission(_sessionId: string, permissionId: string, response: PermissionDecision): Promise<void> {

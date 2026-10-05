@@ -515,8 +515,20 @@ async function createRealDeps(): Promise<CliDeps> {
       }
       const bridge = config.bridge as Record<string, unknown>
       const opencode = config.opencode as Record<string, unknown>
+      let ocPassword = process.env.OPENCODE_SERVER_PASSWORD
+      if (!ocPassword) {
+        try {
+          ocPassword = await readSecret(`${paths.secretsDir}/opencode_password`)
+        } catch {
+          // unreadable or missing
+        }
+      }
+      const env = {
+        ...process.env,
+        ...(ocPassword ? { OPENCODE_SERVER_PASSWORD: ocPassword } : {}),
+      }
       return startProfile(
-        { processRunner, httpProbe: { probe: async () => ({ status: 0, ok: false, body: "" }) }, env: process.env as Record<string, string | undefined> },
+        { processRunner, httpProbe: { probe: async () => ({ status: 0, ok: false, body: "" }) }, env },
         {
           name: profile,
           bridgePort: bridge.port as number,
@@ -529,14 +541,32 @@ async function createRealDeps(): Promise<CliDeps> {
     serveBridge: async (profile: string, serveOptions?: { readonly shadowMode?: boolean }) => {
       const paths = resolveProfilePaths(profile)
       const configPath = `${paths.configDir}/config.json`
+      let ocPassword = process.env.OPENCODE_SERVER_PASSWORD
+      if (!ocPassword) {
+        try {
+          ocPassword = await readSecret(`${paths.secretsDir}/opencode_password`)
+        } catch {
+          // unreadable or missing
+        }
+      }
       const bridge = await startBridge({
         configPath,
         stateDir: paths.stateDir,
         bearerToken: await readSecret(`${paths.secretsDir}/bearer_token`),
-        environment: process.env as Record<string, string>,
+        environment: {
+          ...process.env as Record<string, string>,
+          ...(ocPassword ? { OPENCODE_SERVER_PASSWORD: ocPassword } : {}),
+        },
         shadowMode: serveOptions?.shadowMode,
       })
       await bridge.app.listen({ host: bridge.config.bridge.host, port: bridge.config.bridge.port })
+      await new Promise<void>((resolve) => {
+        const onSignal = (): void => {
+          void bridge.app.close().then(() => resolve(), () => resolve())
+        }
+        process.once("SIGINT", onSignal)
+        process.once("SIGTERM", onSignal)
+      })
     },
 
     runWorker: async (profile: string) => {
@@ -642,11 +672,25 @@ async function createRealDeps(): Promise<CliDeps> {
       }
     },
 
-    runOpencode: async (_profile: string) => {
+    runOpencode: async (profile: string) => {
+      const paths = resolveProfilePaths(profile)
+      let ocPassword = process.env.OPENCODE_SERVER_PASSWORD
+      if (!ocPassword) {
+        try {
+          ocPassword = await readSecret(`${paths.secretsDir}/opencode_password`)
+        } catch {
+          // unreadable or missing
+        }
+      }
       const opencodePort = process.env.OPENCODE_PORT ?? "4096"
       const result = await processRunner.exec(
         ["opencode", "serve", "--port", opencodePort, "--hostname", "127.0.0.1"],
-        { env: process.env as Record<string, string> },
+        {
+          env: {
+            ...process.env as Record<string, string>,
+            ...(ocPassword ? { OPENCODE_SERVER_PASSWORD: ocPassword } : {}),
+          },
+        },
       )
       if (result.exitCode !== 0) {
         throw new Error(result.stderr || "opencode serve failed")

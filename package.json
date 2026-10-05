@@ -1,6 +1,6 @@
 {
   "name": "@nyugennguyen/aibridge",
-  "version": "1.0.1",
+  "version": "2.0.0",
   "description": "Private Tailscale bridge for OpenCode agents",
   "license": "MIT",
   "type": "module",
@@ -19,6 +19,7 @@
     "access": "public"
   },
   "scripts": {
+    "aibr": "bun src/cli.ts",
     "dev": "tsx src/index.ts",
     "generate:contracts": "tsx scripts/generate-contracts.ts && cargo run --quiet --manifest-path router/Cargo.toml -p aibr-contract-gen --release",
     "start": "bun dist/index.js",

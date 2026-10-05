@@ -377,14 +377,14 @@ describe("Failure Modes and Recovery Runbooks (M8.1 / M8.2)", () => {
   })
 
   it("FM-16: Rust binary replaced by incompatible build detects version stamp mismatch", () => {
-    const npmExpectedVersion = "1.0.1"
+    const npmExpectedVersion = "2.0.0"
     const incompatibleRouterVersion = "0.9.0-incompatible"
 
     function verifyBinaryCompatibility(routerVersion: string, expected: string): boolean {
       return routerVersion === expected || routerVersion.startsWith(expected)
     }
 
-    expect(verifyBinaryCompatibility("1.0.1", npmExpectedVersion)).toBe(true)
+    expect(verifyBinaryCompatibility("2.0.0", npmExpectedVersion)).toBe(true)
     expect(verifyBinaryCompatibility(incompatibleRouterVersion, npmExpectedVersion)).toBe(false)
   })
 })

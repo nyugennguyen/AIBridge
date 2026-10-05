@@ -94,7 +94,7 @@ describe("Diagnostics Support Bundle (M8.4, M7-C3)", () => {
       // 5. Preview generation
       const preview = previewSupportBundle(bundle)
       expect(preview).toContain("AIBridge Support Bundle (dev-main)")
-      expect(preview).toContain("Versions: npm 1.0.1 | Router: 0.1.0")
+      expect(preview).toContain("Versions: npm 2.0.0 | Router: 0.1.0")
       expect(preview).not.toContain(SECRET_CANARY)
     } finally {
       rmSync(tempDir, { recursive: true, force: true })

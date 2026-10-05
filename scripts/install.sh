@@ -9,7 +9,7 @@ for arg in "$@"; do
     --with-units) WITH_UNITS=1 ;;
     --without-units) WITH_UNITS=0 ;;
     --help|-h) echo "Usage: install.sh [--yes] [--with-units|--without-units] [--help] [--version]"; echo "  curl -fsSL https://raw.githubusercontent.com/nyugennguyen/AIBridge/main/scripts/install.sh | bash -s -- --yes"; echo ""; echo "  --with-units     install the router and worker supervision units (systemd on"; echo "                   Linux, launchd on macOS). Requires root. Off by default:"; echo "                   installing a unit that starts a network listener is not a"; echo "                   default an installer may pick on someone's behalf."; echo "  --without-units  leave supervision alone (the default)."; echo ""; echo "Environment:"; echo "  AIBRIDGE_ROUTER_BIN     path to an aibr-router binary used to provision the store"; echo "  AIBRIDGE_INGRESS_OUTBOX absolute path of the admission store (ingress_outbox)"; exit 0 ;;
-    --version) echo "1.0.1"; exit 0 ;;
+    --version) echo "2.0.0"; exit 0 ;;
     *) echo "Unknown flag: $arg" >&2; exit 1 ;;
   esac
 done

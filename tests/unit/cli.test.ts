@@ -28,6 +28,8 @@ function fakeDeps(overrides?: {
   serveRunner?: CliDeps["serveBridge"]
   workerRunner?: CliDeps["runWorker"]
   statusRunner?: CliDeps["statusProfile"]
+  verifyRunner?: CliDeps["verifyProfile"]
+  updateRunner?: CliDeps["runUpdate"]
   opencodeRunner?: CliDeps["runOpencode"]
   tuiRunner?: NonNullable<CliDeps["runTui"]>
   version?: string
@@ -57,6 +59,14 @@ function fakeDeps(overrides?: {
         kind: "healthy" as const,
         sessionName: "aibridge-p",
         body: '{"status":"ok"}',
+      })),
+      verifyProfile: overrides?.verifyRunner ?? (async (profile) => ({
+        ok: true,
+        summary: `Verification passed for ${profile}`,
+      })),
+      runUpdate: overrides?.updateRunner ?? (async () => ({
+        ok: true,
+        message: "AIBridge is up to date",
       })),
       runOpencode: overrides?.opencodeRunner ?? (async () => {}),
       runTui: overrides?.tuiRunner,
@@ -453,6 +463,140 @@ describe("cli status", () => {
 
     expect(exitCode).not.toBe(0)
     expect(output).toContain("bridge_unavailable")
+  })
+})
+
+// ── verify command ─────────────────────────────────────────────────────
+
+describe("cli verify", () => {
+  it("is listed in help output", async () => {
+    const { output } = await captureRun(["--help"])
+    expect(output).toContain("verify")
+  })
+
+  it("runs verify for default profile when --profile is omitted", async () => {
+    let verifiedProfile: string | undefined
+    const { exitCode, output } = await captureRun(["verify"], {
+      verifyRunner: async (profile) => {
+        verifiedProfile = profile
+        return { ok: true, summary: "All checks passed" }
+      },
+    })
+
+    expect(exitCode).toBe(0)
+    expect(verifiedProfile).toBe("default")
+    expect(output).toContain("All checks passed")
+  })
+
+  it("runs verify for specified profile", async () => {
+    let verifiedProfile: string | undefined
+    const { exitCode, output } = await captureRun(["verify", "--profile", "custom"], {
+      verifyRunner: async (profile) => {
+        verifiedProfile = profile
+        return { ok: true, summary: "Custom checks passed" }
+      },
+    })
+
+    expect(exitCode).toBe(0)
+    expect(verifiedProfile).toBe("custom")
+    expect(output).toContain("Custom checks passed")
+  })
+
+  it("returns nonzero when verification fails", async () => {
+    const { exitCode, output } = await captureRun(["verify", "--profile", "broken"], {
+      verifyRunner: async () => ({
+        ok: false,
+        summary: "Verification failed: 1 check failed",
+      }),
+    })
+
+    expect(exitCode).not.toBe(0)
+    expect(output).toContain("Verification failed")
+  })
+
+  it("rejects invalid profile name with traversal", async () => {
+    const { exitCode, output } = await captureRun(["verify", "--profile", "../bad"])
+
+    expect(exitCode).not.toBe(0)
+    expect(output).toContain("Invalid profile name")
+  })
+})
+
+// ── update command ─────────────────────────────────────────────────────
+
+describe("cli update", () => {
+  it("is listed in help output", async () => {
+    const { output } = await captureRun(["--help"])
+    expect(output).toContain("update")
+    expect(output).toContain("--check")
+    expect(output).toContain("--yes")
+  })
+
+  it("dispatches update with default options", async () => {
+    let receivedOptions: { checkOnly?: boolean; yes?: boolean } | undefined
+    const { exitCode, output } = await captureRun(["update"], {
+      updateRunner: async (options) => {
+        receivedOptions = options
+        return { ok: true, message: "AIBridge is up to date" }
+      },
+    })
+
+    expect(exitCode).toBe(0)
+    expect(receivedOptions).toEqual({ checkOnly: false, yes: false })
+    expect(output).toContain("AIBridge is up to date")
+  })
+
+  it("passes --check flag to runner", async () => {
+    let receivedOptions: { checkOnly?: boolean; yes?: boolean } | undefined
+    const { exitCode, output } = await captureRun(["update", "--check"], {
+      updateRunner: async (options) => {
+        receivedOptions = options
+        return { ok: true, message: "Update available: v1.0.1 -> v1.1.0" }
+      },
+    })
+
+    expect(exitCode).toBe(0)
+    expect(receivedOptions?.checkOnly).toBe(true)
+    expect(output).toContain("Update available")
+  })
+
+  it("passes -c shorthand flag to runner", async () => {
+    let receivedOptions: { checkOnly?: boolean; yes?: boolean } | undefined
+    const { exitCode } = await captureRun(["update", "-c"], {
+      updateRunner: async (options) => {
+        receivedOptions = options
+        return { ok: true, message: "Update available" }
+      },
+    })
+
+    expect(exitCode).toBe(0)
+    expect(receivedOptions?.checkOnly).toBe(true)
+  })
+
+  it("passes --yes flag to runner", async () => {
+    let receivedOptions: { checkOnly?: boolean; yes?: boolean } | undefined
+    const { exitCode, output } = await captureRun(["update", "--yes"], {
+      updateRunner: async (options) => {
+        receivedOptions = options
+        return { ok: true, message: "Successfully updated AIBridge" }
+      },
+    })
+
+    expect(exitCode).toBe(0)
+    expect(receivedOptions?.yes).toBe(true)
+    expect(output).toContain("Successfully updated")
+  })
+
+  it("returns nonzero when update fails", async () => {
+    const { exitCode, output } = await captureRun(["update"], {
+      updateRunner: async () => ({
+        ok: false,
+        message: "Failed to check for updates: network error",
+      }),
+    })
+
+    expect(exitCode).not.toBe(0)
+    expect(output).toContain("Failed to check for updates")
   })
 })
 

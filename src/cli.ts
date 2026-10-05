@@ -72,6 +72,16 @@ export interface CliDeps {
   readonly runTui?: (profile: string) => Promise<CliExitCode>
   /** Generate diagnostic support bundle. */
   readonly runBundle?: (profile: string, options?: { readonly preview?: boolean }) => Promise<CliExitCode>
+  /** Validate dependencies, SSL token, and config format for a profile. */
+  readonly verifyProfile?: (profile: string) => Promise<{
+    readonly ok: boolean
+    readonly summary: string
+  }>
+  /** Check and update AIBridge to the latest version. */
+  readonly runUpdate?: (options?: { readonly checkOnly?: boolean; readonly yes?: boolean }) => Promise<{
+    readonly ok: boolean
+    readonly message: string
+  }>
   /** Package version string. */
   readonly version: string
 }
@@ -80,7 +90,7 @@ export interface CliDeps {
 
 const PROG = "aibr"
 
-const COMMANDS = ["setup", "start", "serve", "worker", "status", "tui", "bundle"] as const
+const COMMANDS = ["setup", "start", "serve", "worker", "status", "verify", "update", "tui", "bundle"] as const
 const ALL_COMMANDS = [...COMMANDS, "_opencode"] as const
 
 // ── Argv parsing ───────────────────────────────────────────────────────
@@ -115,6 +125,10 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     } else if (arg === "--preview") {
       knownFlags.push("--preview")
       unknownFlags.push(arg)
+    } else if (arg === "--yes" || arg === "-y") {
+      knownFlags.push("--yes")
+    } else if (arg === "--check" || arg === "-c") {
+      knownFlags.push("--check")
     } else if (command === null) {
       command = arg
     } else {
@@ -147,11 +161,15 @@ function helpText(): string {
     "  serve    Run the bridge server",
     "  worker   Drain the router's admission queue (no listener)",
     "  status   Check tmux session and bridge health",
+    "  verify   Validate dependencies, SSL token, and config format",
+    "  update   Check and update to the latest version",
     "  tui      Open the interactive local UI",
     "  bundle   Generate diagnostic support bundle",
     "",
     "Options:",
     "  --profile, -p <name>   Profile name (required for start/serve/worker/status/tui)",
+    "  --check, -c            Check for updates without installing (for update)",
+    "  --yes, -y              Automatic yes to prompts (for update)",
     "  --help, -h             Show this help",
     "  --version, -v          Show version",
     "  --shadow-mode          Run in shadow mode (mirroring ingress to router)",
@@ -242,6 +260,58 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<Cl
       }
     } catch (err) {
       deps.writer(`Error: ${err instanceof Error ? err.message : "setup failed"}\n`)
+      return 1
+    }
+  }
+
+  // ── verify ─────────────────────────────────────────────────────────
+  if (command === "verify") {
+    let profile = "default"
+    if (args.profile !== null) {
+      const err = validateProfileArg(args.profile)
+      if (err !== null) {
+        deps.writer(`Error: ${err}\n`)
+        return 1
+      }
+      profile = args.profile
+    }
+
+    try {
+      if (deps.verifyProfile) {
+        const result = await deps.verifyProfile(profile)
+        deps.writer(result.summary + "\n")
+        return result.ok ? 0 : 1
+      }
+      const { runVerify } = await import("./cli/verify.js")
+      const result = await runVerify(profile)
+      deps.writer(result.summary + "\n")
+      return result.ok ? 0 : 1
+    } catch (err) {
+      deps.writer(`Error: ${err instanceof Error ? err.message : "verify failed"}\n`)
+      return 1
+    }
+  }
+
+  // ── update ─────────────────────────────────────────────────────────
+  if (command === "update") {
+    const checkOnly = args.hasFlag("--check")
+    const yes = args.hasFlag("--yes")
+
+    try {
+      if (deps.runUpdate) {
+        const result = await deps.runUpdate({ checkOnly, yes })
+        deps.writer(result.message + "\n")
+        return result.ok ? 0 : 1
+      }
+      const { runUpdate } = await import("./cli/update.js")
+      const result = await runUpdate(
+        { checkOnly, yes },
+        { currentVersion: deps.version, isTTY: deps.isTTY },
+      )
+      deps.writer(result.message + "\n")
+      return result.ok ? 0 : 1
+    } catch (err) {
+      deps.writer(`Error: ${err instanceof Error ? err.message : "update failed"}\n`)
       return 1
     }
   }
@@ -415,10 +485,12 @@ async function createRealDeps(): Promise<CliDeps> {
         isTTY: Boolean(process.stdin?.isTTY),
       })
 
-      return runSetup({
+      const { runSetupWizard } = await import("./cli/setup-wizard.js")
+      return runSetupWizard({
         platformInspector,
         processRunner,
         prompter,
+        initialProfile: profile,
         env: process.env as Record<string, string | undefined>,
         fileOps: {
           writeConfig: async (path, data) => writeConfig(path, data),
@@ -432,10 +504,13 @@ async function createRealDeps(): Promise<CliDeps> {
     startProfile: async (profile: string) => {
       const paths = resolveProfilePaths(profile)
       const configPath = `${paths.configDir}/config.json`
-      let config: Record<string, unknown>
+      let config: Record<string, unknown> | null = null
       try {
-        config = await readConfig(configPath) as Record<string, unknown>
+        config = await readConfig(configPath) as Record<string, unknown> | null
       } catch {
+        // unreadable
+      }
+      if (!config) {
         throw new Error(`Profile "${profile}" not found. Run "aibr setup --profile ${profile}" first.`)
       }
       const bridge = config.bridge as Record<string, unknown>
@@ -490,15 +565,18 @@ async function createRealDeps(): Promise<CliDeps> {
     statusProfile: async (profile: string) => {
       const paths = resolveProfilePaths(profile)
       const configPath = `${paths.configDir}/config.json`
-      let config: Record<string, unknown>
+      let config: Record<string, unknown> | null = null
       try {
-        config = await readConfig(configPath) as Record<string, unknown>
+        config = await readConfig(configPath) as Record<string, unknown> | null
       } catch {
+        // unreadable
+      }
+      if (!config) {
         throw new Error(`Profile "${profile}" not found. Run "aibr setup --profile ${profile}" first.`)
       }
       const bridge = config.bridge as Record<string, unknown>
       const opencode = config.opencode as Record<string, unknown>
-      return statusProfile(
+      const res = await statusProfile(
         { processRunner, httpProbe: { probe: async (url: string) => {
           try {
             const resp = await fetch(url)
@@ -515,6 +593,53 @@ async function createRealDeps(): Promise<CliDeps> {
           sessionName: `aibridge-${profile}`,
         },
       )
+      if (res.kind === "healthy") {
+        const summary = [
+          "Configuration summary:",
+          `  Agent ID: ${config.agent_id}`,
+          `  Bridge: ${bridge.public_url ?? `http://${bridge.host}:${bridge.port}`}`,
+          `  OpenCode: ${opencode.base_url}`,
+          "Readiness state: healthy",
+          res.body ? `Probe response: ${res.body}` : "",
+        ].filter(Boolean).join("\n")
+        return {
+          ...res,
+          body: summary,
+        }
+      }
+      return res
+    },
+    verifyProfile: async (profile: string) => {
+      const { runVerify } = await import("./cli/verify.js")
+      const result = await runVerify(profile, {
+        processRunner,
+        platformInspector,
+        env: process.env as Record<string, string | undefined>,
+      })
+      return {
+        ok: result.ok,
+        summary: result.summary,
+      }
+    },
+    runUpdate: async (options) => {
+      const { runUpdate } = await import("./cli/update.js")
+      const { BunPrompter, createStreamLineReader } = await import("./host/runtime.js")
+      const reader = createStreamLineReader(Bun.stdin.stream())
+      const prompter = new BunPrompter({
+        reader,
+        writer: { write: (d: Uint8Array) => { void process.stdout.write(d) } },
+        isTTY: Boolean(process.stdin?.isTTY),
+      })
+      const result = await runUpdate(options, {
+        currentVersion: "2.0.0",
+        processRunner,
+        prompter,
+        isTTY: Boolean(process.stdout?.isTTY),
+      })
+      return {
+        ok: result.ok,
+        message: result.message,
+      }
     },
 
     runOpencode: async (_profile: string) => {
@@ -528,7 +653,7 @@ async function createRealDeps(): Promise<CliDeps> {
       }
     },
 
-    version: "1.0.1",
+    version: "2.0.0",
   }
 }
 

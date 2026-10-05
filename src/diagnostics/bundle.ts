@@ -57,7 +57,7 @@ export function generateSupportBundle(
   }
 
   const versions = {
-    npmPackageVersion: "1.0.1",
+    npmPackageVersion: "2.0.0",
     routerVersion,
     contractVersion: "v1",
     eventStoreVersion: CURRENT_DATABASE_VERSION,

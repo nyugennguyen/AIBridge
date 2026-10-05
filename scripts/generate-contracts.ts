@@ -16,6 +16,7 @@ import { readFile, readdir, rm, writeFile } from "node:fs/promises"
 import { fileURLToPath } from "node:url"
 import { z } from "zod"
 import * as configSchemas from "../src/config/schemas.js"
+import * as ipcSchemas from "../src/ipc/schemas.js"
 import * as orchestrationSchemas from "../src/orchestration/schemas.js"
 
 const CONTRACTS_DIRECTORY = fileURLToPath(new URL("../contracts/v1/", import.meta.url))
@@ -117,7 +118,34 @@ const ORCHESTRATION_CLOSURE: readonly ContractSpec[] = [
   },
 ]
 
-const ALL_CONTRACTS: readonly ContractSpec[] = [...INGRESS_CLOSURE, ...ORCHESTRATION_CLOSURE]
+/**
+ * Closure C — the local daemon/client IPC bus (Phase 2 of the TUI/daemon
+ * modernization plan).
+ *
+ * These are generated like every other family, so the Rust TUI and this
+ * TypeScript worker cannot drift on a wire shape. They are ALSO partitioned out
+ * of the router's Rust compilation unit by `IPC_CONTRACT_FILES` in
+ * `router/contract-gen/src/main.rs`: the admission router must not compile the
+ * TUI's message types, and the TUI must not link the router. One directory,
+ * two generated units, and every file claimed by exactly one of them.
+ */
+const IPC_CLOSURE: readonly ContractSpec[] = [
+  { exportName: "jobStateSchema", file: "job-state", sourceFile: "src/ipc/schemas.ts", source: ipcSchemas.jobStateSchema },
+  { exportName: "jobViewSchema", file: "job-view", sourceFile: "src/ipc/schemas.ts", source: ipcSchemas.jobViewSchema },
+  { exportName: "paneViewSchema", file: "pane-view", sourceFile: "src/ipc/schemas.ts", source: ipcSchemas.paneViewSchema },
+  { exportName: "workspaceViewSchema", file: "workspace-view", sourceFile: "src/ipc/schemas.ts", source: ipcSchemas.workspaceViewSchema },
+  { exportName: "tailscaleStatusViewSchema", file: "tailscale-status", sourceFile: "src/ipc/schemas.ts", source: ipcSchemas.tailscaleStatusViewSchema },
+  { exportName: "stateSnapshotSchema", file: "state-snapshot", sourceFile: "src/ipc/schemas.ts", source: ipcSchemas.stateSnapshotSchema },
+  { exportName: "stateDiffSchema", file: "state-diff", sourceFile: "src/ipc/schemas.ts", source: ipcSchemas.stateDiffSchema },
+  { exportName: "ptyChunkSchema", file: "pty-chunk", sourceFile: "src/ipc/schemas.ts", source: ipcSchemas.ptyChunkSchema },
+  { exportName: "ptyExitSchema", file: "pty-exit", sourceFile: "src/ipc/schemas.ts", source: ipcSchemas.ptyExitSchema },
+  { exportName: "ackSchema", file: "ack", sourceFile: "src/ipc/schemas.ts", source: ipcSchemas.ackSchema },
+  { exportName: "serverErrorSchema", file: "server-error", sourceFile: "src/ipc/schemas.ts", source: ipcSchemas.serverErrorSchema },
+  { exportName: "serverMessageSchema", file: "server-message", sourceFile: "src/ipc/schemas.ts", source: ipcSchemas.serverMessageSchema },
+  { exportName: "controlCommandSchema", file: "control-command", sourceFile: "src/ipc/schemas.ts", source: ipcSchemas.controlCommandSchema },
+]
+
+const ALL_CONTRACTS: readonly ContractSpec[] = [...INGRESS_CLOSURE, ...ORCHESTRATION_CLOSURE, ...IPC_CLOSURE]
 
 /** `triggerRequestSchema` -> `TriggerRequest`: the generated Rust type name. */
 export function rustTypeName(exportName: string): string {

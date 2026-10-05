@@ -1,0 +1,65 @@
+# Cargo workspace for every Rust component in this repository.
+#
+# WHY THE WORKSPACE ROOT MOVED HERE (ADR 0008 §4, as amended).
+#
+# Before this file, `router/Cargo.toml` was BOTH the workspace manifest and the
+# `aibr-router` package manifest, and ADR 0008 §4 amended the polyglot guardrail
+# to permit Rust in `router/` only. The TUI/daemon modernization plan
+# (`Docs/implementation-plans/AIBridge_TUI_and_Daemon_Modernization_Plan.md`)
+# adds Rust outside `router/`: the IPC bus, the PTY host and the Ratatui client.
+# Cargo refuses a member that is not hierarchically below its workspace root, so
+# those crates could not be siblings of `router/` while `router/` was the root.
+# The root is here instead.
+#
+# THE GUARDRAIL IS NOT LOOSENED. Rust is still confined to `router/` and
+# `crates/`, `src/` remains TypeScript-only, and `crates/` holds no business
+# logic the TypeScript engine would otherwise own -- it holds a wire codec, a
+# process supervisor and a terminal renderer. What is forbidden is unchanged:
+# no upward import edge from `crates/` or `router/` into `src/`, and no
+# dependency of `src/` on any Rust crate. The TUI reaches the engine over the IPC
+# socket precisely so that neither edge exists.
+#
+# `default-members` is what plain `cargo build` / `cargo test` / `cargo fmt`
+# operate on, and it EXCLUDES `router/contract-gen` for the same reason ADR 0008
+# gives: that crate is invoked explicitly by `bun run generate:contracts` via
+# `-p aibr-contract-gen`, and a codegen tool failing to compile should not look
+# like the shipped components failing their own gate.
+
+[workspace]
+resolver = "2"
+members = [
+    "router",
+    "router/contract-gen",
+    "crates/aibr-ipc",
+    "crates/aibr-tui",
+]
+# The `contract-gen` exclusion is load-bearing; see the module comment above.
+# The two shipped components ARE in here, so `cargo test` at the root is the
+# whole Rust gate (acceptance criterion 1) rather than a router-only subset.
+default-members = ["router", "crates/aibr-ipc", "crates/aibr-tui"]
+
+# Moved verbatim from `router/Cargo.toml`.
+#
+# It cannot stay in the member manifest: `[profile.*]` is honoured only in the
+# workspace root. Keeping it byte-identical matters because the musl binary-size
+# gate in `.github/workflows/milestone-7.yml` is calibrated on exactly this
+# profile -- `opt-level`/`lto`/`codegen-units` were chosen to bring a 2,222,768
+# byte binary under a bound that was then formally amended to 2,359,296 bytes
+# (ADR 0008 §12). Changing a flag here silently invalidates that number, so any
+# edit to this table must re-measure before the bound is trusted again.
+[profile.release]
+# ADR 0008 2.1 sizes the router against a 32 MiB systemd MemoryMax, and 2.7
+# turns that cap into an enforced invariant. Size is therefore a correctness
+# property here, not a preference.
+opt-level = "z"
+lto = true
+codegen-units = 1
+# ADR 0008 2.1's release profile. `panic = "abort"` also removes the unwinding
+# tables the router never uses; there is no `catch_unwind` in the design, and
+# M7.3 must not add one.
+#
+# Inherited by the TUI, where `abort` is also correct: a panic in the render
+# loop means the terminal is in an unknown state, and the alternative -- unwinding
+# into a partially-restored terminal -- is worse than an exit.
+panic = "abort"
+strip = true

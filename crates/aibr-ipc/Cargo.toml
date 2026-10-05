@@ -1,0 +1,63 @@
+# `aibr-ipc` — the local daemon/client message bus (Phase 2 of the TUI/daemon
+# modernization plan).
+#
+# This crate exists so that the wire SHAPES are compiled exactly once, in one
+# place, for both endpoints. The shapes are generated from the Zod schemas in
+# `src/ipc/schemas.ts` into `src/contracts.rs` by `aibr-contract-gen`; the
+# framing, transport and state machine around them are hand-written here.
+#
+# It deliberately depends on NEITHER the router NOR the TUI. The router is the
+# network trust boundary and must not link a message bus; the TUI must not link
+# axum, bundled SQLite or the ingress surface. A dependency in either direction
+# would make one of those two facts untrue, and neither crate's manifest has an
+# existing dependency that could carry the import.
+
+[package]
+name = "aibr-ipc"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.94"
+publish = false
+description = "Local IPC message contracts and framing for the AIBridge daemon and TUI"
+
+[lib]
+name = "aibr_ipc"
+path = "src/lib.rs"
+
+[dependencies]
+# Mirrors the router's `[dependencies]` entries exactly, including the
+# `default-features = false` + explicit-feature spelling, for the same reasons
+# documented there: typify emits `#[serde(untagged)]` and internally-tagged
+# enums, whose deserializer visitors are gated behind `std`.
+serde = { version = "=1.0.228", features = ["derive", "std"], default-features = false }
+serde_json = { version = "=1.0.150", features = ["std"], default-features = false }
+# Load-bearing, not optional, for the same reason as in the router: a committed
+# schema with a `pattern` compiles into a `::regress::Regex` inside a `LazyLock`,
+# so without `regress` the generated module does not build rather than merely
+# losing validation. Bounded-time matching is also the right engine at a
+# contract-parsing boundary.
+regress = { version = "=0.12.0" }
+
+# The local transport. POSIX gets a Unix domain socket, Windows a named pipe,
+# from one API -- which is the entire reason for the dependency: the alternative
+# is `cfg`-gated socket code in two crates that must agree byte for byte.
+interprocess = { version = "=2.4.4", features = ["tokio"] }
+
+tokio = { version = "=1.53.1", default-features = false, features = [
+    "rt",
+    "net",
+    "macros",
+    "sync",
+    "io-util",
+    "time",
+] }
+
+[dev-dependencies]
+tokio = { version = "=1.53.1", default-features = false, features = [
+    "rt-multi-thread",
+    "net",
+    "macros",
+    "sync",
+    "io-util",
+    "time",
+] }

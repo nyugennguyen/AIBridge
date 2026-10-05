@@ -1,0 +1,90 @@
+# `aibr-tui` -- the mouse-native, multi-pane terminal workspace client.
+#
+# The client is EPHEMERAL AND REACTIVE. It owns no authoritative state: it
+# hydrates from a `StateSnapshot`, applies `StateDiff` frames, and can be killed
+# at any moment without affecting a single PTY or job, because the daemon in
+# `aibr-ipc` owns those. `Ctrl+B q` detaches, and re-running the binary
+# re-attaches to a running session. That is the Phase 6 invariant this crate's
+# shape exists to protect: nothing here may become a place state is stored.
+#
+# It talks to the daemon over the IPC socket and to NOTHING else. No axum, no
+# bundled SQLite, no ingress surface: the TUI must not be able to reach the
+# network boundary even by accident, and a dependency on the router would make
+# "the TUI cannot admit a trigger" untrue rather than merely unlikely.
+
+[package]
+name = "aibr-tui"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.94"
+publish = false
+description = "Mouse-native multi-pane terminal workspace manager for AIBridge"
+
+[[bin]]
+name = "aibr-tui"
+path = "src/main.rs"
+
+[dependencies]
+# The wire contracts and framing. A path dependency, not a crates.io one: these
+# types are generated from `src/ipc/schemas.ts` in THIS repository and have no
+# published version.
+aibr-ipc = { path = "../aibr-ipc" }
+
+# Ratatui 0.30 and Crossterm 0.29, the versions the modernization plan fixes.
+# Ratatui's default features include the crossterm backend, which is the one
+# used; `underline-color` is enabled because the embedded VT engine maps SGR
+# underline colours and dropping the variant would silently discard part of the
+# stream it exists to render.
+ratatui = { version = "=0.30.2", default-features = false, features = [
+    "crossterm",
+    "underline-color",
+] }
+# There is NO `mouse` feature: crossterm gates mouse reporting behind the
+# `events` feature, and `EnableMouseCapture`/`DisableMouseCapture` live in the
+# same module as the event reader. Asking for `mouse` is a compile error, which
+# is worth recording because it reads as an obvious name to reach for.
+#
+# `event-stream` is NOT enabled either: it pulls in `futures-core` for a
+# `Stream` wrapper this client does not use, since the event loop is an ordinary
+# `poll`/`read` pair on one thread and there is no async benefit to an
+# immediate-mode renderer that redraws only when something changed.
+crossterm = { version = "=0.29.0", default-features = false, features = [
+    "events",
+    "bracketed-paste",
+    "windows",
+] }
+
+# The headless VT parser. `vte` is the byte-level state machine only -- it does
+# not maintain a screen -- so the grid, scrollback and alternate-screen handling
+# are written here in `src/vt/`. That is the split the plan asks for, and it is
+# also the only way the screen can be unit-tested without a terminal.
+vte = { version = "=0.15.0", default-features = false }
+
+# Display-width correctness for the grid, selection extraction and hit-testing.
+# `unicode-width` is what decides whether a cell occupies one column or two;
+# getting this wrong misaligns every pane that contains a box-drawing or CJK
+# character, so it is a correctness dependency and not a cosmetic one.
+unicode-width = { version = "=0.2.2", default-features = false }
+# Grapheme clustering: a cell that receives a combining mark or a zero-width
+# joiner is still ONE cell, and a copy-on-select that split it would emit
+# broken UTF-8 to the clipboard.
+unicode-segmentation = { version = "=1.13.3", default-features = false }
+
+# System clipboard for copy-on-select and copy-mode yank.
+arboard = { version = "=3.6.1", default-features = false }
+
+tokio = { version = "=1.53.1", default-features = false, features = [
+    "rt-multi-thread",
+    "net",
+    "macros",
+    "sync",
+    "io-util",
+    "time",
+] }
+
+[dev-dependencies]
+# `TestBackend` renders into an in-memory buffer, so widget and layout tests
+# assert on cells instead of screenshots. It is already available through
+# ratatui's default test support; listed explicitly so a future feature change
+# cannot remove it without failing this manifest.
+ratatui = { version = "=0.30.2", default-features = false, features = ["crossterm"] }

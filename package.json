@@ -21,7 +21,7 @@
   "scripts": {
     "aibr": "bun src/cli.ts",
     "dev": "tsx src/index.ts",
-    "generate:contracts": "tsx scripts/generate-contracts.ts && cargo run --quiet --manifest-path router/Cargo.toml -p aibr-contract-gen --release",
+    "generate:contracts": "tsx scripts/generate-contracts.ts && cargo run --quiet -p aibr-contract-gen --release",
     "start": "bun dist/index.js",
     "build": "rm -rf dist && tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",

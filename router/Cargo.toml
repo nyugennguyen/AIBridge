@@ -1,24 +1,15 @@
-# Workspace root for the polyglot ingress router (ADR 0008).
+# Workspace root is ../Cargo.toml; this file is only the aibr-router package.
 #
-# This file is BOTH the workspace manifest and the `aibr-router` package
-# manifest, so the member crate's sources live directly at `router/src/`. That
-# placement is deliberate: `router/src/contracts.rs` is a committed generated
+# It WAS both the workspace manifest and the `aibr-router` package manifest. It
+# is now only the package manifest, because the TUI/daemon modernization plan
+# adds Rust crates under `crates/` and Cargo refuses a member that is not
+# hierarchically below its workspace root. `[profile.release]` moved to the root
+# manifest for the same structural reason: Cargo honours profiles only there.
+#
+# The member crate's sources stay directly at `router/src/`, which is
+# deliberate and unchanged: `router/src/contracts.rs` is a committed generated
 # artefact whose path ADR 0008 2.3 fixes, and a separate member directory would
 # put it at `router/aibr-router/src/contracts.rs` instead.
-#
-# This is the only place Rust is permitted in the repository. The guardrail in
-# Docs/implementation-plans/README.md is amended by ADR 0008 4 for `router/`
-# only and stands unchanged for `src/`.
-
-[workspace]
-# `aibr-contract-gen` is the typify step of the contract chain. It is kept out
-# of `default-members` so `cargo build`, `cargo test`, `cargo clippy` and
-# `cargo fmt --check` at this directory never compile it. Those gates are about
-# the shipped router; a codegen tool failing to compile should not look like the
-# router failing its own gate. It is invoked explicitly by
-# `bun run generate:contracts` via `-p aibr-contract-gen`.
-default-members = ["."]
-members = ["contract-gen"]
 
 [package]
 name = "aibr-router"
@@ -203,18 +194,10 @@ tower = { version = "=0.5.3", features = ["util"] }
 # than the binary uses.
 rusqlite = { version = "=0.40.2", default-features = false, features = ["bundled"] }
 
-[profile.release]
-# ADR 0008 2.1 sizes the router against a 32 MiB systemd MemoryMax, and 2.7
-# turns that cap into an enforced invariant. Size is therefore a correctness
-# property here, not a preference.
-opt-level = "z"
-lto = true
-codegen-units = 1
-# ADR 0008 2.1's release profile. `panic = "abort"` also removes the unwinding
-# tables the router never uses; there is no `catch_unwind` in the design, and
-# M7.3 must not add one.
-panic = "abort"
-strip = true
+# `[profile.release]` lived here until the workspace root moved to
+# `../Cargo.toml`; Cargo honours profiles only at the root, so the table now
+# lives there. It was copied verbatim, because the musl binary-size gate in
+# `.github/workflows/milestone-7.yml` is calibrated on exactly those flags.
 
 # `clippy::large_enum_variant` is allowed for the GENERATED module only, and the
 # reason is that the lint's remedy is the wrong remedy here.

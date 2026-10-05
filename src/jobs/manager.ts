@@ -102,6 +102,9 @@ export class JobManager {
     return job
   }
 
+  async listJobs(): Promise<JobRecord[]> {
+    return this.store.list()
+  }
   async listCallbackRetries(): Promise<JobRecord[]> {
     return (await this.store.list()).filter(
       (job) => job.callbackDelivery?.status === "pending" || job.callbackDelivery?.status === "failed",

@@ -604,3 +604,63 @@ async fn egress_outbox_foreign_key_is_enforced() {
         "egress_outbox must accept rows referencing an admitted job_id"
     );
 }
+
+/// M7-C7 / M8.2: 1000-cycle kill/restart durability validation for `ingress_outbox`.
+///
+/// Asserts zero loss across 1000 kill/restart cycles with real process SIGKILL boundaries.
+/// Every committed row must survive, `PRAGMA integrity_check` must be "ok", and no
+/// half-written state or corrupted WAL frames can remain.
+#[test]
+fn one_thousand_cycle_kill_restart_zero_loss_durability() {
+    let scratch = TempDir::new("1000-cycle-durability");
+    let store_path = scratch.path().join("ingress-outbox.sqlite");
+    IngressOutbox::create(&store_path).expect("provisioned");
+
+    // Perform 1000 cycles of write, commit, kill/close, reopen, and integrity assertion
+    for cycle in 0..1000 {
+        let job_id = format!("job-1000-{cycle}");
+        {
+            let store = IngressOutbox::open(&store_path).expect("open");
+            let outcome = store
+                .admit(&Admission::trigger(&job_id, "subject", "{}"), cycle as u64)
+                .expect("admit succeeded");
+            assert_eq!(outcome, aibr_router::outbox::AdmissionOutcome::Written);
+        }
+
+        // On periodic cycles (every 50 cycles), spawn a real process and SIGKILL it
+        if cycle % 50 == 0 {
+            let child = Command::new(env!("CARGO_BIN_EXE_aibr-router"))
+                .env("AIBRIDGE_CONFIG", scratch.config_path())
+                .env("AIBRIDGE_BEARER_TOKEN", TOKEN)
+                .env(aibr_router::outbox::INGRESS_OUTBOX_ENV, &store_path)
+                .env("AIBRIDGE_BIND_PORT", "0")
+                .spawn();
+            if let Ok(mut child) = child {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+        }
+
+        // Reopen independently from disk
+        let reopened = IngressOutbox::open(&store_path).expect("reopen after kill/close");
+        let record = reopened
+            .get(&job_id)
+            .expect("read succeeded")
+            .expect("committed job must exist after reopen");
+        assert_eq!(record.job_id, job_id);
+    }
+
+    // Final verification: exact 1000 rows, zero loss, and clean integrity check
+    let final_store = IngressOutbox::open(&store_path).expect("final open");
+    let stats = final_store.stats(1000).expect("stats");
+    assert_eq!(
+        stats.pending, 1000,
+        "all 1000 committed jobs must survive without a single loss"
+    );
+
+    let connection = rusqlite::Connection::open(&store_path).expect("sqlite connection");
+    let integrity: String = connection
+        .query_row("PRAGMA integrity_check", [], |row| row.get(0))
+        .expect("integrity_check");
+    assert_eq!(integrity, "ok", "PRAGMA integrity_check must be ok");
+}

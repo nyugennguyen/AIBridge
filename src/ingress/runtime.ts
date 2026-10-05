@@ -29,8 +29,8 @@ import type { OpencodeClient } from "../opencode/types.js"
 import { StaticPermissionPolicy } from "../opencode/permissions.js"
 import { waitForIdle } from "../opencode/monitor.js"
 import { CallbackReporter } from "../callback/reporter.js"
+import { EgressOutboxStore } from "../callback/egress-outbox.js"
 import { FileTaskGraphSyncer } from "../tasks/syncer.js"
-
 export interface RuntimeOptions {
   readonly configPath: string
   readonly stateDir: string
@@ -39,6 +39,7 @@ export interface RuntimeOptions {
   readonly deps?: {
     readonly opencodeClient?: OpencodeClient
     readonly monitorSession?: (job: JobRecord) => Promise<void>
+    readonly egressOutboxStore?: EgressOutboxStore
   }
 }
 
@@ -48,6 +49,7 @@ export interface Runtime {
   readonly jobManager: JobManager
   readonly taskGraphSyncer: FileTaskGraphSyncer
   readonly callbackReporter: CallbackReporter
+  readonly egressOutboxStore?: EgressOutboxStore
   /** Drives one job to a terminal state and delivers its report. */
   readonly monitorSession: (job: JobRecord) => Promise<void>
   /** Re-delivers the report of a job already known to be terminal. */
@@ -67,12 +69,15 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
 
   const jobManager = new JobManager(new JsonFileJobStore(join(options.stateDir, "jobs")))
   const taskGraphSyncer = new FileTaskGraphSyncer(join(options.stateDir, "tasks.md"))
+  const egressOutboxStore =
+    options.deps?.egressOutboxStore ??
+    new EgressOutboxStore(join(options.stateDir, "egress_outbox.db"))
   const callbackReporter = new CallbackReporter({
     attempts: config.timeouts.callback_retry_attempts,
     baseDelayMs: 250,
     agents: config.agents,
+    outboxStore: egressOutboxStore,
   })
-
   function terminalReportStatus(
     status: Awaited<ReturnType<typeof jobManager.getJob>>["status"],
   ): "completed" | "failed" | "timed_out" | "callback_failed" {
@@ -107,7 +112,9 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
         started_at: job.createdAt,
         completed_at: job.updatedAt,
       }
-      await callbackReporter.send(job.trigger.callback_url, report, options.bearerToken)
+      await callbackReporter.send(job.trigger.callback_url, report, options.bearerToken, {
+        jobId: job.id,
+      })
       await jobManager.markCallbackDelivery(job.id, "delivered")
     } catch (error) {
       await jobManager.markCallbackDelivery(
@@ -177,6 +184,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     jobManager,
     taskGraphSyncer,
     callbackReporter,
+    egressOutboxStore,
     monitorSession,
     reportTerminalJob,
   }

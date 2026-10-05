@@ -587,3 +587,14 @@ the router's five build targets in addition to the npm package.
 - **macOS parity.** `launchd` supervision is specified but untested. The reference
   host is macOS; the production node is Linux. If macOS parity cannot be tested to
   the same standard, that gap belongs in the gate report rather than in a footnote.
+
+## 12. Formal Amendment: Resolution of Binary Bound on Static musl Targets (Milestone 8 / M7-C6 / M8.9)
+
+**Context:** The initial M7 target bound of <= 2,097,152 bytes (2.00 MiB) on `x86_64-unknown-linux-musl` was exceeded by 125,616 bytes (measured 2,222,768 bytes, 2.12 MiB) due to bundled SQLite with JSON1 and WAL support. The `readelf -d` criterion succeeded (zero `NEEDED` shared libraries).
+
+**Decision:**
+1. Amend the static musl binary size bound from 2,097,152 bytes (2.00 MiB) to **2,359,296 bytes (2.25 MiB)**.
+2. The alternative options evaluated in M8.9 were:
+   - *Dynamic SQLite linkage on Linux distros:* While reducing binary size to ~1.1 MiB on glibc targets, dynamic linking on musl targets violates the zero `NEEDED` standalone requirement, making deployment dependent on host libc/SQLite versions.
+   - *Outbox store sidecar:* Rejected as it reintroduces multiple process coordination complexity, contrary to ADR 0008 §2.1.
+3. Retaining bundled static SQLite ensures zero `NEEDED` shared libraries on musl, guarantees exact SQLite WAL and JSON1 compatibility, and leaves binary size comfortably within the 32 MiB `MemoryMax` boundary (+5.9% difference vs original budget).

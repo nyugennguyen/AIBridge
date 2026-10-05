@@ -202,6 +202,7 @@ pub fn state(project_root: &Path, outbox: Arc<IngressOutbox>) -> AppState {
         agent_id: std::sync::Arc::from(CONFIGURED_AGENT_ID),
         outbox,
         bounds: aibr_router::outbox::AdmissionBounds::default(),
+        signals: std::sync::Arc::new(aibr_router::routes::RouterSignals::default()),
     }
 }
 

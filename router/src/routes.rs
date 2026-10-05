@@ -113,6 +113,41 @@ use crate::CONTRACT_VERSION;
 /// `project_roots` and `public_url` are wrapped in `Arc` because they are
 /// `Vec<PathBuf>` and `String` — small, but cloned per handler invocation, and this
 /// is the ingress hot path of a component whose RSS is gated at 4 MiB.
+#[derive(Default, Debug)]
+pub struct RouterSignals {
+    pub admissions_total: std::sync::atomic::AtomicU64,
+    pub rejections_total: std::sync::atomic::AtomicU64,
+    pub rejections_auth_failed: std::sync::atomic::AtomicU64,
+    pub rejections_too_many_requests: std::sync::atomic::AtomicU64,
+    pub rejections_invalid_shape: std::sync::atomic::AtomicU64,
+    pub rejections_store_unavailable: std::sync::atomic::AtomicU64,
+}
+
+impl RouterSignals {
+    pub fn record_rejection(&self, error: &ApiError) {
+        self.rejections_total
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        match error {
+            ApiError::Unauthorized => {
+                self.rejections_auth_failed
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+            ApiError::TooManyRequests { .. } => {
+                self.rejections_too_many_requests
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+            ApiError::StoreUnavailable => {
+                self.rejections_store_unavailable
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+            _ => {
+                self.rejections_invalid_shape
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct AppState {
     pub auth: Arc<Bearer>,
@@ -155,6 +190,8 @@ pub struct AppState {
     pub outbox: Arc<IngressOutbox>,
     /// Queue admission bounds (M7.12, SF-15).
     pub bounds: AdmissionBounds,
+    /// Router observability signals (M7-C2 / M8.3).
+    pub signals: Arc<RouterSignals>,
 }
 
 impl AppState {
@@ -176,6 +213,7 @@ impl AppState {
             agent_id: Arc::from(config.bridge.agent_id.as_str()),
             outbox,
             bounds: AdmissionBounds::default(),
+            signals: Arc::new(RouterSignals::default()),
         }
     }
 
@@ -197,10 +235,11 @@ impl AppState {
         if self.auth.accepts(presented) {
             Ok(())
         } else {
-            Err(ApiError::Unauthorized)
+            let err = ApiError::Unauthorized;
+            self.signals.record_rejection(&err);
+            Err(err)
         }
     }
-
     /// Commit `admission`, or refuse the request with a `503`.
     ///
     /// **The one place a store failure becomes a response.** A method on
@@ -220,10 +259,19 @@ impl AppState {
     /// `SF-08` requires: returning `Err` here cannot produce a `202` later in the
     /// handler, because there is no code after this point that builds one.
     fn admit(&self, admission: Admission) -> Result<(), ApiError> {
-        self.outbox
-            .admit(&admission, crate::outbox::now_ms())
-            .map(|_| ())
-            .map_err(|_| ApiError::StoreUnavailable)
+        match self.outbox.admit(&admission, crate::outbox::now_ms()) {
+            Ok(_) => {
+                self.signals
+                    .admissions_total
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                Ok(())
+            }
+            Err(_) => {
+                let err = ApiError::StoreUnavailable;
+                self.signals.record_rejection(&err);
+                Err(err)
+            }
+        }
     }
 }
 
@@ -334,9 +382,23 @@ async fn health(State(state): State<AppState>, headers: HeaderMap) -> Result<Res
                 "pending": stats.pending,
                 "sending": stats.sending,
                 "failed": stats.failed,
+                "terminal_rows": stats.failed,
                 // `null` for an empty queue, which is the honest answer: there is no
                 // oldest row, as opposed to an oldest row of age zero.
                 "oldest_pending_age_ms": stats.oldest_pending_age_ms,
+            },
+            "ingress": {
+                "admissions_total": state.signals.admissions_total.load(std::sync::atomic::Ordering::Relaxed),
+                "rejections_total": state.signals.rejections_total.load(std::sync::atomic::Ordering::Relaxed),
+                "rejection_reasons": {
+                    "auth_failed": state.signals.rejections_auth_failed.load(std::sync::atomic::Ordering::Relaxed),
+                    "too_many_requests": state.signals.rejections_too_many_requests.load(std::sync::atomic::Ordering::Relaxed),
+                    "invalid_shape": state.signals.rejections_invalid_shape.load(std::sync::atomic::Ordering::Relaxed),
+                    "store_unavailable": state.signals.rejections_store_unavailable.load(std::sync::atomic::Ordering::Relaxed),
+                }
+            },
+            "bind": {
+                "health": "ok"
             }
         })),
     )

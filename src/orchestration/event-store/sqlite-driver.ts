@@ -60,11 +60,13 @@ class BaseSqliteDriver implements SqliteDriver {
   private transactionDepth = 0
   private statementCache = new Map<string, SqliteStatement<any>>()
 
-  constructor(path: string, backend: "bun" | "node", db: any) {
+  constructor(path: string, backend: "bun" | "node", db: any, readonly = false) {
     this.path = path
     this.backend = backend
     this.db = db
-    this.applyStandardPragmas()
+    if (!readonly) {
+      this.applyStandardPragmas()
+    }
   }
 
   private applyStandardPragmas(): void {
@@ -247,7 +249,7 @@ export function createSqliteDriver(options?: string | SqliteDriverOptions): Sqli
       // `create: false`.
       ...(opts.create === false && opts.readonly !== true ? { readwrite: true } : {}),
     })
-    return new BaseSqliteDriver(dbPath, "bun", db)
+    return new BaseSqliteDriver(dbPath, "bun", db, opts.readonly ?? false)
   }
 
   const { DatabaseSync } = require("node:sqlite")
@@ -255,7 +257,7 @@ export function createSqliteDriver(options?: string | SqliteDriverOptions): Sqli
     readOnly: opts.readonly,
     open: true,
   })
-  return new BaseSqliteDriver(dbPath, "node", db)
+  return new BaseSqliteDriver(dbPath, "node", db, opts.readonly ?? false)
 }
 
 export function openSqliteDriver(options?: string | SqliteDriverOptions): SqliteDriver {

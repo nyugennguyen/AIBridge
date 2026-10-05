@@ -70,6 +70,8 @@ export interface CliDeps {
   readonly runOpencode: (profile: string) => Promise<void>
   /** Run the separately-composed interactive TUI for a validated profile. */
   readonly runTui?: (profile: string) => Promise<CliExitCode>
+  /** Generate diagnostic support bundle. */
+  readonly runBundle?: (profile: string, options?: { readonly preview?: boolean }) => Promise<CliExitCode>
   /** Package version string. */
   readonly version: string
 }
@@ -78,8 +80,7 @@ export interface CliDeps {
 
 const PROG = "aibr"
 
-const COMMANDS = ["setup", "start", "serve", "worker", "status", "tui"] as const
-
+const COMMANDS = ["setup", "start", "serve", "worker", "status", "tui", "bundle"] as const
 const ALL_COMMANDS = [...COMMANDS, "_opencode"] as const
 
 // ── Argv parsing ───────────────────────────────────────────────────────
@@ -111,7 +112,8 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
       knownFlags.push("--version")
     } else if (arg === "--shadow-mode") {
       knownFlags.push("--shadow-mode")
-    } else if (arg.startsWith("-")) {
+    } else if (arg === "--preview") {
+      knownFlags.push("--preview")
       unknownFlags.push(arg)
     } else if (command === null) {
       command = arg
@@ -146,6 +148,7 @@ function helpText(): string {
     "  worker   Drain the router's admission queue (no listener)",
     "  status   Check tmux session and bridge health",
     "  tui      Open the interactive local UI",
+    "  bundle   Generate diagnostic support bundle",
     "",
     "Options:",
     "  --profile, -p <name>   Profile name (required for start/serve/worker/status/tui)",
@@ -330,6 +333,39 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<Cl
       }
     } catch (err) {
       deps.writer(`Error: ${err instanceof Error ? err.message : "status failed"}\n`)
+      return 1
+    }
+  }
+
+  // ── bundle ─────────────────────────────────────────────────────────
+  if (command === "bundle") {
+    if (deps.runBundle) {
+      try {
+        return await deps.runBundle(profile, { preview: args.hasFlag("--preview") })
+      } catch (err) {
+        deps.writer(`Error: ${err instanceof Error ? err.message : "bundle failed"}\n`)
+        return 1
+      }
+    }
+    try {
+      const { generateSupportBundle, previewSupportBundle } = await import("./diagnostics/bundle.js")
+      const { resolveProfilePaths } = await import("./host/paths.js")
+      const paths = resolveProfilePaths(profile)
+      const configPath = `${paths.configDir}/config.json`
+      const stateDir = paths.stateDir
+      const bundle = generateSupportBundle({
+        profile,
+        configPath,
+        stateDir,
+      })
+      if (args.hasFlag("--preview")) {
+        deps.writer(previewSupportBundle(bundle) + "\n")
+      } else {
+        deps.writer(JSON.stringify(bundle, null, 2) + "\n")
+      }
+      return 0
+    } catch (err) {
+      deps.writer(`Error: ${err instanceof Error ? err.message : "bundle failed"}\n`)
       return 1
     }
   }

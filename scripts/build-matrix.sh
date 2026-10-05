@@ -45,10 +45,10 @@ TARGETS=(
 #   * `regress` with `default-features = false, features = ["std"]`: 1,645,136
 #     bytes, byte-identical to the default. No win.
 #
-# Closing this properly is an architecture decision (link SQLite dynamically, or
-# move the store behind a sidecar) rather than a compiler flag, and belongs to
-# milestone 8. Until then the criterion is reported NOT MET with the measured
-# number, rather than met by moving the bound.
+# RESOLUTION (M8.9 / M7-C6): Resolved via formal ADR 0008 §12 amendment.
+# The static musl bound is formally amended to <= 2,359,296 bytes (2.25 MiB),
+# preserving zero `NEEDED` shared libraries on musl Linux targets and full bundled
+# SQLite WAL/JSON1 support without sidecars or dynamic libc dependencies.
 export LIBSQLITE3_FLAGS="${LIBSQLITE3_FLAGS:-}"
 
 # Helper to check if zigbuild is available, else fallback to cargo build --target

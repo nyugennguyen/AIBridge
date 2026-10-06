@@ -54,11 +54,26 @@ crossterm = { version = "=0.29.0", default-features = false, features = [
     "windows",
 ] }
 
-# The headless VT parser. `vte` is the byte-level state machine only -- it does
-# not maintain a screen -- so the grid, scrollback and alternate-screen handling
-# are written here in `src/vt/`. That is the split the plan asks for, and it is
-# also the only way the screen can be unit-tested without a terminal.
-vte = { version = "=0.15.0", default-features = false }
+# The headless VT parser.
+#
+# `ansi` IS REQUIRED, not an optimisation. `vte` ships two layers: the raw
+# `vte::Parser` state machine, which reports `csi_dispatch(params, ignore, 'H')`
+# and leaves the implementer to know what `H` means, and `vte::ansi::Processor`,
+# which interprets those finals and calls a `Handler` with `goto(line, col)` and
+# `terminal_attribute(Attr::Bold)`. This crate uses the upper layer.
+#
+# The reasoning is the bug surface, not the line count: interpreting CSI finals by
+# hand is where terminal emulators get their edge cases wrong, and the sequence
+# set `opencode` emits is far too large to want hand-rolled. `ansi` pulls in `log`,
+# `cursor-icon` and `bitflags`, all of which the TUI would otherwise not link.
+#
+# `std` stays ON. It is not wanted for its own sake -- it only brings in `memchr`'s
+# std build -- but `Processor`'s default timeout type is `StdSyncHandler`, which is
+# gated behind it. The alternative is implementing `vte::ansi::Timeout` by hand to
+# get a no-op synchronized-update timeout, which would mean every pane silently
+# ignoring the BSU sequence `opencode` uses to avoid tearing mid-frame. Trading one
+# timeout implementation for correct synchronized rendering is not close.
+vte = { version = "=0.15.0", features = ["ansi"] }
 
 # Display-width correctness for the grid, selection extraction and hit-testing.
 # `unicode-width` is what decides whether a cell occupies one column or two;

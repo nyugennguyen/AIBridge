@@ -121,7 +121,9 @@ fn a_payload_of_exactly_the_cap_is_not_rejected() {
     // size-specific. The production constant is asserted separately below.
     const SMALL_CAP: usize = 8;
     assert_eq!(
-        encode_payload(&[b'x'; SMALL_CAP]).expect("a payload of exactly the cap encodes").len(),
+        encode_payload(&[b'x'; SMALL_CAP])
+            .expect("a payload of exactly the cap encodes")
+            .len(),
         LENGTH_PREFIX_BYTES + SMALL_CAP,
     );
     assert_eq!(

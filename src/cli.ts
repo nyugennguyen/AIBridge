@@ -20,7 +20,16 @@ import { readSecret } from "./host/profile-store.js"
 
 // ── Types ──────────────────────────────────────────────────────────────
 
-export type CliExitCode = 0 | 1
+/**
+ * A process exit code.
+ *
+ * `2` is included because the Rust client uses it, and pretending otherwise would
+ * make every caller either truncate a real exit code or lose the distinction:
+ * `1` means "you have to do something" (no daemon, no TTY) and `2` means "this is a
+ * bug". A supervising script must be able to tell those apart, and a type that only
+ * admits `0 | 1` would quietly collapse them.
+ */
+export type CliExitCode = 0 | 1 | 2
 
 /**
  * Injectable CLI dependencies.
@@ -484,6 +493,14 @@ async function createRealDeps(): Promise<CliDeps> {
     isTTY: Boolean(process.stdout?.isTTY),
     isInputTTY: Boolean(process.stdin?.isTTY),
     runTui: async (profile: string) => {
+      // The Rust client is preferred when it has been built. The OpenTUI shell
+      // remains the fallback so `aibr tui` works from an npm install where no Rust
+      // toolchain was ever present -- see `src/tui/rust-client.ts` for why it is a
+      // subprocess and not an in-process switch.
+      const { findTuiBinary, runRustTui } = await import("./tui/rust-client.js")
+      if (findTuiBinary() !== null) {
+        return runRustTui(profile)
+      }
       const { runLocalTui } = await import("./tui/bootstrap.js")
       return runLocalTui(profile)
     },

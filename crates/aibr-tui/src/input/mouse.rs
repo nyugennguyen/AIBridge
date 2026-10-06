@@ -270,16 +270,41 @@ fn end_border_drag(
     };
     let span = u32::from(second.area.x + second.area.width) - u32::from(first.area.x);
     let available = span.saturating_sub(1);
+    // `rects` is one frame behind the live preview, so measuring the span from it
+    // yields a denominator one cell short of the one the stored ratio was computed
+    // against, and the reported sizes land one cell off the seam the operator is
+    // looking at. The canvas extent does not move while a drag is in progress, so it
+    // is the stable denominator — used only when this pair really does span it,
+    // which is the case for a top-level seam and not for one inside a subtree.
+    let available = if first.area.x == rects.canvas.x
+        && second.area.x.saturating_add(second.area.width)
+            == rects.canvas.x.saturating_add(rects.canvas.width)
+    {
+        u32::from(rects.canvas.width).saturating_sub(1)
+    } else {
+        available
+    };
     if available == 0 {
         return actions;
     }
     let new_first = ((f64::from(available) * applied).round() as u32).min(available);
-    let moved = new_first as i64 - i64::from(first.area.width);
-    if moved == 0 {
-        return actions;
-    }
-    let (first_columns, first_rows) = shift(first, *axis, moved);
-    let (second_columns, second_rows) = shift(second, *axis, -moved);
+    // NO `moved == 0` EARLY RETURN, and its absence is the fix.
+    //
+    // The drag preview applies the ratio LIVE, so by the time the button comes up
+    // `rects` already reflects the new sizes and `moved` computes as zero. An early
+    // return there therefore suppressed the report on *every* drag: the seam moved
+    // on screen, the operator saw it move, and the daemon was never told — which
+    // looks like the agent ignoring the resize.
+    //
+    // The sizes below are computed from the ratio and the span, not from `rects`, so
+    // the first report the daemon receives is correct even when it is one frame
+    // behind the seam.
+    let (first_columns, first_rows) = shift_to(first, *axis, new_first as i64);
+    // The second pane gets what is LEFT, not a delta. Passing
+    // `new_first - available` here clamped every pane to one column, because a
+    // delta is meaningless to a function that sets an absolute size.
+    let (second_columns, second_rows) =
+        shift_to(second, *axis, i64::from(available) - i64::from(new_first));
     actions.push(Action::PaneResized {
         pane_id: first_pane.to_owned(),
         columns: first_columns,
@@ -293,12 +318,29 @@ fn end_border_drag(
     actions
 }
 
-/// A pane's new `(columns, rows)` after the seam beside it moved by `delta` cells.
+/// A pane's `(columns, rows)` with its size along `axis` set to `new_size`.
 ///
-/// ONE CELL MINIMUM. A pane with zero columns cannot be drawn, clicked, scrolled or
-/// dragged back, and the operator would have to detach and re-attach to recover -- which
-/// is exactly what the layout's own clamp exists to prevent, so this is a second
-/// statement of the same floor rather than a new rule.
+/// ONE CELL MINIMUM, which is what the layout's own clamp exists to prevent: a pane
+/// with zero columns cannot be drawn, clicked, scrolled or dragged back, and the
+/// operator would have to detach and re-attach to recover.
+///
+/// Setting the size outright rather than shifting by a delta matters because the live
+/// drag preview has already moved the seam by the time this runs, so a delta computed
+/// against the drawn rects is zero even when the seam moved twenty cells.
+fn shift_to(pane: &crate::layout::PaneRect, axis: Axis, new_size: i64) -> (u16, u16) {
+    let clamped = new_size.clamp(1, i64::from(u16::MAX)) as u16;
+    match axis {
+        Axis::Vertical => (clamped, pane.area.height),
+        Axis::Horizontal => (pane.area.width, clamped),
+    }
+}
+
+/// A pane's `(columns, rows)` after the seam beside it moved by `delta` cells.
+///
+/// No longer called -- `end_border_drag` uses [`shift_to`] -- but kept because it is
+/// the clearest statement of the floor, and deleting the only other caller of it
+/// would leave that rule asserted nowhere.
+#[allow(dead_code)]
 fn shift(pane: &crate::layout::PaneRect, axis: Axis, delta: i64) -> (u16, u16) {
     let (columns, rows) = match axis {
         Axis::Vertical => (

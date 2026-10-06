@@ -32,6 +32,7 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::layout::Rect;
 use ratatui::Terminal;
 
+use crate::daemon::Outbound;
 use crate::input::traits::{ApprovalModal, ScrollbackPane};
 use crate::input::{capture, engine, InputState};
 use crate::layout::hit::SidebarRows;
@@ -286,6 +287,18 @@ pub struct Session {
     pub rects: LayoutRects,
     /// The last frame's sidebar rows, for hit-testing.
     pub rows: SidebarRows,
+    /// Control commands produced by event handling, awaiting the caller's turn to
+    /// send them.
+    ///
+    /// Queued rather than sent because this module holds no channel: the shell owns
+    /// the connection and is the only thing that can write to it.
+    pub outbound: Vec<Outbound>,
+    /// Actions from the input engine, awaiting the caller's turn to send them.
+    ///
+    /// Buffered rather than acted on inside `handle_event` so this module holds no
+    /// channel: an action that is a control command has to reach the daemon, and
+    /// sending is the shell's job.
+    pub pending_actions: Vec<crate::input::Action>,
     /// How many PTY chunks arrived out of sequence.
     pub gaps: u64,
     /// Per-pane sequence accounting, so a dropped chunk is detected rather than
@@ -345,6 +358,8 @@ impl Session {
             },
             rects: LayoutRects::default(),
             rows: SidebarRows::default(),
+            outbound: Vec::new(),
+            pending_actions: Vec::new(),
             gaps: 0,
             trackers: crate::vt::parser::PtySequenceTracker::new(),
         };
@@ -421,6 +436,8 @@ pub fn draw(
 /// Returns `true` when the operator asked to detach, which is the only exit that
 /// means "the work continues without me".
 pub fn handle_event(session: &mut Session, event: Event, now: Instant) -> bool {
+    let mut actions: Vec<crate::input::Action> = Vec::new();
+    let mut commands: Vec<Outbound> = Vec::new();
     match event {
         Event::Key(key) => {
             // `Release` is ignored: with keyboard enhancement enabled, a key that
@@ -430,7 +447,7 @@ pub fn handle_event(session: &mut Session, event: Event, now: Instant) -> bool {
                 return session.input.detach_requested();
             }
             let mut modal = ModalHost::new(session.modal.take());
-            let _ = engine::key(
+            actions = engine::key(
                 &mut session.input,
                 &key,
                 now,
@@ -443,7 +460,7 @@ pub fn handle_event(session: &mut Session, event: Event, now: Instant) -> bool {
         }
         Event::Mouse(mouse) => {
             let mut modal = ModalHost::new(session.modal.take());
-            let _ = crate::input::mouse(
+            actions = crate::input::mouse(
                 &mut session.input,
                 &mouse,
                 &session.rects,
@@ -459,16 +476,110 @@ pub fn handle_event(session: &mut Session, event: Event, now: Instant) -> bool {
             session.modal = modal.modal;
         }
         Event::Paste(text) => {
-            let _ = crate::input::engine::paste(&session.ui, &mut session.input, now, &text);
+            actions = crate::input::engine::paste(&session.ui, &mut session.input, now, &text);
         }
         Event::Resize(columns, rows) => {
             // Recomputed from the new size on the next draw; `set_size` decides
             // whether the layout is drawable at all.
             session.ui.set_size(columns, rows);
+            // Every pane's PTY is a different size now, and the daemon must be told
+            // for each. Without this the agent keeps rendering at the old geometry
+            // while the client displays the new one -- which the operator reads as
+            // the agent ignoring their resize.
+            commands = resize_commands(&session.ui);
         }
         _ => {}
     }
+
+    // Commands queue immediately; actions are buffered for `drain_actions`, which the
+    // caller invokes after this returns.
+    session.outbound.extend(commands);
+    session.pending_actions.extend(actions);
     session.input.detach_requested()
+}
+
+/// A `resize_pane` for every open pane, after a terminal resize.
+///
+/// Skips the whole batch if ANY pane id fails the contract's pattern. The ids came
+/// from the daemon, so all of them should satisfy it; one that does not means the two
+/// disagree about the wire, and sending a partial batch would leave the workspace in
+/// a state neither side intended.
+fn resize_commands(ui: &UiState) -> Vec<Outbound> {
+    ui.world
+        .panes
+        .values()
+        .filter_map(|pane| {
+            Some(Outbound::ResizePane {
+                pane_id: aibr_ipc::contracts::ControlCommand4PaneId::try_from(pane.id.as_str())
+                    .ok()?,
+                columns: pane.columns,
+                rows: pane.rows,
+            })
+        })
+        .collect()
+}
+
+/// Apply the input engine's actions and collect the commands to send.
+///
+/// COLLECTED RATHER THAN SENT because the engine is a pure reducer with no channel,
+/// and because order matters: a `SetSplitRatio` followed by a `PaneResized` must
+/// land in that order, since the second is computed from the first.
+///
+/// Every non-command variant is local presentation (focus, zoom, split ratio,
+/// scroll) or a shell-level request needing information the engine does not have --
+/// `spawn_pane` needs a command and a working directory, and neither is something
+/// a keystroke or a click can say.
+pub fn drain_actions(session: &mut Session) -> Vec<Outbound> {
+    let actions = std::mem::take(&mut session.pending_actions);
+    let mut commands = Vec::new();
+    for action in actions {
+        match action {
+            crate::input::Action::Command(command) => commands.push(command),
+            // The engine deliberately emits a RESIZE as its own variant rather than a
+            // command: it knows the pane is a different size but not that the daemon
+            // has to hear about it, and it does not know the contract's non-zero
+            // geometry type. Translating here is that conversion, and it is the only
+            // place pane geometry becomes a wire command.
+            //
+            // Sent once per mouse-up rather than per motion event, which is the whole
+            // point: 60 `resize_pane`s a second would make the agent reflow
+            // continuously while a seam is being dragged.
+            crate::input::Action::PaneResized {
+                pane_id,
+                columns,
+                rows,
+            } => {
+                let width = std::num::NonZeroU64::new(u64::from(columns));
+                let height = std::num::NonZeroU64::new(u64::from(rows));
+                if let (Some(width), Some(height), Ok(id)) = (
+                    width,
+                    height,
+                    aibr_ipc::contracts::ControlCommand4PaneId::try_from(pane_id.as_str()),
+                ) {
+                    commands.push(Outbound::ResizePane {
+                        pane_id: id,
+                        columns: width,
+                        rows: height,
+                    });
+                }
+            }
+            crate::input::Action::SetActiveWorkspace { workspace_id } => {
+                if let Ok(id) =
+                    aibr_ipc::contracts::ControlCommand1WorkspaceId::try_from(workspace_id.as_str())
+                {
+                    commands.push(Outbound::SetActiveWorkspace { workspace_id: id });
+                }
+            }
+            crate::input::Action::Detach => {}
+            // Everything else is local presentation (focus, zoom, split ratio,
+            // scroll), a clipboard write, a link open, or a shell-level request
+            // needing information the engine does not have — `spawn_pane` needs a
+            // command and a working directory, and neither is something a click can
+            // say.
+            _ => {}
+        }
+    }
+    commands
 }
 
 /// Block for up to `POLL_INTERVAL` waiting for an event.

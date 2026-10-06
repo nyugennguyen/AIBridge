@@ -141,7 +141,26 @@ fn pump(
 
         match session::poll_event() {
             Ok(Some(event)) => {
-                if session::handle_event(session, event, Instant::now()) {
+                let detach = session::handle_event(session, event, Instant::now());
+
+                // Everything the operator asked for goes to the daemon now, in order.
+                // Sending here rather than inside the reducer is what keeps the input
+                // engine pure, and sending AFTER the event rather than before it is
+                // what keeps a slow daemon from delaying the redraw.
+                for command in session::drain_actions(session)
+                    .into_iter()
+                    .chain(std::mem::take(&mut session.outbound))
+                {
+                    if !runtime.block_on(attached.send(command)) {
+                        // The daemon is gone. Stop asking, and say so once: a
+                        // flood of identical failures would scroll the operator's
+                        // scrollback past anything useful.
+                        eprintln!("aibr tui: the daemon stopped accepting commands; its work continues without this client");
+                        break;
+                    }
+                }
+
+                if detach {
                     runtime.block_on(attached.detach());
                     return Ok(());
                 }

@@ -41,7 +41,7 @@ use ratatui::layout::Rect;
 /// it a wrapped line is indistinguishable from two lines.
 pub const MIN_CANVAS_COLUMNS: u16 = 20;
 
-pub use chrome::{ChromeRects, SidebarWidth};
+pub use chrome::{ChromeRects, SidebarWidth, SIDEBAR_DEFAULT};
 pub use hit::{HitTarget, HitTest};
 pub use tile::{Axis, Node, TileLayout};
 
@@ -186,6 +186,7 @@ pub fn partition(area: Rect, sidebar: Option<u16>) -> ChromeRects {
     };
 
     ChromeRects {
+        full: area,
         top_bar: Rect::new(area.x, top, area.width, 1),
         sidebar: sidebar_rect,
         canvas,

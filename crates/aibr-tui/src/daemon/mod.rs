@@ -254,6 +254,79 @@ fn default_socket_path() -> String {
     aibr_ipc::DEFAULT_WINDOWS_PIPE_PATH.to_owned()
 }
 
+/// Attach to the daemon and return the first snapshot plus the connection.
+///
+/// Separate from [`run_attached`] because the client enters its terminal AFTER this
+/// returns, and the two halves should fail independently: a daemon that is not
+/// running must be reported with the operator's scrollback intact, not swallowed by
+/// a half-restored alternate screen.
+///
+/// The returned [`Attached`] keeps the connection so the session loop keeps
+/// receiving diffs and PTY output. Dropping it here would leave the client rendering
+/// a snapshot that immediately goes stale.
+pub async fn attach() -> Result<(UiState, Attached), ClientError> {
+    let socket = socket_path()?;
+    let (outbound_tx, outbound_rx) = mpsc::channel::<Outbound>(OUTBOUND_CAPACITY);
+    let mut inbound = connect(&socket, outbound_rx).await?;
+
+    outbound_tx
+        .send(Outbound::RequestSnapshot)
+        .await
+        .map_err(|_| {
+            ClientError::Invariant(
+                "the daemon reader stopped before the snapshot request".to_owned(),
+            )
+        })?;
+
+    let state = tokio::time::timeout(FIRST_FRAME_TIMEOUT, wait_for_snapshot(&mut inbound))
+        .await
+        .map_err(|_| {
+            ClientError::Invariant(format!(
+                "the daemon accepted the connection but sent no snapshot within {FIRST_FRAME_TIMEOUT:?}"
+            ))
+        })??;
+
+    Ok((
+        state,
+        Attached {
+            frames: inbound,
+            outbound: outbound_tx,
+        },
+    ))
+}
+
+/// A live connection to the daemon, after the initial snapshot.
+pub struct Attached {
+    /// Inbound frames: snapshots, diffs and PTY output.
+    pub frames: mpsc::Receiver<aibr_ipc::Frame>,
+    /// Outbound commands.
+    outbound: mpsc::Sender<Outbound>,
+}
+
+impl Attached {
+    /// Take the next frame, or `None` when the daemon closed the connection.
+    ///
+    /// `None` is a NORMAL end, not an error: the operator detached, or the daemon
+    /// exited. Either way the PTYs it owned keep whatever they were doing.
+    pub async fn next_frame(&mut self) -> Option<aibr_ipc::Frame> {
+        self.frames.recv().await
+    }
+
+    /// Send one command.
+    ///
+    /// A send failure means the daemon is gone, which is not reported as an error:
+    /// the operator asked for an action and the client is telling them it could not
+    /// be delivered, not failing the session.
+    pub async fn send(&self, command: Outbound) -> bool {
+        self.outbound.send(command).await.is_ok()
+    }
+
+    /// Tell the daemon the operator is leaving, then close.
+    pub async fn detach(self) {
+        detach(&self.outbound).await;
+    }
+}
+
 /// Tell the daemon the operator is leaving.
 ///
 /// Queued rather than written, for the single-writer reason recorded at the

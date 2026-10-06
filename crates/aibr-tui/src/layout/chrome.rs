@@ -49,6 +49,12 @@ pub fn clamp_sidebar(requested: SidebarWidth, terminal_width: u16) -> SidebarWid
 /// The chrome rectangles for one frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ChromeRects {
+    /// The whole area the layout was computed for.
+    ///
+    /// Carried rather than passed separately to every draw call, so a widget cannot
+    /// be handed an area that disagrees with the rects it is drawing into. That
+    /// disagreement is invisible in a screenshot and maddening in use.
+    pub full: Rect,
     /// The single-row header: Tailscale status, workspace, outbox count.
     pub top_bar: Rect,
     /// The workspace tree, or `None` when collapsed or unaffordable.

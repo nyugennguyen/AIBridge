@@ -249,6 +249,12 @@ pub struct RunOutcome {
     pub chunks_applied: u64,
     /// Render-loop iterations, so a caller can report the client's cadence.
     pub ticks: u64,
+    /// PTY chunks that arrived with a gap in their sequence.
+    ///
+    /// Reported rather than swallowed: a gap means the pane is showing a stream
+    /// with a hole in it, and the operator should be told instead of being shown
+    /// output that looks complete and is not.
+    pub gaps: u64,
 }
 
 /// The daemon's world, as mirrored locally.

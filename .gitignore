@@ -10,3 +10,10 @@ dist/
 # `router/` instead and match nothing, which is how a nested root-anchored
 # pattern silently fails.
 /router/target/
+# Agent worktrees. `git worktree add .worktrees/<name>` creates a full checkout
+# per parallel sub-agent, and without this the whole nested tree shows up as
+# untracked in every one of them.
+.worktrees/
+# The root Cargo workspace's build output. Anchored with a leading slash because
+# it now lives at the repository root rather than under `router/`.
+/target/

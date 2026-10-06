@@ -410,7 +410,7 @@ pub enum ApproveScope {
 /// A STRUCT RATHER THAN `crossterm::event::KeyEvent` so the modal is testable and so
 /// the boundary the widgets workstream implements is explicit. A conversion from
 /// crossterm lives in [`crate::input::keys`] and is total.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct KeyEventLike {
     /// The key, if it is a printable character.
     pub char: Option<char>,

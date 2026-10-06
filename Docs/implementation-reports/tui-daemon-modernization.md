@@ -276,11 +276,11 @@ $ cargo clippy --workspace --all-targets -- -D warnings
 0 errors, 0 warnings
 
 $ cargo test --workspace
-356 passed; 0 failed
+367 passed; 0 failed
    aibr-ipc     33   (10 lib, 3 cap-parity, 9 codec, 11 listener)
    aibr-pty     19   (8 lib, 11 host)
    aibr-router 137   (unchanged by this work)
-   aibr-tui    167   (80 input, 27 layout, 34 vt, 14 render, 12 redaction)
+   aibr-tui    178   (80 input, 27 layout, 34 vt, 14 render, 12 redaction, 11 modal)
 
 $ bun run typecheck
 (clean)
@@ -302,7 +302,7 @@ the byte stream replayed into a character grid and inspected cell by cell.
 
 | Criterion | Result |
 | --- | --- |
-| 1. `cargo check` / `cargo test` clean, no warnings | 356 tests; `clippy -D warnings` clean across the workspace |
+| 1. `cargo check` / `cargo test` clean, no warnings | 367 tests; `clippy -D warnings` clean across the workspace |
 | 2. Client connects over IPC and reflects live `ingress_outbox` | Header outbox count moved **5 → 9** from a `state_diff` while the client ran |
 | 3. Terminal renders ANSI with correct proportions | Truecolor reached the buffer unquantised; a wide glyph occupied two columns with the second blank |
 | 4. A blocked job opens the approval modal | Modal rendered centred with clickable buttons, for a job **already blocked at attach** |
@@ -315,6 +315,25 @@ Criterion 6 is additionally proved at the PTY layer by
 `a_detaching_peer_leaves_the_child_running`, which spawn a real `/bin/sh` in a
 real `portable-pty` and assert the child is still alive after the host and the
 connection are dropped.
+
+### Driving it yourself
+
+```bash
+# 1. Build the client.
+cargo build --release -p aibr-tui
+
+# 2. No daemon: expect a clear message and exit 1. The cheapest check there is.
+./target/release/aibr-tui            # -> "could not reach the AIBridge daemon..."
+
+# 3. A daemon that serves real-looking state, with no engine configured.
+node scripts/fake-ipc-daemon.mjs &
+
+# 4. Attach.
+AIBRIDGE_IPC_SOCKET=/tmp/aibr-tui-dev/aibrd.sock ./target/release/aibr-tui
+```
+
+`aibr tui` routes to the same binary when it is built, falling back to the older
+OpenTUI shell otherwise.
 
 ### What the end-to-end run actually exercised, and what it did not
 
@@ -364,6 +383,11 @@ for the end-to-end check, and it is the part of this report worth keeping.
 | 8 | Combining marks attached to the previous cell unconditionally | A *blank* cell also has a grapheme (a space), so every character merged into it |
 | 9 | Nested splits dropped their inner seams | Collecting each child's panes into a temporary map and merging lost the seams the child created, leaving a one-cell dark gap |
 | 10 | `seam_rect` and `split_children` computed the seam independently | The seam rendered inside a pane; they disagreed by a cell |
+| 11 | The modal was **undismissable**. `Action::ModalClosed` was emitted on `Esc` and nothing consumed it; approving, rejecting and aborting all left it on screen; `handle_click` fell through to a default that swallowed everything; and `rect()` answered a hardcoded `80×24` that was not where the modal drew | An operator looking at a blocked job had no way to decide **and** no way to back out. Found while bringing up the test daemon, not by any test — hence `tests/modal_behaviour.rs` |
+
+Defect 11 is the one that most argues for running the thing: it survived 356
+passing tests, `clippy -D warnings`, and a full manual read of the modal code,
+because nothing in the suite asked what happens *after* a decision.
 
 Three of these were also genuine design errors rather than slips, and are recorded
 as such in the code:
@@ -437,7 +461,9 @@ Each is a real gap, not a deferred nicety.
   id if nested seams become individually draggable.
 - **The modal swallows all input while open**, including `Ctrl+B q`. Correct — a
   blocked job must not be dismissible by a stray click meant for the terminal
-  behind it — but it means detaching requires `Esc` first.
+  behind it — but it means detaching requires `Esc` first. `Esc`, approving,
+  rejecting and aborting all close it; that was not true until a defect found
+  during test-harness bring-up was fixed (§7, defect 11).
 
 ---
 

@@ -190,21 +190,32 @@ impl ApprovalModalState {
     }
 }
 
-/// Draw the modal, centred in `area`, and return the rects it used.
-pub fn draw_approval_modal(state: &ApprovalModalState, area: Rect, buffer: &mut Buffer) -> Rect {
-    // Centred, and never larger than the area: a modal wider than the terminal
-    // would have its buttons off-screen, which for an approval prompt means the
-    // operator cannot decline.
+/// Where the modal sits inside `area`.
+///
+/// ONE function, called by the draw pass and by the click hit-test. They used to
+/// compute it separately -- the drawer from the buffer area, the hit-test from a
+/// hardcoded 80x24 -- which meant a click was resolved against a rectangle the
+/// operator never saw. A button that renders at one place and is hit-tested at
+/// another is the "tearing" acceptance criterion 5 forbids, in a different guise.
+///
+/// Never larger than `area`: a modal wider than the terminal puts its buttons
+/// off-screen, and for an approval prompt that means the operator cannot decline.
+#[must_use]
+pub fn modal_rect(area: Rect) -> Rect {
     let width = area.width.saturating_sub(4).clamp(20, 72);
     let height = area.height.saturating_sub(4).clamp(6, 14);
-    let modal = Rect::new(
-        area.x
-            .saturating_add((area.width.saturating_sub(width)) / 2),
+    Rect::new(
+        area.x.saturating_add(area.width.saturating_sub(width) / 2),
         area.y
-            .saturating_add((area.height.saturating_sub(height)) / 2),
+            .saturating_add(area.height.saturating_sub(height) / 2),
         width,
         height,
-    );
+    )
+}
+
+/// Draw the modal, centred in `area`, and return the rect it used.
+pub fn draw_approval_modal(state: &ApprovalModalState, area: Rect, buffer: &mut Buffer) -> Rect {
+    let modal = modal_rect(area);
 
     // `Clear` rather than overdrawing: an overlay that draws spaces over the pane
     // leaves whatever it did not cover, and the operator reads a half-modal as a

@@ -31,7 +31,7 @@ pub mod terminal;
 pub use chrome::{draw_chrome, SidebarSection};
 pub use diff::{draw_diff_pane, DiffLine, DiffView};
 pub use frame::{render_frame, FrameInput};
-pub use modal::{draw_approval_modal, ApprovalModalState, ModalAction};
+pub use modal::{draw_approval_modal, modal_rect, ApprovalModalState, ModalAction};
 // `FocusTarget` lives in the input engine, which defines the modal's focus model;
 // re-exported so a widget consumer needs one `use`.
 pub use crate::input::traits::FocusTarget;

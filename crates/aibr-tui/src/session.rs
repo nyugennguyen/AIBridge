@@ -196,13 +196,21 @@ impl crate::input::traits::SidebarList for SidebarScroll {
 pub struct ModalHost {
     /// The modal, when open.
     pub modal: Option<ApprovalModalState>,
+    /// The terminal area, so a click can be resolved against the modal's real
+    /// rectangle.
+    ///
+    /// Needed because the trait's `handle_click` takes coordinates but no geometry,
+    /// and the alternative -- a hardcoded 80x24 -- resolved every click against a
+    /// rectangle the operator never saw. At any other window size the buttons were
+    /// drawn in one place and clickable in another.
+    pub screen: Rect,
 }
 
 impl ModalHost {
-    /// A host wrapping `modal`.
+    /// A host wrapping `modal`, drawing into `screen`.
     #[must_use]
-    pub fn new(modal: Option<ApprovalModalState>) -> Self {
-        Self { modal }
+    pub fn new(modal: Option<ApprovalModalState>, screen: Rect) -> Self {
+        Self { modal, screen }
     }
 }
 
@@ -237,17 +245,74 @@ impl ApprovalModal for ModalHost {
     }
 
     fn rect(&self) -> Option<Rect> {
-        // The modal draws centred in the full area, so its rect is derivable from
-        // the same numbers `draw_approval_modal` uses. Returning `None` here would
-        // make the input engine unable to translate a click into a focus change.
-        self.modal.as_ref().map(|_| Rect::new(0, 0, 80, 24))
+        self.modal
+            .as_ref()
+            .map(|_| crate::widgets::modal::modal_rect(self.screen))
+    }
+
+    fn handle_click(
+        &mut self,
+        column: u16,
+        row: u16,
+        target: crate::input::traits::FocusTarget,
+    ) -> crate::input::traits::ModalOutcome {
+        // Same take-and-restore rule as `handle_key`: a click on a button is a
+        // decision and closes the prompt; a click anywhere else is swallowed and
+        // leaves it open, because a stray click meant for the terminal behind the
+        // modal must not approve or reject anything.
+        let Some(mut modal) = self.modal.take() else {
+            return crate::input::traits::ModalOutcome::Consumed;
+        };
+        let area = crate::widgets::modal::modal_rect(self.screen);
+        let outcome = match modal.action_at(area, column, row) {
+            Some(action) => {
+                modal.focused = action.target();
+                // Abort cancels the job rather than deciding this prompt, and
+                // `ApprovalModalState::outcome` maps it to `Dismissed` because the
+                // widget has no way to express "cancel the job". Translating it here
+                // is what makes the button do what it says -- as `Dismissed` it would
+                // close the modal and send nothing at all.
+                if action == crate::widgets::modal::ModalAction::Abort {
+                    crate::input::traits::ModalOutcome::Abort
+                } else {
+                    modal.outcome()
+                }
+            }
+            // Inside the modal but not on a button: move focus, decide nothing.
+            None if column >= area.x
+                && column < area.x.saturating_add(area.width)
+                && row >= area.y
+                && row < area.y.saturating_add(area.height) =>
+            {
+                modal.focused = target;
+                crate::input::traits::ModalOutcome::Consumed
+            }
+            None => crate::input::traits::ModalOutcome::Consumed,
+        };
+        if outcome == crate::input::traits::ModalOutcome::Consumed {
+            self.modal = Some(modal);
+        }
+        outcome
     }
 
     fn handle_key(
         &mut self,
         event: &crate::input::traits::KeyEventLike,
     ) -> crate::input::traits::ModalOutcome {
-        let Some(modal) = &mut self.modal else {
+        // The modal is TAKEN before the outcome is computed, and put back only if the
+        // key was not a decision.
+        //
+        // Every terminal outcome means the prompt's job is done -- dismissed,
+        // approved, rejected, or aborted -- and a prompt that stays on screen after
+        // its decision has been sent is a prompt the operator has to stare through
+        // while the next one waits behind it. Restoring it on `Consumed` is what
+        // keeps a keystroke that means nothing here from looking like a dismissal.
+        //
+        // This was a live bug, not a design choice: the engine emits
+        // `Action::ModalClosed` for a dismissal, and nothing consumed it, so `Esc`
+        // did nothing at all and neither did approving. An operator looking at a
+        // blocked job had no way to move forward AND no way to back out.
+        let Some(mut modal) = self.modal.take() else {
             return crate::input::traits::ModalOutcome::Consumed;
         };
         if let Some(character) = event.char {
@@ -255,13 +320,17 @@ impl ApprovalModal for ModalHost {
                 modal.justification.push(character);
             }
         }
-        match event.named {
+        let outcome = match event.named {
             Some(crate::input::traits::NamedKey::Enter) => modal.outcome(),
             Some(crate::input::traits::NamedKey::Esc) => {
                 crate::input::traits::ModalOutcome::Dismissed
             }
             _ => crate::input::traits::ModalOutcome::Consumed,
+        };
+        if outcome == crate::input::traits::ModalOutcome::Consumed {
+            self.modal = Some(modal);
         }
+        outcome
     }
 }
 
@@ -446,7 +515,7 @@ pub fn handle_event(session: &mut Session, event: Event, now: Instant) -> bool {
             if key.kind == KeyEventKind::Release {
                 return session.input.detach_requested();
             }
-            let mut modal = ModalHost::new(session.modal.take());
+            let mut modal = ModalHost::new(session.modal.take(), session.chrome.full);
             actions = engine::key(
                 &mut session.input,
                 &key,
@@ -459,7 +528,7 @@ pub fn handle_event(session: &mut Session, event: Event, now: Instant) -> bool {
             session.modal = modal.modal;
         }
         Event::Mouse(mouse) => {
-            let mut modal = ModalHost::new(session.modal.take());
+            let mut modal = ModalHost::new(session.modal.take(), session.chrome.full);
             actions = crate::input::mouse(
                 &mut session.input,
                 &mouse,

@@ -10,6 +10,9 @@
 //!   * [`frame`] — the length-prefixed framing and its 8 MiB cap. A frame that
 //!     announces more than the cap is refused before anything is allocated,
 //!     because the announcement comes from the peer.
+//!   * [`message`] — dispatch from the generated union onto the named contract
+//!     types, so a consumer matches on `StateSnapshot` rather than on an
+//!     anonymous inlined arm.
 //!
 //! The transport and the per-connection state machine are declared in their own
 //! modules as the daemon and the client bring them up.
@@ -42,12 +45,14 @@
 #[allow(missing_docs)]
 pub mod contracts;
 pub mod frame;
+pub mod message;
 
 /// Convenience re-exports so a consumer writes one `use`.
 pub use contracts::{
     Ack, ControlCommand, JobState, JobView, PaneView, PtyChunk, PtyExit, ServerError,
     ServerMessage, StateDiff, StateSnapshot, TailscaleStatusView, WorkspaceView,
 };
+pub use message::{decode, Chunk, DecodeError, Diff, Frame, MessageTag, Snapshot};
 
 /// The IPC protocol version this build speaks.
 ///
@@ -57,3 +62,29 @@ pub use contracts::{
 /// integer. `contract_parity_is_checked_by_test` in `tests/protocol_version.rs`
 /// fails the build if the two drift.
 pub const PROTOCOL_VERSION: u8 = 1;
+
+/// The environment variable that overrides the IPC socket path.
+///
+/// Exists so a second daemon, a test harness, or a container can point at its own
+/// socket without a rebuild -- and so the Bun worker and the TUI agree on where to
+/// look. Mirrors `IPC_SOCKET_PATH_ENV` in `src/ipc/schemas.ts`; the TypeScript
+/// side reads the same name, and `tests/socket_path_parity.rs` asserts the two
+/// literals agree.
+pub const SOCKET_PATH_ENV: &str = "AIBRIDGE_IPC_SOCKET";
+
+/// The POSIX default socket path: a user-scoped subdirectory of `/tmp`.
+///
+/// NOT `/var/run/aibr/`, which the plan proposes. Two reasons, and the second is
+/// the one that matters: a path under `/var/run` needs root to create, and a
+/// world-readable socket in a shared directory means any local user can connect to
+/// a daemon that can run OpenCode inside the owner's project allowlist. The
+/// `aibr/` subdirectory is created 0700 by the daemon before binding.
+pub const DEFAULT_POSIX_SOCKET_PATH: &str = "/tmp/aibr/aibrd.sock";
+
+/// The Windows default, a named pipe.
+///
+/// A named pipe rather than a loopback TCP port because the ACL is inherited from
+/// the process token: a loopback listener is reachable by any local process that
+/// guesses the port, and "can anyone reach this" is a property worth keeping
+/// structural.
+pub const DEFAULT_WINDOWS_PIPE_PATH: &str = r"\\.\pipe\aibr-daemon";

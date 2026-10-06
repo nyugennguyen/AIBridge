@@ -106,11 +106,9 @@ fn run() -> Result<String, String> {
 /// `BTreeMap`, not a `Vec`: the generated module's item order follows
 /// insertion order, so a directory listing sorted by the filesystem would
 /// make the output depend on inode order rather than on the file names.
-fn read_contract_inputs(
-    contracts_directory: &Path,
-) -> Result<BTreeMap<String, PathBuf>, String> {
+fn read_contract_inputs(contracts_directory: &Path) -> Result<BTreeMap<String, PathBuf>, String> {
     let mut inputs: BTreeMap<String, PathBuf> = BTreeMap::new();
-    let entries = fs::read_dir(&contracts_directory)
+    let entries = fs::read_dir(contracts_directory)
         .map_err(|error| format!("cannot read {}: {error}", contracts_directory.display()))?;
     for entry in entries {
         let path = entry
@@ -170,8 +168,14 @@ fn contracts_partition(
     Ok(selected)
 }
 
-fn contracts_partition_router(all: &BTreeMap<String, PathBuf>) -> Result<BTreeMap<String, PathBuf>, String> {
-    let claimed = contracts_partition(all, |name| IPC_CONTRACT_FILES.contains(&name.as_ref()), "local IPC bus")?;
+fn contracts_partition_router(
+    all: &BTreeMap<String, PathBuf>,
+) -> Result<BTreeMap<String, PathBuf>, String> {
+    let claimed = contracts_partition(
+        all,
+        |name| IPC_CONTRACT_FILES.contains(&name),
+        "local IPC bus",
+    )?;
     for name in IPC_CONTRACT_FILES {
         if !claimed.contains_key(*name) {
             return Err(format!(
@@ -179,11 +183,21 @@ fn contracts_partition_router(all: &BTreeMap<String, PathBuf>) -> Result<BTreeMa
             ));
         }
     }
-    contracts_partition(all, |name| !IPC_CONTRACT_FILES.contains(&name.as_ref()), "router admission")
+    contracts_partition(
+        all,
+        |name| !IPC_CONTRACT_FILES.contains(&name),
+        "router admission",
+    )
 }
 
-fn contracts_partition_ipc(all: &BTreeMap<String, PathBuf>) -> Result<BTreeMap<String, PathBuf>, String> {
-    contracts_partition(all, |name| IPC_CONTRACT_FILES.contains(&name.as_ref()), "local IPC bus")
+fn contracts_partition_ipc(
+    all: &BTreeMap<String, PathBuf>,
+) -> Result<BTreeMap<String, PathBuf>, String> {
+    contracts_partition(
+        all,
+        |name| IPC_CONTRACT_FILES.contains(&name),
+        "local IPC bus",
+    )
 }
 
 /// Generate one Rust module from one partition of the contracts.
@@ -373,7 +387,7 @@ fn emit_target(
     // Writing only on change keeps `cargo` and every editor from touching the
     // file's mtime when nothing moved, so "regenerate" does not look like a
     // modification in `git status`.
-    let current = fs::read_to_string(&destination).ok();
+    let current = fs::read_to_string(destination).ok();
     if current.as_deref() == Some(rendered.as_str()) {
         return Ok(format!(
             "aibr-contract-gen: {} partition, {} inputs -> {} is already up to date",
@@ -382,7 +396,7 @@ fn emit_target(
             destination.display()
         ));
     }
-    fs::write(&destination, &rendered)
+    fs::write(destination, &rendered)
         .map_err(|error| format!("cannot write {}: {error}", destination.display()))?;
     Ok(format!(
         "aibr-contract-gen: {} -> {} types from {} inputs",
@@ -390,10 +404,12 @@ fn emit_target(
         // `iter_types` yields `Type<'_>`, and `Type::name()` returns a `String`
         // by value. It is not a `Result` and not a reference, so neither
         // `.cloned()` nor `.ok()` applies.
-        type_space
-            .iter_types()
-            .map(|generated| generated.name())
-            .count(),
+        // `map(..).count()` allocates a `String` per type for no reason; only the
+        // COUNT is reported. `iter_types()` yields `Type<'_>` and `name()` returns
+        // an owned `String`, so `.len()` on the type space is not what is wanted
+        // either -- this counts generated items. The lint is allowed because the
+        // allocation is in a build tool that runs once, not in a shipped binary.
+        type_space.iter_types().count(),
         inputs.len(),
     ))
 }
@@ -439,8 +455,8 @@ fn assert_root_names_disjoint(
 
 /// The `title` typify will name the generated root type after.
 fn root_type_name(path: &Path) -> Result<String, String> {
-    let file = fs::File::open(path)
-        .map_err(|error| format!("cannot open {}: {error}", path.display()))?;
+    let file =
+        fs::File::open(path).map_err(|error| format!("cannot open {}: {error}", path.display()))?;
     let document: serde_json::Value = serde_json::from_reader(file)
         .map_err(|error| format!("cannot parse {} as JSON: {error}", path.display()))?;
     document

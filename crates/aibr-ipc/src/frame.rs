@@ -21,7 +21,6 @@ use std::io;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
-
 /// Bytes of length prefix in front of every frame.
 pub const LENGTH_PREFIX_BYTES: usize = 4;
 
@@ -117,7 +116,10 @@ impl std::fmt::Display for FrameError {
                 write!(formatter, "{context}: malformed JSON frame: {detail}")
             }
             Self::ContractViolation { context, detail } => {
-                write!(formatter, "{context}: frame violates its contract: {detail}")
+                write!(
+                    formatter,
+                    "{context}: frame violates its contract: {detail}"
+                )
             }
             Self::Incomplete => write!(formatter, "connection closed mid-frame"),
             Self::Io { error } => write!(formatter, "transport error: {error}"),
@@ -126,8 +128,6 @@ impl std::fmt::Display for FrameError {
 }
 
 impl std::error::Error for FrameError {}
-
-
 
 /// Encode a value into a length-prefixed frame.
 ///
@@ -138,11 +138,15 @@ pub fn encode<T>(value: &T) -> io::Result<Vec<u8>>
 where
     T: Serialize + ?Sized,
 {
-    let payload = serde_json::to_vec(value)
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, FrameError::Malformed {
-            context: "encode",
-            detail: error.to_string(),
-        }))?;
+    let payload = serde_json::to_vec(value).map_err(|error| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            FrameError::Malformed {
+                context: "encode",
+                detail: error.to_string(),
+            },
+        )
+    })?;
     encode_payload(&payload)
 }
 
@@ -253,4 +257,104 @@ where
         context,
         detail: error.to_string(),
     })
+}
+
+/// The [`tokio::io::AsyncRead`] half of the codec.
+///
+/// A method on `BufReader` rather than a free function so a caller cannot
+/// accidentally pair a `tokio` reader with the blocking [`read_frame_blocking`]
+/// and deadlock: `read_exact_or_eof` retries `ErrorKind::Interrupted` in a loop
+/// with no `.await`, which on an async reader is a spin.
+/// The async half of the codec, as an extension trait.
+///
+/// A TRAIT and not inherent methods on `AsyncRead`: an inherent impl on a foreign
+/// trait for a foreign type is not allowed (`E0782`), and a free function taking
+/// `&mut R where R: AsyncRead + Unpin` would not be callable as
+/// `reader.read_frame()` — which is how it is written at the call site, and the
+/// point of the method is that the two halves of the codec read identically.
+// `Send` IS IN THE SUPERTRAIT, and that is what replaces the desugared
+// `-> impl Future + Send` spelling: bounding the IMPLEMENTOR makes the returned
+// future `Send` whenever the reader is, which `tokio::spawn` requires. Without it
+// the future is neither known to be `Send` nor permitted to be assumed, and every
+// caller would be pushed to `spawn_local` -- a thread-local runtime, which is the
+// wrong shape for a client whose only concurrency is one socket and a render loop.
+pub trait AsyncFrameRead: tokio::io::AsyncRead + Unpin + Send {
+    /// Read one frame payload, or `None` at a clean close on a frame boundary.
+    ///
+    /// Written as a DESUGARED `-> impl Future + Send` rather than `async fn`,
+    /// because `async fn` in a public trait cannot state an auto-trait bound
+    /// (`async_fn_in_trait`). The future would then be neither known to be
+    /// `Send` nor permitted to be assumed, `tokio::spawn` would refuse a task
+    /// holding it, and every caller would be pushed toward `spawn_local` -- a
+    /// thread-local runtime, which is the wrong shape for a client whose only
+    /// concurrency is one socket and a render loop. Naming `+ Send` here is what
+    /// makes `tokio::spawn(read_loop(..))` compile in the TUI.
+    fn read_frame(
+        &mut self,
+    ) -> impl std::future::Future<Output = Result<Option<Vec<u8>>, FrameError>> + Send;
+}
+
+impl<R> AsyncFrameRead for R
+where
+    R: tokio::io::AsyncRead + Unpin + Send,
+{
+    // `clippy::manual_async_fn` is allowed rather than obeyed: rewriting this as
+    // `async fn` would DROP the `+ Send` bound from the signature, which is the
+    // entire reason it is spelled this way. The lint's suggestion is correct Rust
+    // and the wrong API here.
+    #[allow(clippy::manual_async_fn)]
+    fn read_frame(
+        &mut self,
+    ) -> impl std::future::Future<Output = Result<Option<Vec<u8>>, FrameError>> + Send {
+        async move {
+            let mut prefix = [0u8; LENGTH_PREFIX_BYTES];
+            if !read_exact_or_eof_async(self, &mut prefix).await? {
+                return Ok(None);
+            }
+            let announced = u32::from_be_bytes(prefix);
+            // Compared as `u64` BEFORE the narrowing to `usize`, for the reason
+            // `read_frame_blocking` gives.
+            if u64::from(announced) > MAX_FRAME_BYTES as u64 {
+                return Err(FrameError::TooLarge {
+                    announced: u64::from(announced),
+                });
+            }
+            let announced = usize::try_from(announced).map_err(|_| FrameError::TooLarge {
+                announced: u64::from(u32::MAX),
+            })?;
+            let mut payload = vec![0u8; announced];
+            if !read_exact_or_eof_async(self, &mut payload).await? {
+                return Err(FrameError::Incomplete);
+            }
+            Ok(Some(payload))
+        }
+    }
+}
+
+/// The async twin of [`read_exact_or_eof`].
+async fn read_exact_or_eof_async<R>(reader: &mut R, buffer: &mut [u8]) -> Result<bool, FrameError>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    use tokio::io::AsyncReadExt;
+
+    if buffer.is_empty() {
+        return Ok(true);
+    }
+    let mut filled = 0;
+    while filled < buffer.len() {
+        match reader.read(&mut buffer[filled..]).await {
+            Ok(0) => {
+                return if filled == 0 {
+                    Ok(false)
+                } else {
+                    Err(FrameError::Incomplete)
+                };
+            }
+            Ok(count) => filled += count,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(true)
 }

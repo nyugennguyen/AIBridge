@@ -48,6 +48,9 @@ tokio = { version = "=1.53.1", default-features = false, features = [
     "net",
     "macros",
     "sync",
+    # REQUIRED by `frame`'s `AsyncRead` codec. Without `io-util` there is no
+    # `AsyncReadExt`, and the framing layer would be blocking-only -- which the
+    # TUI's tokio read loop cannot use.
     "io-util",
     "time",
 ] }

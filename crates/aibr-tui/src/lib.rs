@@ -43,25 +43,21 @@ pub mod widgets;
 pub fn run() -> std::process::ExitCode {
     use std::process::ExitCode;
 
-    let outcome = match crate::state::terminal_size() {
-        Ok(_size) => crate::daemon::run_attached(),
-        Err(error) => {
-            eprintln!("aibr tui: {error}");
-            eprintln!("aibr tui: a TTY is required; run `aibr tui` from a terminal, not a pipe.");
-            return ExitCode::from(1);
-        }
+    let outcome = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime.block_on(crate::daemon::run_attached()),
+        Err(error) => Err(crate::state::ClientError::Io(error)),
     };
 
     match outcome {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(crate::daemon::ClientError::NotATerminal) => ExitCode::from(1),
-        Err(crate::daemon::ClientError::Invariant(message)) => {
-            eprintln!("aibr tui: {message}");
-            ExitCode::from(2)
-        }
-        Err(crate::daemon::ClientError::Io(error)) => {
+        Ok(_outcome) => ExitCode::SUCCESS,
+        Err(error) => {
+            // Reported AFTER the terminal has been restored, so the operator sees
+            // a normal scrollback rather than a half-restored alternate screen.
             eprintln!("aibr tui: {error}");
-            ExitCode::from(1)
+            error.exit_code()
         }
     }
 }

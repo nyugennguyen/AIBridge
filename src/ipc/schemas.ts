@@ -212,6 +212,7 @@ export const paneViewSchema = z
   })
   .strict()
 
+
 export const workspaceViewSchema = z
   .object({
     workspaceId: workspaceIdSchema,
@@ -222,6 +223,7 @@ export const workspaceViewSchema = z
     selected: z.boolean(),
   })
   .strict()
+
 
 /**
  * Tailscale status as the header bar shows it.
@@ -241,6 +243,7 @@ export const tailscaleStatusViewSchema = z
     peerCount: nonNegativeIntegerSchema,
   })
   .strict()
+
 
 /**
  * The complete topology a client hydrates from on attach.

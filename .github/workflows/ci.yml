@@ -47,23 +47,34 @@ jobs:
       #
       # Its own named step so a failure names the invariant: a regeneration that
       # moved, rather than a test that happened to fail nearby.
+      # ADR 0008 section 2.3, and ADR 0010 section 2.2 for the second output.
+      #
+      # `crates/aibr-ipc/src/contracts.rs` is listed here because ADR 0010 split
+      # `contracts/v1/` across TWO generated units: the router compiles the ingress
+      # and orchestration families, the IPC crate compiles the daemon/client bus
+      # families. Both are committed artefacts, so both are diffed -- omitting the
+      # second would make a stale IPC contract look reproducible.
       - name: Contracts reproducible
         run: |
           bun run generate:contracts
-          git diff --exit-code contracts/ router/src/contracts.rs
+          git diff --exit-code contracts/ router/src/contracts.rs crates/aibr-ipc/src/contracts.rs
 
       # The cross-language half. `router/tests/fixtures.rs` re-derives the
       # accept/reject vector from the generated Rust types and asserts it equals
       # the committed one, so this is where a TypeScript/Rust contract drift is
       # caught. It must run AFTER the reproducibility step: if generation moves
       # the artefacts, a parity failure would be reported as a parity problem.
+      # The Cargo workspace root is the REPOSITORY root, not `router/`: ADR 0010
+      # added `crates/*` as siblings of `router/` and Cargo refuses a member that is
+      # not below its workspace root. So there is no `cd` here, and `cargo fmt` /
+      # `clippy` / `test` now cover every shipped crate rather than the router
+      # alone.
       - name: Rust contract parity
         run: |
           bun run generate:parity-vector
-          cd router
-          cargo fmt --check
-          cargo clippy --all-targets -- -D warnings
-          cargo test
+          cargo fmt --all --check
+          cargo clippy --workspace --all-targets -- -D warnings
+          cargo test --workspace
 
       - name: CLI smoke test
         run: bun dist/cli.js --help

@@ -128,12 +128,14 @@ jobs:
           # test drove the binary's argv, so this step is the one that would have
           # caught it.
           set -euo pipefail
-          # The workspace is `router/`, not the repository root: `cargo build` at the
-          # root dies with "could not find Cargo.toml in ... or any parent directory",
-          # which is how the first run of this step failed. A wrong path here is a bug
-          # in the step, not a broken checkout.
-          BIN=./router/target/release/aibr-router
-          cargo build --release --manifest-path router/Cargo.toml
+          # The Cargo workspace root IS the repository root: ADR 0010 moved it
+          # there from `router/` so `crates/*` could be siblings of `router/`
+          # (Cargo refuses a member that is not below its workspace root). The
+          # target directory therefore moved with it. `-p aibr-router` keeps this
+          # step building only the router, so the 2.25 MiB size bound below still
+          # measures the same binary it was calibrated on.
+          BIN=./target/release/aibr-router
+          cargo build --release -p aibr-router
           test -x "$BIN"
           WORK="$(mktemp -d)"
           export AIBRIDGE_CONFIG="$PWD/bench/baseline/capture-config.json"

@@ -6,16 +6,29 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
-ROUTER_DIR="${ROOT_DIR}/router"
+# ADR 0010 moved the Cargo workspace root to the repository root, so build output
+# lands in `${ROOT_DIR}/target` rather than `${ROOT_DIR}/router/target`. Building
+# the ROUTER ONLY is deliberate: `cargo build` with no `-p` would also build the
+# TUI, which pulls in ratatui and crossterm and roughly triples the build for a
+# matrix whose subject is the router's static musl binary and its 2.25 MiB size
+# bound (ADR 0008 12).
+CARGO_PACKAGE_ARGS=(-p aibr-router)
 DIST_DIR="${ROOT_DIR}/dist-bin"
 
 mkdir -p "${DIST_DIR}"
 
 # Determine version from package.json or router/Cargo.toml
+# The repo's version, not `router/Cargo.toml`'s: package.json is what `bun pm pack`
+# stamps into the published tarball, so a matrix artefact named for the package
+# version matches what npm actually receives.
 VERSION=$(grep '"version"' "${ROOT_DIR}/package.json" | head -n1 | cut -d'"' -f4)
 echo "=== Building aibr-router matrix (v${VERSION}) ==="
 
-cd "${ROUTER_DIR}"
+# Run from the WORKSPACE ROOT, not `router/`: `--manifest-path router/Cargo.toml`
+# would still resolve the workspace correctly, but `cd`-ing into a member makes
+# the target directory ambiguous to anyone reading this script later, and the
+# destination path below now names the root explicitly.
+cd "${ROOT_DIR}"
 
 TARGETS=(
   "x86_64-unknown-linux-musl"
@@ -57,16 +70,16 @@ build_target() {
   echo "--- Building target: ${target} ---"
 
   if command -v cargo-zigbuild >/dev/null 2>&1; then
-    cargo zigbuild --target "${target}" --release
+    cargo zigbuild "${CARGO_PACKAGE_ARGS[@]}" --target "${target}" --release
   elif command -v zig >/dev/null 2>&1 && cargo help zigbuild >/dev/null 2>&1; then
-    cargo zigbuild --target "${target}" --release
+    cargo zigbuild "${CARGO_PACKAGE_ARGS[@]}" --target "${target}" --release
   else
     # standard cargo build if target is installed
     rustup target add "${target}" 2>/dev/null || true
-    cargo build --target "${target}" --release
+    cargo build "${CARGO_PACKAGE_ARGS[@]}" --target "${target}" --release
   fi
 
-  local src_bin="${ROUTER_DIR}/target/${target}/release/aibr-router"
+  local src_bin="${ROOT_DIR}/target/${target}/release/aibr-router"
   local dest_bin="${DIST_DIR}/aibr-router-${target}"
   # A missing binary is a FAILURE, not a warning. The previous version printed a
   # warning and returned success, so a target that failed to cross-compile left no

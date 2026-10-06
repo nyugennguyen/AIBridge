@@ -166,8 +166,13 @@ Two facts that cause most confusion:
   (`router/src/lib.rs:12-45`). It will admit a structurally valid trigger from an unauthorized
   source. "The router accepted it" tells you nothing about legitimacy.
 - **`deny_unknown_fields` on config.** Adding a key to `config.json` **stops the router from
-  starting** until `bun run generate:contracts` regenerates `contracts/` and `router/src/contracts.rs`.
-  CI enforces this with `git diff --exit-code`.
+  starting** until `bun run generate:contracts` regenerates the contracts. CI enforces this
+  with `git diff --exit-code` over **both** generated outputs: `router/src/contracts.rs` and
+  `crates/aibr-ipc/src/contracts.rs` (ADR 0010). Checking only the first misses a stale IPC
+  contract.
+- **Cargo runs from the repository root.** The workspace root moved out of `router/` so that
+  `crates/*` could be siblings (Cargo refuses a member above its workspace root). `cd router &&
+  cargo test` still works but misses the TUI and IPC crates.
 
 The router's `/health` **requires** bearer auth and does **not** call opencode. The engine's
 `/health` does neither. Same path, opposite semantics.

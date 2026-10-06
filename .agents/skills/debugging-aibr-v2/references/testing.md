@@ -85,8 +85,30 @@ bun run generate:contracts        # TS schemas + Rust contracts.rs
 bun run generate:parity-vector    # ONLY writer of router/tests/parity-vector.json
 ```
 
-CI order matters: reproducibility (`git diff --exit-code contracts/ router/src/contracts.rs`)
-runs *before* Rust parity, so a moved artifact is not misreported as parity drift.
+CI order matters: reproducibility runs *before* Rust parity, so a moved artifact is not
+misreported as parity drift. Since ADR 0010 the diff lists **two** generated outputs:
+
+```bash
+git diff --exit-code contracts/ router/src/contracts.rs crates/aibr-ipc/src/contracts.rs
+```
+
+`contracts/v1/` is partitioned across them by `IPC_CONTRACT_FILES` in
+`router/contract-gen/src/main.rs` — the router compiles the ingress/orchestration
+families, `aibr-ipc` compiles the daemon/client bus families. Adding a schema to
+`contracts/v1/` without adding its name to that list is a **generation error**, not
+a silent drop: it lands in the router's compilation unit, which is the wrong place.
+See ADR 0010 section 2.2.
+
+The **Cargo workspace root is the repository root**, not `router/` (also ADR 0010).
+So there is no `cd router` before cargo:
+
+```bash
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+```
+
+Build output is at `./target/`, not `./router/target/`.
 
 `scripts/generate-parity-vector.ts` is deliberately the only writer of the parity vector —
 a test that rewrites the expectation it asserts against is not a test. Never make a test

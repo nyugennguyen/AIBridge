@@ -295,6 +295,14 @@ pub async fn attach() -> Result<(UiState, Attached), ClientError> {
     ))
 }
 
+/// The daemon closed the connection.
+///
+/// A named zero-sized type rather than `()`, because `Result<_, ()>` says nothing
+/// at a call site and there is no way to attach context to it later without
+/// changing every caller.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DaemonGone;
+
 /// A live connection to the daemon, after the initial snapshot.
 pub struct Attached {
     /// Inbound frames: snapshots, diffs and PTY output.
@@ -304,10 +312,28 @@ pub struct Attached {
 }
 
 impl Attached {
-    /// Take the next frame, or `None` when the daemon closed the connection.
+    /// Take the next frame if one is already buffered, WITHOUT waiting.
     ///
-    /// `None` is a NORMAL end, not an error: the operator detached, or the daemon
-    /// exited. Either way the PTYs it owned keep whatever they were doing.
+    /// `Ok(None)` means "nothing right now", which is the normal state between
+    /// events. `Err(())` means the daemon closed the connection, which is a normal
+    /// end: the operator detached, or the daemon exited. Either way the PTYs it owned
+    /// keep whatever they were doing.
+    ///
+    /// The split between this and [`Self::next_frame`] is deliberate. A blocking
+    /// read in the render loop stalls drawing for as long as the daemon is quiet,
+    /// which on an idle session is most of the time.
+    pub fn try_next_frame(&mut self) -> Result<Option<aibr_ipc::Frame>, DaemonGone> {
+        match self.frames.try_recv() {
+            Ok(frame) => Ok(Some(frame)),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty) => Ok(None),
+            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => Err(DaemonGone),
+        }
+    }
+
+    /// Wait for the next frame.
+    ///
+    /// Used only where blocking is correct -- the initial snapshot -- never in the
+    /// render loop. See [`Self::try_next_frame`].
     pub async fn next_frame(&mut self) -> Option<aibr_ipc::Frame> {
         self.frames.recv().await
     }
@@ -350,11 +376,17 @@ async fn connect(
     socket: &str,
     outbound: mpsc::Receiver<Outbound>,
 ) -> Result<mpsc::Receiver<aibr_ipc::Frame>, ClientError> {
-    let io = tokio::net::UnixStream::connect(socket).await.map_err(|error| {
-        ClientError::Invariant(format!(
-            "could not reach the AIBridge daemon at {socket}: {error}. Is it running? (`aibr start`)"
-        ))
-    })?;
+    let io = tokio::net::UnixStream::connect(socket)
+        .await
+        .map_err(|error| {
+            // `DaemonUnavailable`, not `Invariant`: a daemon that is not running is the
+            // most common outcome and the operator's to fix, and every job behind that
+            // daemon is unaffected. Exit code 1, not 2.
+            ClientError::DaemonUnavailable {
+                path: socket.to_owned(),
+                detail: error.to_string(),
+            }
+        })?;
 
     // `into_split`, not an `Arc`. tokio implements `AsyncRead`/`AsyncWrite` for
     // the owned halves and NOT for `Arc<UnixStream>`: with a shared handle the

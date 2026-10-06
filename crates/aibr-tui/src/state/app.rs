@@ -202,6 +202,19 @@ pub enum ClientError {
     /// Exit code 1. The daemon is unaffected and `aibr tui` works in a real
     /// terminal, so this is a usage error rather than a failure.
     NotATerminal,
+    /// The daemon could not be reached.
+    ///
+    /// Exit code 1, alongside [`Self::NotATerminal`] and NOT
+    /// [`Self::Invariant`]. "The daemon is not running" is the single most common
+    /// thing that will happen, it is the operator's to fix, and every job behind
+    /// the daemon is unaffected. Reporting it as an invariant breach would have a
+    /// supervising script log a configuration problem as a software defect.
+    DaemonUnavailable {
+        /// The socket path that was tried.
+        path: String,
+        /// What the connect attempt reported.
+        detail: String,
+    },
     /// The terminal could not be queried or restored.
     Io(std::io::Error),
     /// An internal invariant broke, or the daemon violated its contract.
@@ -219,6 +232,10 @@ impl std::fmt::Display for ClientError {
                 formatter,
                 "a TTY is required; run `aibr tui` from a terminal, not a pipe"
             ),
+            Self::DaemonUnavailable { path, detail } => write!(
+                formatter,
+                "could not reach the AIBridge daemon at {path}: {detail}. Is it running? (`aibr start`)"
+            ),
             Self::Io(error) => write!(formatter, "terminal I/O failed: {error}"),
             Self::Invariant(message) => write!(formatter, "invariant broken: {message}"),
         }
@@ -232,7 +249,11 @@ impl ClientError {
     #[must_use]
     pub fn exit_code(&self) -> std::process::ExitCode {
         match self {
-            Self::NotATerminal | Self::Io(_) => std::process::ExitCode::from(1),
+            // "You have to start the daemon" and "you ran me from a pipe" are both
+            // the operator's to fix, and neither means the client is broken.
+            Self::NotATerminal | Self::Io(_) | Self::DaemonUnavailable { .. } => {
+                std::process::ExitCode::from(1)
+            }
             Self::Invariant(_) => std::process::ExitCode::from(2),
         }
     }

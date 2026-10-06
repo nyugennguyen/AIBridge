@@ -105,15 +105,30 @@ fn pump(
     mut attached: daemon::Attached,
 ) -> Result<(), ClientError> {
     loop {
-        // Drain the daemon before drawing, so the frame shows everything that has
-        // arrived rather than being one tick behind.
-        while let Some(frame) = runtime.block_on(attached.next_frame()) {
-            if !session::apply_frame(session, &frame) {
-                // The diff does not continue from the sequence this client holds.
-                // Re-requesting a snapshot is the ONLY correct response: applying it
-                // anyway leaves the client quietly wrong about which panes exist, and
-                // no later frame would reveal it.
-                let _ = runtime.block_on(attached.send(daemon::Outbound::RequestSnapshot));
+        // Drain whatever the daemon has already sent, WITHOUT blocking.
+        //
+        // `try_recv`, not `next_frame().await`. An await here waits for a frame that
+        // may never arrive -- a quiet daemon sends nothing while an agent thinks --
+        // and the loop would sit there instead of drawing, so the client would show
+        // a frozen blank screen on a perfectly healthy idle session. That is the
+        // single worst failure this TUI can have: it looks like a hang.
+        loop {
+            match attached.try_next_frame() {
+                Ok(Some(frame)) => {
+                    if !session::apply_frame(session, &frame) {
+                        // The diff does not continue from the sequence this client
+                        // holds. Re-requesting a snapshot is the ONLY correct
+                        // response: applying it anyway leaves the client quietly
+                        // wrong about which panes exist, and no later frame would
+                        // reveal it.
+                        let _ = runtime.block_on(attached.send(daemon::Outbound::RequestSnapshot));
+                    }
+                }
+                // Nothing buffered. The common case, and the reason this is a
+                // `try_recv` rather than a wait.
+                Ok(None) => break,
+                // The daemon closed. Its PTYs keep running; the operator re-attaches.
+                Err(daemon::DaemonGone) => return Ok(()),
             }
         }
 

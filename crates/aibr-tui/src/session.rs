@@ -295,6 +295,14 @@ pub struct Session {
 
 impl Session {
     /// A session for a client that has just attached.
+    ///
+    /// `ui` already has its snapshot applied -- `daemon::attach` consumed the
+    /// snapshot frame before this is called. So the modal is opened HERE as well as
+    /// on every later frame: a job that was ALREADY blocked when the client attached
+    /// must prompt immediately, and waiting for the next diff would leave the agent
+    /// waiting for a decision nobody is being asked for. Acceptance criterion 4 says
+    /// "immediately", and that includes "at startup" -- which is the common case for
+    /// an operator re-attaching to a session that blocked while they were away.
     #[must_use]
     pub fn new(ui: UiState) -> Self {
         let pane_ids: Vec<String> = ui
@@ -320,7 +328,7 @@ impl Session {
         }
         let scroll = pane_ids.into_iter().map(|id| (id, 0u16)).collect();
 
-        Self {
+        let mut session = Self {
             ui,
             layout,
             parsers,
@@ -339,7 +347,14 @@ impl Session {
             rows: SidebarRows::default(),
             gaps: 0,
             trackers: crate::vt::parser::PtySequenceTracker::new(),
-        }
+        };
+        // The snapshot this session was built from has ALREADY been applied, so no
+        // frame will arrive to trigger this. A job that blocked before the operator
+        // attached would otherwise sit waiting for a decision that is never asked
+        // for -- the worst failure an approval workflow has, because it looks like
+        // the agent is still thinking.
+        session.refresh_modal();
+        session
     }
 
     /// Feed PTY bytes into a pane's emulator.
@@ -498,7 +513,55 @@ pub fn apply_frame(session: &mut Session, frame: &aibr_ipc::Frame) -> bool {
         }
         return applied;
     }
+
+    // PTY output. Decoded HERE rather than in `daemon`, because base64 is
+    // transport encoding and the emulator should only ever see PTY bytes.
+    if let Some(chunk) = frame.chunk() {
+        // An undecodable payload is dropped, not fatal: one bad chunk must not take
+        // down a session with running jobs behind it.
+        if let Ok(bytes) = base64_decode(chunk.data) {
+            session.feed_pane(chunk.pane_id, chunk.sequence, &bytes);
+        }
+    }
+
     true
+}
+
+/// Decode standard base64.
+///
+/// Hand-written rather than a dependency: the alphabet is 64 characters and the
+/// only operation needed is decode, and a TUI client pulling in a base64 crate for
+/// it would be a dependency for thirty lines. Invalid input yields `Err` rather
+/// than a partial decode, because a chunk that is half-decoded is worse than one
+/// that is dropped -- the emulator would render a stream that never existed.
+fn base64_decode(encoded: &str) -> Result<Vec<u8>, String> {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+    let bytes = encoded.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len() / 4 * 3);
+    let mut accumulator: u32 = 0;
+    let mut bits = 0u32;
+    let mut padding = 0usize;
+
+    for &byte in bytes {
+        if byte == b'=' {
+            padding += 1;
+            continue;
+        }
+        if padding > 0 {
+            return Err("base64 data after padding".to_owned());
+        }
+        let Some(value) = ALPHABET.iter().position(|candidate| *candidate == byte) else {
+            return Err(format!("invalid base64 character {byte:#x}"));
+        };
+        accumulator = (accumulator << 6) | u32::try_from(value).map_err(|_| "overflow")?;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push(u8::try_from((accumulator >> bits) & 0xFF).map_err(|_| "overflow")?);
+        }
+    }
+    Ok(out)
 }
 
 /// The result of a session, for the caller to log.

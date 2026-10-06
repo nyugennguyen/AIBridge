@@ -53,6 +53,36 @@ export interface IngressRecord {
   readonly terminal_error: string | null
 }
 
+/**
+ * Told about the durable writes, so a UI can follow the queue.
+ *
+ * WHY A CALLBACK AND NOT A RETURN VALUE. The claim and the acknowledgement are two
+ * separate `COMMIT`s with the work in between, so no single call's return value
+ * could describe both ends. A queue event has to be emitted from inside each of
+ * them, which means the drainer has to know someone is listening.
+ *
+ * Notified AFTER the commit, never before: an event published before the write
+ * would let a UI show a row the store does not have, and the divergence would only
+ * surface when a restarted process read the table.
+ *
+ * Optional, because a worker with no UI -- which is every deployment today -- must
+ * not pay for it, and because the drainer's own tests supply none.
+ */
+export interface IngressLifecycleObserver {
+  /** Rows this claim took, in claim order. */
+  claimed?(records: readonly IngressRecord[]): void
+  /** A row was acknowledged: dispatch succeeded and the row is done with. */
+  acknowledged?(jobId: string): void
+  /**
+   * A row reached `failed` and will never be retried.
+   *
+   * Separate from `acknowledged` because the two mean opposite things to an
+   * operator, and a sidebar colouring them the same would report a job as
+   * succeeded when it was abandoned.
+   */
+  exhausted?(jobId: string, errorCode: string): void
+}
+
 export interface IngressDrainerDependencies {
   readonly driver: SqliteDriver
   readonly config: BridgeConfig
@@ -61,6 +91,8 @@ export interface IngressDrainerDependencies {
   readonly callbackReporter?: CallbackReporter
   readonly taskGraphSyncer: TaskGraphSyncer
   readonly monitorSession: (job: JobRecord) => Promise<void>
+  /** Optional; see {@link IngressLifecycleObserver} for why it is not a return value. */
+  readonly observer?: IngressLifecycleObserver
   readonly orchestration?: {
     readonly translation: LegacyTranslation
   }
@@ -75,6 +107,7 @@ export class IngressDrainer {
   readonly #monitorSession: (job: JobRecord) => Promise<void>
   readonly #orchestration?: { readonly translation: LegacyTranslation }
   readonly #planReview: ConfigPlanReviewProvider
+  readonly #observer?: IngressLifecycleObserver
   private running = false
   private timer: NodeJS.Timeout | null = null
 
@@ -85,10 +118,29 @@ export class IngressDrainer {
     this.#opencodeClient = dependencies.opencodeClient
     this.#taskGraphSyncer = dependencies.taskGraphSyncer
     this.#monitorSession = dependencies.monitorSession
+    this.#observer = dependencies.observer
     this.#orchestration = dependencies.orchestration
     this.#planReview = new ConfigPlanReviewProvider(
       dependencies.config.planning.require_approval_for,
     )
+  }
+
+  /**
+   * Tell the observer, and never let it break the drain loop.
+   *
+   * Swallowed rather than propagated because every call site is a durable write
+   * that has already committed: an observer that throws must not turn a committed
+   * claim into an exception the caller retries, which would double-process the row
+   * the `attempts` counter has just incremented.
+   */
+  #notify(emit: (observer: IngressLifecycleObserver) => void): void {
+    const observer = this.#observer
+    if (observer === undefined) return
+    try {
+      emit(observer)
+    } catch {
+      // An observer is a UI, not the queue. See above.
+    }
   }
 
   static fromPath(
@@ -133,6 +185,10 @@ export class IngressDrainer {
       token,
     )
 
+    if (rows.length > 0) {
+      this.#notify((observer) => observer.claimed?.(rows))
+    }
+
     return { token, rows }
   }
 
@@ -154,6 +210,8 @@ export class IngressDrainer {
     if (result.changes === 0) {
       throw new Error(`Cannot acknowledge record '${jobId}': not in 'sending' status with matching token`)
     }
+
+    this.#notify((observer) => observer.acknowledged?.(jobId))
   }
 
   /**
@@ -184,6 +242,7 @@ export class IngressDrainer {
         jobId,
         claimToken,
       )
+      this.#notify((observer) => observer.exhausted?.(jobId, code))
       return "terminal"
     }
 
@@ -232,6 +291,26 @@ export class IngressDrainer {
       jobId,
     )
     return row ?? null
+  }
+
+  /**
+   * How many rows are still claimable.
+   *
+   * A `COUNT` against the table rather than a counter maintained in memory, and the
+   * difference is not a style preference. A maintained counter and the table disagree
+   * the moment a drainer is killed mid-cycle, and the count a client is shown must be
+   * the pessimistic one -- an optimistic header number is how an operator concludes
+   * the queue is empty while rows sit in `sending` waiting for a lease nobody will
+   * renew.
+   *
+   * `pending` only, not `sending`: a row this process has claimed is not waiting for
+   * an operator, it is being worked on.
+   */
+  pendingCount(): number {
+    const row = this.#driver.get<{ pending: number }>(
+      "SELECT COUNT(*) AS pending FROM ingress_outbox WHERE status = 'pending'",
+    )
+    return row?.pending ?? 0
   }
 
   /**

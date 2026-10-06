@@ -17,7 +17,7 @@
 //! The transport and the per-connection state machine are declared in their own
 //! modules as the daemon and the client bring them up.
 //!
-//! The three invariants the rest of the system leans on:
+//! The four invariants the rest of the system leans on:
 //!
 //! 1. **A client is replaceable.** `aibr tui` holds no authoritative state. It
 //!    renders a [`contracts::StateSnapshot`] and applies [`contracts::StateDiff`]
@@ -31,6 +31,11 @@
 //!    discarded. There is deliberately no "detach and stop" command for a
 //!    convenience to be added to later.
 
+//! 4. **A client is not a threat to the daemon's memory.** Every peer gets a
+//!    bounded outbound queue ([`server::MAX_OUTBOUND_BYTES`]), so a client that
+//!    stops reading costs a bounded amount rather than an OOM kill that would
+//!    take every other client's PTYs with it.
+
 #![deny(missing_docs)]
 
 // The generated module is exempt from `#![deny(missing_docs)]`, and the reason
@@ -42,10 +47,21 @@
 // as authoritative, which is the duplication ADR 0008 §2.3 forbids. The type
 // level docs the generator does emit are kept. The router's `pub mod contracts;`
 // is exempt for the same reason.
+//
+// `#[rustfmt::skip]` for the same reason as the router's: `aibr-contract-gen`
+// renders this file with `prettyplease`, and `rustfmt` would reformat it
+// differently. Without the skip the two fight -- `cargo fmt --all` rewrites the
+// file, the next `bun run generate:contracts` rewrites it back, and CI's
+// `git diff --exit-code` fails on a file nobody edited. rustfmt's own `ignore`
+// config is nightly-only and silently dropped on stable, which the router measured
+// and recorded; skipping at the `mod` line is stable and applies to exactly this
+// file.
 #[allow(missing_docs)]
+#[rustfmt::skip]
 pub mod contracts;
 pub mod frame;
 pub mod message;
+pub mod server;
 
 /// Convenience re-exports so a consumer writes one `use`.
 pub use contracts::{

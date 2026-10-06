@@ -57,8 +57,13 @@ export interface CliDeps {
    * Resolves on `SIGINT`/`SIGTERM`. Binds no socket: ingress belongs to the
    * router once cut over, and a worker that could accept requests would be a
    * second authority (ADR 0008 §2.2).
+   *
+   * `publishIpc` adds ONE socket, for local clients only, and it is opt-in. That
+   * socket is the local bus and not ingress: its listener cannot admit a trigger,
+   * and it lives in a `0700` user-scoped directory for the same reason the Rust
+   * listener's does.
    */
-  readonly runWorker: (profile: string) => Promise<void>
+  readonly runWorker: (profile: string, options?: { readonly publishIpc?: boolean }) => Promise<void>
   /** Query status of a tmux profile. */
   readonly statusProfile: (profile: string) => Promise<{
     readonly kind: "healthy" | "session_missing" | "bridge_unavailable"
@@ -122,6 +127,8 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
       knownFlags.push("--version")
     } else if (arg === "--shadow-mode") {
       knownFlags.push("--shadow-mode")
+    } else if (arg === "--ipc-publish") {
+      knownFlags.push("--ipc-publish")
     } else if (arg === "--preview") {
       knownFlags.push("--preview")
       unknownFlags.push(arg)
@@ -173,6 +180,7 @@ function helpText(): string {
     "  --help, -h             Show this help",
     "  --version, -v          Show version",
     "  --shadow-mode          Run in shadow mode (mirroring ingress to router)",
+    "  --ipc-publish          Serve the local IPC bus for the TUI (worker only)",
     "",
   ].join("\n")
 }
@@ -378,7 +386,7 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<Cl
   // ── worker ─────────────────────────────────────────────────────────
   if (command === "worker") {
     try {
-      await deps.runWorker(profile)
+      await deps.runWorker(profile, { publishIpc: args.hasFlag("--ipc-publish") })
       return 0
     } catch (err) {
       deps.writer(`Error: ${err instanceof Error ? err.message : "worker failed"}\n`)
@@ -467,9 +475,12 @@ async function createRealDeps(): Promise<CliDeps> {
 
   const processRunner = new BunProcessRunner()
   const platformInspector = new BunPlatformInspector()
+  const writer = (s: string): void => {
+    process.stdout.write(s)
+  }
 
   return {
-    writer: (s: string) => process.stdout.write(s),
+    writer,
     isTTY: Boolean(process.stdout?.isTTY),
     isInputTTY: Boolean(process.stdin?.isTTY),
     runTui: async (profile: string) => {
@@ -569,23 +580,66 @@ async function createRealDeps(): Promise<CliDeps> {
       })
     },
 
-    runWorker: async (profile: string) => {
+    runWorker: async (profile: string, workerOptions?: { readonly publishIpc?: boolean }) => {
       const { startIngressWorker } = await import("./ingress/worker.js")
       const paths = resolveProfilePaths(profile)
+      const bearerToken = await readSecret(`${paths.secretsDir}/bearer_token`)
+      const publishIpc = workerOptions?.publishIpc === true
+
+      // Created before the worker and attached after, because the drainer needs its
+      // observer at construction and the publisher needs the drainer to exist. See
+      // `QueueBridge`'s header in src/ipc/bridge.ts.
+      const { QueueBridge, startIpcBus } = await import("./ipc/bridge.js")
+      const bridge = new QueueBridge()
+
       const worker = await startIngressWorker({
         configPath: `${paths.configDir}/config.json`,
         stateDir: paths.stateDir,
-        bearerToken: await readSecret(`${paths.secretsDir}/bearer_token`),
+        bearerToken,
         environment: process.env as Record<string, string>,
+        // Supplied here rather than inside `startIngressWorker` so that module keeps
+        // no dependency on the IPC surface, and so this flag is the single place
+        // that decides whether a socket exists at all.
+        ingressObserver: publishIpc ? bridge : undefined,
       })
 
-      // `Restart=always` sends SIGTERM; a drain loop that ignored it would be
-      // killed mid-claim on every deploy, and the row would sit in 'sending'
-      // until `recoverStale` noticed the lease had expired.
+      let bus: Awaited<ReturnType<typeof startIpcBus>> | undefined
+      if (publishIpc) {
+        bus = await startIpcBus({
+          config: worker.config,
+          jobManager: worker.jobManager,
+          bridge,
+          // Read through the drainer's own connection, as a `COUNT` against the
+          // table rather than a maintained counter: a counter and the table disagree
+          // the moment a drainer is killed mid-cycle, and the number a client is
+          // shown must not be the optimistic one.
+          outboxPendingCount: () => worker.pendingIngressCount(),
+          // The node's own bearer token, so a token an agent echoed into a job detail
+          // is scrubbed on the way to a client rather than merely on the way to a log.
+          customSecrets: [bearerToken],
+        })
+      }
+
+      // Announced rather than silent: a socket that appears without a word about it
+      // is a socket an operator cannot account for, and this one is reachable by
+      // anything running as this user.
+      writer(`IPC bus: ${bus === undefined ? "off" : `serving on ${bus.publisher.socketPath}`}\n`)
+
+      // `Restart=always` sends SIGTERM; a drain loop that ignored it would be killed
+      // mid-claim on every deploy, and the row would sit in 'sending' until
+      // `recoverStale` noticed the lease had expired.
       await new Promise<void>((resolve) => {
         const onSignal = (): void => {
           worker.stop()
-          resolve()
+          // Closing the LISTENER is the whole shutdown path: it closes client
+          // connections and nothing else. No pane is signalled and no job is
+          // cancelled, which is the same rule `ControlCommand::detach` follows for
+          // one client -- a socket dying is never a signal.
+          if (bus === undefined) {
+            resolve()
+            return
+          }
+          void bus.stop().then(() => resolve(), () => resolve())
         }
         process.once("SIGINT", onSignal)
         process.once("SIGTERM", onSignal)

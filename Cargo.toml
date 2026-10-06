@@ -31,12 +31,16 @@ members = [
     "router",
     "router/contract-gen",
     "crates/aibr-ipc",
+    "crates/aibr-pty",
     "crates/aibr-tui",
 ]
 # The `contract-gen` exclusion is load-bearing; see the module comment above.
-# The two shipped components ARE in here, so `cargo test` at the root is the
-# whole Rust gate (acceptance criterion 1) rather than a router-only subset.
-default-members = ["router", "crates/aibr-ipc", "crates/aibr-tui"]
+# The shipped components ARE in here, so `cargo test` at the root is the whole
+# Rust gate (acceptance criterion 1) rather than a router-only subset. `aibr-pty`
+# is in `default-members` for the same reason as the other two: it is the process
+# supervisor Phase 2 puts between the daemon and an agent, and a supervisor that
+# only compiles only when explicitly named is a supervisor nothing builds.
+default-members = ["router", "crates/aibr-ipc", "crates/aibr-pty", "crates/aibr-tui"]
 
 # Moved verbatim from `router/Cargo.toml`.
 #

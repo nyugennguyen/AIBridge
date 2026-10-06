@@ -19,13 +19,36 @@
  * also why there is no in-memory fallback here and no `catch` that starts one.
  */
 
-import { createRuntime, type RuntimeOptions } from "./runtime.js"
-import { IngressDrainer } from "./drainer.js"
+import { createRuntime, type Runtime, type RuntimeOptions } from "./runtime.js"
+import { IngressDrainer, type IngressLifecycleObserver } from "./drainer.js"
 
 export const INGRESS_OUTBOX_ENV = "AIBRIDGE_INGRESS_OUTBOX"
 
 export interface IngressWorkerHandle {
   readonly drainer: IngressDrainer
+  /**
+   * The engine this process is running.
+   *
+   * Exposed because the local IPC bus has to be built from the SAME authority --
+   * the same config and the same job manager -- rather than from a second load of
+   * the profile. Two loads would be two configurations, and a bus that disagrees
+   * with the drainer about which projects are allowed would be a way around the
+   * allowlist rather than a view of it (ADR 0008 §2.2).
+   */
+  readonly runtime: Runtime
+  /** The validated profile configuration. */
+  readonly config: Runtime["config"]
+  /** The engine's job manager, for the same reason as `runtime`. */
+  readonly jobManager: Runtime["jobManager"]
+  /**
+   * Rows in `ingress_outbox` that are still claimable.
+   *
+   * Read through the drainer's own connection rather than a second one: the drainer
+   * owns the store handle, and a snapshot callback that opened its own connection per
+   * client would put a file handle on the hot path for a number that changes
+   * roughly once per drain cycle.
+   */
+  pendingIngressCount(): number
   /** Resolves once the poll loop has stopped. Idempotent. */
   readonly stopped: Promise<void>
   stop(): void
@@ -35,6 +58,15 @@ export interface IngressWorkerOptions extends RuntimeOptions {
   /** Defaults to `$AIBRIDGE_INGRESS_OUTBOX`; absolute, or refused. */
   readonly storePath?: string
   readonly pollIntervalMs?: number
+  /**
+   * Told about each durable write, after it commits.
+   *
+   * Optional because a worker with no UI must not pay for it. It is threaded in
+   * from the caller rather than constructed here so that this module keeps no
+   * dependency on the IPC surface: the drain loop is the same program whether or
+   * not a socket is ever bound.
+   */
+  readonly ingressObserver?: IngressLifecycleObserver
 }
 
 export const DEFAULT_POLL_INTERVAL_MS = 500
@@ -83,6 +115,7 @@ export async function startIngressWorker(
       callbackReporter: runtime.callbackReporter,
       taskGraphSyncer: runtime.taskGraphSyncer,
       monitorSession: runtime.monitorSession,
+      observer: options.ingressObserver,
     })
   } catch (error) {
     throw new Error(
@@ -104,5 +137,13 @@ export async function startIngressWorker(
     }
   })
 
-  return { drainer, stopped, stop }
+  return {
+    drainer,
+    runtime,
+    config: runtime.config,
+    jobManager: runtime.jobManager,
+    pendingIngressCount: () => drainer.pendingCount(),
+    stopped,
+    stop,
+  }
 }

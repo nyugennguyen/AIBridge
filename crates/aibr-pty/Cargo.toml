@@ -1,0 +1,54 @@
+# `aibr-pty` -- the process supervisor that owns every agent child.
+#
+# WHY THIS IS A SEPARATE CRATE AND NOT A MODULE OF `aibr-ipc`.
+# `aibr-ipc` is a wire codec and a socket; it must stay free of anything that
+# spawns processes, so that a client could depend on it without inheriting a
+# supervisor. `aibr-tui` must not depend on this crate at all -- a renderer that
+# links a PTY host could, in principle, open one, which would make "the TUI holds
+# no state" untrue rather than merely unlikely. Keeping the supervisor on its own
+# makes that an import error instead of a review question.
+#
+# WHAT IT OWNS. A spawned child, its PTY master, the bytes it has written, and the
+# per-pane sequence counter that lets a client notice a gap. It does NOT own
+# lifetime policy: nothing here is signalled because a client disconnected. The
+# invariant Phase 6 names -- `aibr tui` can be killed at any moment without
+# affecting a single agent -- is enforced by the absence of any path from a
+# connection to a signal.
+
+[package]
+name = "aibr-pty"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.94"
+publish = false
+description = "PTY process host for AIBridge agent children"
+
+[dependencies]
+# The wire shapes and the frame cap. A path dependency, not a crates.io one: these
+# are generated from `src/ipc/schemas.ts` in THIS repository and have no published
+# version.
+aibr-ipc = { path = "../aibr-ipc" }
+
+# The plan fixes `portable-pty` for the PTY itself, and it is the reason this is a
+# crate rather than a `std::process` wrapper: on Windows there is no such thing
+# as a Unix domain `fork` into a terminal, and `portable-pty` is the one API that
+# gives a real console on both platforms.
+portable-pty = "=0.9.0"
+
+# Base64 for `contracts::PtyChunk::data`. The frame is JSON and JSON has no byte
+# type, so the payload is base64 -- see the schema's own comment for why a lossy
+# `latin1` string would not do. Pinned like every other dependency here because the
+# router's binary-size gate is calibrated on a resolved graph.
+base64 = { version = "=0.22.1", default-features = false, features = ["std"] }
+
+# The `strsignal`-derived signal names `portable-pty` reports are translated back
+# to NUMBERS through the platform's own table, because `ptyExit.signal` is a number
+# on the wire and a client cannot branch on a name. `portable-pty` already depends
+# on this exact crate, so it is in the graph either way; taking a direct dependency
+# is the honest way to call `strsignal` rather than hard-coding a signal table that
+# would have to be updated per platform.
+[target.'cfg(unix)'.dependencies]
+libc = { version = "=0.2.190", default-features = false }
+
+serde = { version = "=1.0.228", features = ["derive", "std"], default-features = false }
+serde_json = { version = "=1.0.150", features = ["std"], default-features = false }

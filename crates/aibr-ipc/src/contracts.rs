@@ -81,7 +81,9 @@ impl ::std::convert::From<AckCommandType> for ::std::string::String {
 }
 impl ::std::str::FromStr for AckCommandType {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         if value.chars().count() > 256usize {
             return Err("longer than 256 characters".into());
         }
@@ -93,7 +95,9 @@ impl ::std::str::FromStr for AckCommandType {
 }
 impl ::std::convert::TryFrom<&str> for AckCommandType {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -145,10 +149,7 @@ pub enum ControlCommand {
     },
     ///ControlCommand3
     #[serde(rename = "close_pane")]
-    ClosePane {
-        #[serde(rename = "paneId")]
-        pane_id: ControlCommand3PaneId,
-    },
+    ClosePane { #[serde(rename = "paneId")] pane_id: ControlCommand3PaneId },
     ///ControlCommand4
     #[serde(rename = "resize_pane")]
     ResizePane {
@@ -183,10 +184,7 @@ pub enum ControlCommand {
     },
     ///ControlCommand8
     #[serde(rename = "cancel_job")]
-    CancelJob {
-        #[serde(rename = "jobId")]
-        job_id: ControlCommand8JobId,
-    },
+    CancelJob { #[serde(rename = "jobId")] job_id: ControlCommand8JobId },
     #[serde(rename = "detach")]
     Detach,
     #[serde(rename = "ping")]
@@ -209,20 +207,24 @@ impl ::std::convert::From<ControlCommand1WorkspaceId> for ::std::string::String 
 }
 impl ::std::str::FromStr for ControlCommand1WorkspaceId {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for ControlCommand1WorkspaceId {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -263,7 +265,9 @@ impl ::std::convert::From<ControlCommand2Command> for ::std::string::String {
 }
 impl ::std::str::FromStr for ControlCommand2Command {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         if value.chars().count() > 256usize {
             return Err("longer than 256 characters".into());
         }
@@ -275,7 +279,9 @@ impl ::std::str::FromStr for ControlCommand2Command {
 }
 impl ::std::convert::TryFrom<&str> for ControlCommand2Command {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -310,7 +316,7 @@ impl<'de> ::serde::Deserialize<'de> for ControlCommand2Command {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd,
+    PartialOrd
 )]
 pub enum ControlCommand2Kind {
     #[serde(rename = "terminal")]
@@ -331,7 +337,9 @@ impl ::std::fmt::Display for ControlCommand2Kind {
 }
 impl ::std::str::FromStr for ControlCommand2Kind {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value {
             "terminal" => Ok(Self::Terminal),
             "plan_review" => Ok(Self::PlanReview),
@@ -342,7 +350,9 @@ impl ::std::str::FromStr for ControlCommand2Kind {
 }
 impl ::std::convert::TryFrom<&str> for ControlCommand2Kind {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -371,20 +381,24 @@ impl ::std::convert::From<ControlCommand2PaneId> for ::std::string::String {
 }
 impl ::std::str::FromStr for ControlCommand2PaneId {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for ControlCommand2PaneId {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -425,7 +439,9 @@ impl ::std::convert::From<ControlCommand2WorkingDirectory> for ::std::string::St
 }
 impl ::std::str::FromStr for ControlCommand2WorkingDirectory {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         if value.chars().count() > 4096usize {
             return Err("longer than 4096 characters".into());
         }
@@ -437,7 +453,9 @@ impl ::std::str::FromStr for ControlCommand2WorkingDirectory {
 }
 impl ::std::convert::TryFrom<&str> for ControlCommand2WorkingDirectory {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -478,20 +496,24 @@ impl ::std::convert::From<ControlCommand2WorkspaceId> for ::std::string::String 
 }
 impl ::std::str::FromStr for ControlCommand2WorkspaceId {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for ControlCommand2WorkspaceId {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -532,20 +554,24 @@ impl ::std::convert::From<ControlCommand3PaneId> for ::std::string::String {
 }
 impl ::std::str::FromStr for ControlCommand3PaneId {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for ControlCommand3PaneId {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -586,20 +612,24 @@ impl ::std::convert::From<ControlCommand4PaneId> for ::std::string::String {
 }
 impl ::std::str::FromStr for ControlCommand4PaneId {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for ControlCommand4PaneId {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -640,12 +670,14 @@ impl ::std::convert::From<ControlCommand5Data> for ::std::string::String {
 }
 impl ::std::str::FromStr for ControlCommand5Data {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         if value.chars().count() > 349530usize {
             return Err("longer than 349530 characters".into());
         }
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| ::regress::Regex::new("^[A-Za-z0-9+/]*={0,2}$").unwrap());
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9+/]*={0,2}$").unwrap() });
         if PATTERN.find(value).is_none() {
             return Err("doesn't match pattern \"^[A-Za-z0-9+/]*={0,2}$\"".into());
         }
@@ -654,7 +686,9 @@ impl ::std::str::FromStr for ControlCommand5Data {
 }
 impl ::std::convert::TryFrom<&str> for ControlCommand5Data {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -695,20 +729,24 @@ impl ::std::convert::From<ControlCommand5PaneId> for ::std::string::String {
 }
 impl ::std::str::FromStr for ControlCommand5PaneId {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for ControlCommand5PaneId {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -749,20 +787,24 @@ impl ::std::convert::From<ControlCommand6JobId> for ::std::string::String {
 }
 impl ::std::str::FromStr for ControlCommand6JobId {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for ControlCommand6JobId {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -803,7 +845,9 @@ impl ::std::convert::From<ControlCommand6Justification0> for ::std::string::Stri
 }
 impl ::std::str::FromStr for ControlCommand6Justification0 {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         if value.chars().count() > 256usize {
             return Err("longer than 256 characters".into());
         }
@@ -815,7 +859,9 @@ impl ::std::str::FromStr for ControlCommand6Justification0 {
 }
 impl ::std::convert::TryFrom<&str> for ControlCommand6Justification0 {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -850,7 +896,7 @@ impl<'de> ::serde::Deserialize<'de> for ControlCommand6Justification0 {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd,
+    PartialOrd
 )]
 pub enum ControlCommand6Scope {
     #[serde(rename = "apply")]
@@ -868,7 +914,9 @@ impl ::std::fmt::Display for ControlCommand6Scope {
 }
 impl ::std::str::FromStr for ControlCommand6Scope {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value {
             "apply" => Ok(Self::Apply),
             "step_by_step" => Ok(Self::StepByStep),
@@ -878,7 +926,9 @@ impl ::std::str::FromStr for ControlCommand6Scope {
 }
 impl ::std::convert::TryFrom<&str> for ControlCommand6Scope {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -907,20 +957,24 @@ impl ::std::convert::From<ControlCommand7JobId> for ::std::string::String {
 }
 impl ::std::str::FromStr for ControlCommand7JobId {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for ControlCommand7JobId {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -961,7 +1015,9 @@ impl ::std::convert::From<ControlCommand7Justification0> for ::std::string::Stri
 }
 impl ::std::str::FromStr for ControlCommand7Justification0 {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         if value.chars().count() > 256usize {
             return Err("longer than 256 characters".into());
         }
@@ -973,7 +1029,9 @@ impl ::std::str::FromStr for ControlCommand7Justification0 {
 }
 impl ::std::convert::TryFrom<&str> for ControlCommand7Justification0 {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -1014,20 +1072,24 @@ impl ::std::convert::From<ControlCommand8JobId> for ::std::string::String {
 }
 impl ::std::str::FromStr for ControlCommand8JobId {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for ControlCommand8JobId {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -1062,7 +1124,7 @@ impl<'de> ::serde::Deserialize<'de> for ControlCommand8JobId {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd,
+    PartialOrd
 )]
 pub enum JobState {
     #[serde(rename = "working")]
@@ -1086,7 +1148,9 @@ impl ::std::fmt::Display for JobState {
 }
 impl ::std::str::FromStr for JobState {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value {
             "working" => Ok(Self::Working),
             "blocked" => Ok(Self::Blocked),
@@ -1098,7 +1162,9 @@ impl ::std::str::FromStr for JobState {
 }
 impl ::std::convert::TryFrom<&str> for JobState {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -1147,7 +1213,7 @@ pub struct JobView {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd,
+    PartialOrd
 )]
 pub enum JobViewBlockedReason0 {
     #[serde(rename = "plan_review")]
@@ -1171,7 +1237,9 @@ impl ::std::fmt::Display for JobViewBlockedReason0 {
 }
 impl ::std::str::FromStr for JobViewBlockedReason0 {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value {
             "plan_review" => Ok(Self::PlanReview),
             "permission" => Ok(Self::Permission),
@@ -1183,7 +1251,9 @@ impl ::std::str::FromStr for JobViewBlockedReason0 {
 }
 impl ::std::convert::TryFrom<&str> for JobViewBlockedReason0 {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -1212,7 +1282,9 @@ impl ::std::convert::From<JobViewDetail0> for ::std::string::String {
 }
 impl ::std::str::FromStr for JobViewDetail0 {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         if value.chars().count() > 256usize {
             return Err("longer than 256 characters".into());
         }
@@ -1224,7 +1296,9 @@ impl ::std::str::FromStr for JobViewDetail0 {
 }
 impl ::std::convert::TryFrom<&str> for JobViewDetail0 {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -1265,20 +1339,24 @@ impl ::std::convert::From<JobViewJobId> for ::std::string::String {
 }
 impl ::std::str::FromStr for JobViewJobId {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for JobViewJobId {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -1319,20 +1397,24 @@ impl ::std::convert::From<JobViewProjectId> for ::std::string::String {
 }
 impl ::std::str::FromStr for JobViewProjectId {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for JobViewProjectId {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -1373,20 +1455,24 @@ impl ::std::convert::From<JobViewSessionId0> for ::std::string::String {
 }
 impl ::std::str::FromStr for JobViewSessionId0 {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for JobViewSessionId0 {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -1421,7 +1507,7 @@ impl<'de> ::serde::Deserialize<'de> for JobViewSessionId0 {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd,
+    PartialOrd
 )]
 pub enum JobViewState {
     #[serde(rename = "working")]
@@ -1445,7 +1531,9 @@ impl ::std::fmt::Display for JobViewState {
 }
 impl ::std::str::FromStr for JobViewState {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value {
             "working" => Ok(Self::Working),
             "blocked" => Ok(Self::Blocked),
@@ -1457,7 +1545,9 @@ impl ::std::str::FromStr for JobViewState {
 }
 impl ::std::convert::TryFrom<&str> for JobViewState {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -1486,14 +1576,16 @@ impl ::std::convert::From<JobViewUpdatedAt> for ::std::string::String {
 }
 impl ::std::str::FromStr for JobViewUpdatedAt {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new(
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        {
+            ::regress::Regex::new(
                     "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,9})?Z$",
                 )
                 .unwrap()
-            });
+        });
         if PATTERN.find(value).is_none() {
             return Err(
                 "doesn't match pattern \"^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,9})?Z$\""
@@ -1505,7 +1597,9 @@ impl ::std::str::FromStr for JobViewUpdatedAt {
 }
 impl ::std::convert::TryFrom<&str> for JobViewUpdatedAt {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -1546,20 +1640,24 @@ impl ::std::convert::From<JobViewWorkspaceId> for ::std::string::String {
 }
 impl ::std::str::FromStr for JobViewWorkspaceId {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for JobViewWorkspaceId {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -1588,10 +1686,7 @@ impl<'de> ::serde::Deserialize<'de> for JobViewWorkspaceId {
 #[serde(deny_unknown_fields)]
 pub struct PaneView {
     pub columns: ::std::num::NonZeroU64,
-    #[serde(
-        rename = "jobId",
-        deserialize_with = "::std::option::Option::deserialize"
-    )]
+    #[serde(rename = "jobId", deserialize_with = "::std::option::Option::deserialize")]
     pub job_id: ::std::option::Option<PaneViewJobId0>,
     pub kind: PaneViewKind,
     #[serde(rename = "paneId")]
@@ -1625,20 +1720,24 @@ impl ::std::convert::From<PaneViewJobId0> for ::std::string::String {
 }
 impl ::std::str::FromStr for PaneViewJobId0 {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for PaneViewJobId0 {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -1673,7 +1772,7 @@ impl<'de> ::serde::Deserialize<'de> for PaneViewJobId0 {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd,
+    PartialOrd
 )]
 pub enum PaneViewKind {
     #[serde(rename = "terminal")]
@@ -1694,7 +1793,9 @@ impl ::std::fmt::Display for PaneViewKind {
 }
 impl ::std::str::FromStr for PaneViewKind {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value {
             "terminal" => Ok(Self::Terminal),
             "plan_review" => Ok(Self::PlanReview),
@@ -1705,7 +1806,9 @@ impl ::std::str::FromStr for PaneViewKind {
 }
 impl ::std::convert::TryFrom<&str> for PaneViewKind {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -1734,20 +1837,24 @@ impl ::std::convert::From<PaneViewPaneId> for ::std::string::String {
 }
 impl ::std::str::FromStr for PaneViewPaneId {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for PaneViewPaneId {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -1788,20 +1895,24 @@ impl ::std::convert::From<PaneViewSessionId0> for ::std::string::String {
 }
 impl ::std::str::FromStr for PaneViewSessionId0 {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for PaneViewSessionId0 {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -1842,7 +1953,9 @@ impl ::std::convert::From<PaneViewTitle> for ::std::string::String {
 }
 impl ::std::str::FromStr for PaneViewTitle {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         if value.chars().count() > 256usize {
             return Err("longer than 256 characters".into());
         }
@@ -1854,7 +1967,9 @@ impl ::std::str::FromStr for PaneViewTitle {
 }
 impl ::std::convert::TryFrom<&str> for PaneViewTitle {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -1895,20 +2010,24 @@ impl ::std::convert::From<PaneViewWorkspaceId> for ::std::string::String {
 }
 impl ::std::str::FromStr for PaneViewWorkspaceId {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for PaneViewWorkspaceId {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -1962,12 +2081,14 @@ impl ::std::convert::From<PtyChunkData> for ::std::string::String {
 }
 impl ::std::str::FromStr for PtyChunkData {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         if value.chars().count() > 349530usize {
             return Err("longer than 349530 characters".into());
         }
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| ::regress::Regex::new("^[A-Za-z0-9+/]*={0,2}$").unwrap());
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9+/]*={0,2}$").unwrap() });
         if PATTERN.find(value).is_none() {
             return Err("doesn't match pattern \"^[A-Za-z0-9+/]*={0,2}$\"".into());
         }
@@ -1976,7 +2097,9 @@ impl ::std::str::FromStr for PtyChunkData {
 }
 impl ::std::convert::TryFrom<&str> for PtyChunkData {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -2017,20 +2140,24 @@ impl ::std::convert::From<PtyChunkPaneId> for ::std::string::String {
 }
 impl ::std::str::FromStr for PtyChunkPaneId {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for PtyChunkPaneId {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -2087,20 +2214,24 @@ impl ::std::convert::From<PtyExitPaneId> for ::std::string::String {
 }
 impl ::std::str::FromStr for PtyExitPaneId {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for PtyExitPaneId {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -2144,7 +2275,7 @@ pub struct ServerError {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd,
+    PartialOrd
 )]
 pub enum ServerErrorCode {
     #[serde(rename = "not_found")]
@@ -2174,7 +2305,9 @@ impl ::std::fmt::Display for ServerErrorCode {
 }
 impl ::std::str::FromStr for ServerErrorCode {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value {
             "not_found" => Ok(Self::NotFound),
             "not_allowed" => Ok(Self::NotAllowed),
@@ -2188,7 +2321,9 @@ impl ::std::str::FromStr for ServerErrorCode {
 }
 impl ::std::convert::TryFrom<&str> for ServerErrorCode {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -2217,7 +2352,9 @@ impl ::std::convert::From<ServerErrorMessage> for ::std::string::String {
 }
 impl ::std::str::FromStr for ServerErrorMessage {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         if value.chars().count() > 256usize {
             return Err("longer than 256 characters".into());
         }
@@ -2229,7 +2366,9 @@ impl ::std::str::FromStr for ServerErrorMessage {
 }
 impl ::std::convert::TryFrom<&str> for ServerErrorMessage {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -2318,10 +2457,7 @@ pub enum ServerMessage {
     },
     ///ServerMessage5
     #[serde(rename = "error")]
-    Error {
-        code: ServerMessage5Code,
-        message: ServerMessage5Message,
-    },
+    Error { code: ServerMessage5Code, message: ServerMessage5Message },
 }
 ///`ServerMessage0GeneratedAt`
 #[derive(::serde::Serialize, Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -2340,14 +2476,16 @@ impl ::std::convert::From<ServerMessage0GeneratedAt> for ::std::string::String {
 }
 impl ::std::str::FromStr for ServerMessage0GeneratedAt {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new(
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        {
+            ::regress::Regex::new(
                     "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,9})?Z$",
                 )
                 .unwrap()
-            });
+        });
         if PATTERN.find(value).is_none() {
             return Err(
                 "doesn't match pattern \"^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,9})?Z$\""
@@ -2359,7 +2497,9 @@ impl ::std::str::FromStr for ServerMessage0GeneratedAt {
 }
 impl ::std::convert::TryFrom<&str> for ServerMessage0GeneratedAt {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -2394,7 +2534,7 @@ impl<'de> ::serde::Deserialize<'de> for ServerMessage0GeneratedAt {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd,
+    PartialOrd
 )]
 pub enum ServerMessage0JobsBlockedReason0 {
     #[serde(rename = "plan_review")]
@@ -2418,7 +2558,9 @@ impl ::std::fmt::Display for ServerMessage0JobsBlockedReason0 {
 }
 impl ::std::str::FromStr for ServerMessage0JobsBlockedReason0 {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value {
             "plan_review" => Ok(Self::PlanReview),
             "permission" => Ok(Self::Permission),
@@ -2430,11 +2572,14 @@ impl ::std::str::FromStr for ServerMessage0JobsBlockedReason0 {
 }
 impl ::std::convert::TryFrom<&str> for ServerMessage0JobsBlockedReason0 {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<::std::string::String> for ServerMessage0JobsBlockedReason0 {
+impl ::std::convert::TryFrom<::std::string::String>
+for ServerMessage0JobsBlockedReason0 {
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -2459,7 +2604,9 @@ impl ::std::convert::From<ServerMessage0JobsDetail0> for ::std::string::String {
 }
 impl ::std::str::FromStr for ServerMessage0JobsDetail0 {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         if value.chars().count() > 256usize {
             return Err("longer than 256 characters".into());
         }
@@ -2471,7 +2618,9 @@ impl ::std::str::FromStr for ServerMessage0JobsDetail0 {
 }
 impl ::std::convert::TryFrom<&str> for ServerMessage0JobsDetail0 {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -2538,20 +2687,24 @@ impl ::std::convert::From<ServerMessage0JobsJobId> for ::std::string::String {
 }
 impl ::std::str::FromStr for ServerMessage0JobsJobId {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for ServerMessage0JobsJobId {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -2592,20 +2745,24 @@ impl ::std::convert::From<ServerMessage0JobsProjectId> for ::std::string::String
 }
 impl ::std::str::FromStr for ServerMessage0JobsProjectId {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for ServerMessage0JobsProjectId {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -2646,20 +2803,24 @@ impl ::std::convert::From<ServerMessage0JobsSessionId0> for ::std::string::Strin
 }
 impl ::std::str::FromStr for ServerMessage0JobsSessionId0 {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for ServerMessage0JobsSessionId0 {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -2694,7 +2855,7 @@ impl<'de> ::serde::Deserialize<'de> for ServerMessage0JobsSessionId0 {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd,
+    PartialOrd
 )]
 pub enum ServerMessage0JobsState {
     #[serde(rename = "working")]
@@ -2718,7 +2879,9 @@ impl ::std::fmt::Display for ServerMessage0JobsState {
 }
 impl ::std::str::FromStr for ServerMessage0JobsState {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value {
             "working" => Ok(Self::Working),
             "blocked" => Ok(Self::Blocked),
@@ -2730,7 +2893,9 @@ impl ::std::str::FromStr for ServerMessage0JobsState {
 }
 impl ::std::convert::TryFrom<&str> for ServerMessage0JobsState {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -2759,14 +2924,16 @@ impl ::std::convert::From<ServerMessage0JobsUpdatedAt> for ::std::string::String
 }
 impl ::std::str::FromStr for ServerMessage0JobsUpdatedAt {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new(
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        {
+            ::regress::Regex::new(
                     "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,9})?Z$",
                 )
                 .unwrap()
-            });
+        });
         if PATTERN.find(value).is_none() {
             return Err(
                 "doesn't match pattern \"^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,9})?Z$\""
@@ -2778,7 +2945,9 @@ impl ::std::str::FromStr for ServerMessage0JobsUpdatedAt {
 }
 impl ::std::convert::TryFrom<&str> for ServerMessage0JobsUpdatedAt {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -2819,20 +2988,24 @@ impl ::std::convert::From<ServerMessage0JobsWorkspaceId> for ::std::string::Stri
 }
 impl ::std::str::FromStr for ServerMessage0JobsWorkspaceId {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for ServerMessage0JobsWorkspaceId {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -2873,20 +3046,24 @@ impl ::std::convert::From<ServerMessage0NodeId> for ::std::string::String {
 }
 impl ::std::str::FromStr for ServerMessage0NodeId {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for ServerMessage0NodeId {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -2915,10 +3092,7 @@ impl<'de> ::serde::Deserialize<'de> for ServerMessage0NodeId {
 #[serde(deny_unknown_fields)]
 pub struct ServerMessage0PanesItem {
     pub columns: ::std::num::NonZeroU64,
-    #[serde(
-        rename = "jobId",
-        deserialize_with = "::std::option::Option::deserialize"
-    )]
+    #[serde(rename = "jobId", deserialize_with = "::std::option::Option::deserialize")]
     pub job_id: ::std::option::Option<ServerMessage0PanesJobId0>,
     pub kind: ServerMessage0PanesKind,
     #[serde(rename = "paneId")]
@@ -2952,20 +3126,24 @@ impl ::std::convert::From<ServerMessage0PanesJobId0> for ::std::string::String {
 }
 impl ::std::str::FromStr for ServerMessage0PanesJobId0 {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for ServerMessage0PanesJobId0 {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -3000,7 +3178,7 @@ impl<'de> ::serde::Deserialize<'de> for ServerMessage0PanesJobId0 {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd,
+    PartialOrd
 )]
 pub enum ServerMessage0PanesKind {
     #[serde(rename = "terminal")]
@@ -3021,7 +3199,9 @@ impl ::std::fmt::Display for ServerMessage0PanesKind {
 }
 impl ::std::str::FromStr for ServerMessage0PanesKind {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value {
             "terminal" => Ok(Self::Terminal),
             "plan_review" => Ok(Self::PlanReview),
@@ -3032,7 +3212,9 @@ impl ::std::str::FromStr for ServerMessage0PanesKind {
 }
 impl ::std::convert::TryFrom<&str> for ServerMessage0PanesKind {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -3061,20 +3243,24 @@ impl ::std::convert::From<ServerMessage0PanesPaneId> for ::std::string::String {
 }
 impl ::std::str::FromStr for ServerMessage0PanesPaneId {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for ServerMessage0PanesPaneId {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -3115,20 +3301,24 @@ impl ::std::convert::From<ServerMessage0PanesSessionId0> for ::std::string::Stri
 }
 impl ::std::str::FromStr for ServerMessage0PanesSessionId0 {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for ServerMessage0PanesSessionId0 {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -3169,7 +3359,9 @@ impl ::std::convert::From<ServerMessage0PanesTitle> for ::std::string::String {
 }
 impl ::std::str::FromStr for ServerMessage0PanesTitle {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         if value.chars().count() > 256usize {
             return Err("longer than 256 characters".into());
         }
@@ -3181,7 +3373,9 @@ impl ::std::str::FromStr for ServerMessage0PanesTitle {
 }
 impl ::std::convert::TryFrom<&str> for ServerMessage0PanesTitle {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -3222,20 +3416,24 @@ impl ::std::convert::From<ServerMessage0PanesWorkspaceId> for ::std::string::Str
 }
 impl ::std::str::FromStr for ServerMessage0PanesWorkspaceId {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for ServerMessage0PanesWorkspaceId {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -3286,7 +3484,9 @@ impl ::std::convert::From<ServerMessage0TailscaleAddress0> for ::std::string::St
 }
 impl ::std::str::FromStr for ServerMessage0TailscaleAddress0 {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         if value.chars().count() > 256usize {
             return Err("longer than 256 characters".into());
         }
@@ -3298,7 +3498,9 @@ impl ::std::str::FromStr for ServerMessage0TailscaleAddress0 {
 }
 impl ::std::convert::TryFrom<&str> for ServerMessage0TailscaleAddress0 {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -3333,7 +3535,7 @@ impl<'de> ::serde::Deserialize<'de> for ServerMessage0TailscaleAddress0 {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd,
+    PartialOrd
 )]
 pub enum ServerMessage0TailscaleStatus {
     #[serde(rename = "active")]
@@ -3357,7 +3559,9 @@ impl ::std::fmt::Display for ServerMessage0TailscaleStatus {
 }
 impl ::std::str::FromStr for ServerMessage0TailscaleStatus {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value {
             "active" => Ok(Self::Active),
             "stopped" => Ok(Self::Stopped),
@@ -3369,7 +3573,9 @@ impl ::std::str::FromStr for ServerMessage0TailscaleStatus {
 }
 impl ::std::convert::TryFrom<&str> for ServerMessage0TailscaleStatus {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -3411,7 +3617,9 @@ impl ::std::convert::From<ServerMessage0WorkspacesName> for ::std::string::Strin
 }
 impl ::std::str::FromStr for ServerMessage0WorkspacesName {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         if value.chars().count() > 256usize {
             return Err("longer than 256 characters".into());
         }
@@ -3423,7 +3631,9 @@ impl ::std::str::FromStr for ServerMessage0WorkspacesName {
 }
 impl ::std::convert::TryFrom<&str> for ServerMessage0WorkspacesName {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -3464,24 +3674,29 @@ impl ::std::convert::From<ServerMessage0WorkspacesProjectId> for ::std::string::
 }
 impl ::std::str::FromStr for ServerMessage0WorkspacesProjectId {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for ServerMessage0WorkspacesProjectId {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<::std::string::String> for ServerMessage0WorkspacesProjectId {
+impl ::std::convert::TryFrom<::std::string::String>
+for ServerMessage0WorkspacesProjectId {
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -3511,14 +3726,17 @@ impl ::std::ops::Deref for ServerMessage0WorkspacesProjectRoot {
         &self.0
     }
 }
-impl ::std::convert::From<ServerMessage0WorkspacesProjectRoot> for ::std::string::String {
+impl ::std::convert::From<ServerMessage0WorkspacesProjectRoot>
+for ::std::string::String {
     fn from(value: ServerMessage0WorkspacesProjectRoot) -> Self {
         value.0
     }
 }
 impl ::std::str::FromStr for ServerMessage0WorkspacesProjectRoot {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         if value.chars().count() > 4096usize {
             return Err("longer than 4096 characters".into());
         }
@@ -3530,11 +3748,14 @@ impl ::std::str::FromStr for ServerMessage0WorkspacesProjectRoot {
 }
 impl ::std::convert::TryFrom<&str> for ServerMessage0WorkspacesProjectRoot {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<::std::string::String> for ServerMessage0WorkspacesProjectRoot {
+impl ::std::convert::TryFrom<::std::string::String>
+for ServerMessage0WorkspacesProjectRoot {
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -3564,31 +3785,37 @@ impl ::std::ops::Deref for ServerMessage0WorkspacesWorkspaceId {
         &self.0
     }
 }
-impl ::std::convert::From<ServerMessage0WorkspacesWorkspaceId> for ::std::string::String {
+impl ::std::convert::From<ServerMessage0WorkspacesWorkspaceId>
+for ::std::string::String {
     fn from(value: ServerMessage0WorkspacesWorkspaceId) -> Self {
         value.0
     }
 }
 impl ::std::str::FromStr for ServerMessage0WorkspacesWorkspaceId {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for ServerMessage0WorkspacesWorkspaceId {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<::std::string::String> for ServerMessage0WorkspacesWorkspaceId {
+impl ::std::convert::TryFrom<::std::string::String>
+for ServerMessage0WorkspacesWorkspaceId {
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -3645,7 +3872,7 @@ pub struct ServerMessage1Changes0Job {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd,
+    PartialOrd
 )]
 pub enum ServerMessage1Changes0JobBlockedReason0 {
     #[serde(rename = "plan_review")]
@@ -3669,7 +3896,9 @@ impl ::std::fmt::Display for ServerMessage1Changes0JobBlockedReason0 {
 }
 impl ::std::str::FromStr for ServerMessage1Changes0JobBlockedReason0 {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value {
             "plan_review" => Ok(Self::PlanReview),
             "permission" => Ok(Self::Permission),
@@ -3681,11 +3910,14 @@ impl ::std::str::FromStr for ServerMessage1Changes0JobBlockedReason0 {
 }
 impl ::std::convert::TryFrom<&str> for ServerMessage1Changes0JobBlockedReason0 {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<::std::string::String> for ServerMessage1Changes0JobBlockedReason0 {
+impl ::std::convert::TryFrom<::std::string::String>
+for ServerMessage1Changes0JobBlockedReason0 {
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -3710,7 +3942,9 @@ impl ::std::convert::From<ServerMessage1Changes0JobDetail0> for ::std::string::S
 }
 impl ::std::str::FromStr for ServerMessage1Changes0JobDetail0 {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         if value.chars().count() > 256usize {
             return Err("longer than 256 characters".into());
         }
@@ -3722,11 +3956,14 @@ impl ::std::str::FromStr for ServerMessage1Changes0JobDetail0 {
 }
 impl ::std::convert::TryFrom<&str> for ServerMessage1Changes0JobDetail0 {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<::std::string::String> for ServerMessage1Changes0JobDetail0 {
+impl ::std::convert::TryFrom<::std::string::String>
+for ServerMessage1Changes0JobDetail0 {
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -3763,20 +4000,24 @@ impl ::std::convert::From<ServerMessage1Changes0JobJobId> for ::std::string::Str
 }
 impl ::std::str::FromStr for ServerMessage1Changes0JobJobId {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for ServerMessage1Changes0JobJobId {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -3817,24 +4058,29 @@ impl ::std::convert::From<ServerMessage1Changes0JobProjectId> for ::std::string:
 }
 impl ::std::str::FromStr for ServerMessage1Changes0JobProjectId {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for ServerMessage1Changes0JobProjectId {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<::std::string::String> for ServerMessage1Changes0JobProjectId {
+impl ::std::convert::TryFrom<::std::string::String>
+for ServerMessage1Changes0JobProjectId {
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -3864,31 +4110,37 @@ impl ::std::ops::Deref for ServerMessage1Changes0JobSessionId0 {
         &self.0
     }
 }
-impl ::std::convert::From<ServerMessage1Changes0JobSessionId0> for ::std::string::String {
+impl ::std::convert::From<ServerMessage1Changes0JobSessionId0>
+for ::std::string::String {
     fn from(value: ServerMessage1Changes0JobSessionId0) -> Self {
         value.0
     }
 }
 impl ::std::str::FromStr for ServerMessage1Changes0JobSessionId0 {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for ServerMessage1Changes0JobSessionId0 {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<::std::string::String> for ServerMessage1Changes0JobSessionId0 {
+impl ::std::convert::TryFrom<::std::string::String>
+for ServerMessage1Changes0JobSessionId0 {
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -3919,7 +4171,7 @@ impl<'de> ::serde::Deserialize<'de> for ServerMessage1Changes0JobSessionId0 {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd,
+    PartialOrd
 )]
 pub enum ServerMessage1Changes0JobState {
     #[serde(rename = "working")]
@@ -3943,7 +4195,9 @@ impl ::std::fmt::Display for ServerMessage1Changes0JobState {
 }
 impl ::std::str::FromStr for ServerMessage1Changes0JobState {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value {
             "working" => Ok(Self::Working),
             "blocked" => Ok(Self::Blocked),
@@ -3955,7 +4209,9 @@ impl ::std::str::FromStr for ServerMessage1Changes0JobState {
 }
 impl ::std::convert::TryFrom<&str> for ServerMessage1Changes0JobState {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -3984,14 +4240,16 @@ impl ::std::convert::From<ServerMessage1Changes0JobUpdatedAt> for ::std::string:
 }
 impl ::std::str::FromStr for ServerMessage1Changes0JobUpdatedAt {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new(
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        {
+            ::regress::Regex::new(
                     "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,9})?Z$",
                 )
                 .unwrap()
-            });
+        });
         if PATTERN.find(value).is_none() {
             return Err(
                 "doesn't match pattern \"^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,9})?Z$\""
@@ -4003,11 +4261,14 @@ impl ::std::str::FromStr for ServerMessage1Changes0JobUpdatedAt {
 }
 impl ::std::convert::TryFrom<&str> for ServerMessage1Changes0JobUpdatedAt {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<::std::string::String> for ServerMessage1Changes0JobUpdatedAt {
+impl ::std::convert::TryFrom<::std::string::String>
+for ServerMessage1Changes0JobUpdatedAt {
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -4037,31 +4298,37 @@ impl ::std::ops::Deref for ServerMessage1Changes0JobWorkspaceId {
         &self.0
     }
 }
-impl ::std::convert::From<ServerMessage1Changes0JobWorkspaceId> for ::std::string::String {
+impl ::std::convert::From<ServerMessage1Changes0JobWorkspaceId>
+for ::std::string::String {
     fn from(value: ServerMessage1Changes0JobWorkspaceId) -> Self {
         value.0
     }
 }
 impl ::std::str::FromStr for ServerMessage1Changes0JobWorkspaceId {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for ServerMessage1Changes0JobWorkspaceId {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<::std::string::String> for ServerMessage1Changes0JobWorkspaceId {
+impl ::std::convert::TryFrom<::std::string::String>
+for ServerMessage1Changes0JobWorkspaceId {
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -4098,7 +4365,9 @@ impl ::std::convert::From<ServerMessage1Changes10Line> for ::std::string::String
 }
 impl ::std::str::FromStr for ServerMessage1Changes10Line {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         if value.chars().count() > 4096usize {
             return Err("longer than 4096 characters".into());
         }
@@ -4107,7 +4376,9 @@ impl ::std::str::FromStr for ServerMessage1Changes10Line {
 }
 impl ::std::convert::TryFrom<&str> for ServerMessage1Changes10Line {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -4148,20 +4419,24 @@ impl ::std::convert::From<ServerMessage1Changes10PaneId> for ::std::string::Stri
 }
 impl ::std::str::FromStr for ServerMessage1Changes10PaneId {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for ServerMessage1Changes10PaneId {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -4196,7 +4471,7 @@ impl<'de> ::serde::Deserialize<'de> for ServerMessage1Changes10PaneId {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd,
+    PartialOrd
 )]
 pub enum ServerMessage1Changes1BlockedReason0 {
     #[serde(rename = "plan_review")]
@@ -4220,7 +4495,9 @@ impl ::std::fmt::Display for ServerMessage1Changes1BlockedReason0 {
 }
 impl ::std::str::FromStr for ServerMessage1Changes1BlockedReason0 {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value {
             "plan_review" => Ok(Self::PlanReview),
             "permission" => Ok(Self::Permission),
@@ -4232,11 +4509,14 @@ impl ::std::str::FromStr for ServerMessage1Changes1BlockedReason0 {
 }
 impl ::std::convert::TryFrom<&str> for ServerMessage1Changes1BlockedReason0 {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<::std::string::String> for ServerMessage1Changes1BlockedReason0 {
+impl ::std::convert::TryFrom<::std::string::String>
+for ServerMessage1Changes1BlockedReason0 {
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -4261,7 +4541,9 @@ impl ::std::convert::From<ServerMessage1Changes1Detail0> for ::std::string::Stri
 }
 impl ::std::str::FromStr for ServerMessage1Changes1Detail0 {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         if value.chars().count() > 256usize {
             return Err("longer than 256 characters".into());
         }
@@ -4273,7 +4555,9 @@ impl ::std::str::FromStr for ServerMessage1Changes1Detail0 {
 }
 impl ::std::convert::TryFrom<&str> for ServerMessage1Changes1Detail0 {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -4314,20 +4598,24 @@ impl ::std::convert::From<ServerMessage1Changes1JobId> for ::std::string::String
 }
 impl ::std::str::FromStr for ServerMessage1Changes1JobId {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for ServerMessage1Changes1JobId {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -4362,7 +4650,7 @@ impl<'de> ::serde::Deserialize<'de> for ServerMessage1Changes1JobId {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd,
+    PartialOrd
 )]
 pub enum ServerMessage1Changes1State {
     #[serde(rename = "working")]
@@ -4386,7 +4674,9 @@ impl ::std::fmt::Display for ServerMessage1Changes1State {
 }
 impl ::std::str::FromStr for ServerMessage1Changes1State {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value {
             "working" => Ok(Self::Working),
             "blocked" => Ok(Self::Blocked),
@@ -4398,7 +4688,9 @@ impl ::std::str::FromStr for ServerMessage1Changes1State {
 }
 impl ::std::convert::TryFrom<&str> for ServerMessage1Changes1State {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -4427,14 +4719,16 @@ impl ::std::convert::From<ServerMessage1Changes1UpdatedAt> for ::std::string::St
 }
 impl ::std::str::FromStr for ServerMessage1Changes1UpdatedAt {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new(
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        {
+            ::regress::Regex::new(
                     "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,9})?Z$",
                 )
                 .unwrap()
-            });
+        });
         if PATTERN.find(value).is_none() {
             return Err(
                 "doesn't match pattern \"^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,9})?Z$\""
@@ -4446,7 +4740,9 @@ impl ::std::str::FromStr for ServerMessage1Changes1UpdatedAt {
 }
 impl ::std::convert::TryFrom<&str> for ServerMessage1Changes1UpdatedAt {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -4487,20 +4783,24 @@ impl ::std::convert::From<ServerMessage1Changes2JobId> for ::std::string::String
 }
 impl ::std::str::FromStr for ServerMessage1Changes2JobId {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for ServerMessage1Changes2JobId {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -4541,20 +4841,24 @@ impl ::std::convert::From<ServerMessage1Changes3JobId> for ::std::string::String
 }
 impl ::std::str::FromStr for ServerMessage1Changes3JobId {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for ServerMessage1Changes3JobId {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -4595,14 +4899,16 @@ impl ::std::convert::From<ServerMessage1Changes3QueuedAt> for ::std::string::Str
 }
 impl ::std::str::FromStr for ServerMessage1Changes3QueuedAt {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new(
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        {
+            ::regress::Regex::new(
                     "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,9})?Z$",
                 )
                 .unwrap()
-            });
+        });
         if PATTERN.find(value).is_none() {
             return Err(
                 "doesn't match pattern \"^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,9})?Z$\""
@@ -4614,7 +4920,9 @@ impl ::std::str::FromStr for ServerMessage1Changes3QueuedAt {
 }
 impl ::std::convert::TryFrom<&str> for ServerMessage1Changes3QueuedAt {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -4649,7 +4957,7 @@ impl<'de> ::serde::Deserialize<'de> for ServerMessage1Changes3QueuedAt {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd,
+    PartialOrd
 )]
 pub enum ServerMessage1Changes3Status {
     #[serde(rename = "pending")]
@@ -4667,7 +4975,9 @@ impl ::std::fmt::Display for ServerMessage1Changes3Status {
 }
 impl ::std::str::FromStr for ServerMessage1Changes3Status {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value {
             "pending" => Ok(Self::Pending),
             "sending" => Ok(Self::Sending),
@@ -4677,7 +4987,9 @@ impl ::std::str::FromStr for ServerMessage1Changes3Status {
 }
 impl ::std::convert::TryFrom<&str> for ServerMessage1Changes3Status {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -4706,20 +5018,24 @@ impl ::std::convert::From<ServerMessage1Changes4JobId> for ::std::string::String
 }
 impl ::std::str::FromStr for ServerMessage1Changes4JobId {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for ServerMessage1Changes4JobId {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -4748,10 +5064,7 @@ impl<'de> ::serde::Deserialize<'de> for ServerMessage1Changes4JobId {
 #[serde(deny_unknown_fields)]
 pub struct ServerMessage1Changes6Pane {
     pub columns: ::std::num::NonZeroU64,
-    #[serde(
-        rename = "jobId",
-        deserialize_with = "::std::option::Option::deserialize"
-    )]
+    #[serde(rename = "jobId", deserialize_with = "::std::option::Option::deserialize")]
     pub job_id: ::std::option::Option<ServerMessage1Changes6PaneJobId0>,
     pub kind: ServerMessage1Changes6PaneKind,
     #[serde(rename = "paneId")]
@@ -4785,24 +5098,29 @@ impl ::std::convert::From<ServerMessage1Changes6PaneJobId0> for ::std::string::S
 }
 impl ::std::str::FromStr for ServerMessage1Changes6PaneJobId0 {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for ServerMessage1Changes6PaneJobId0 {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<::std::string::String> for ServerMessage1Changes6PaneJobId0 {
+impl ::std::convert::TryFrom<::std::string::String>
+for ServerMessage1Changes6PaneJobId0 {
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -4833,7 +5151,7 @@ impl<'de> ::serde::Deserialize<'de> for ServerMessage1Changes6PaneJobId0 {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd,
+    PartialOrd
 )]
 pub enum ServerMessage1Changes6PaneKind {
     #[serde(rename = "terminal")]
@@ -4854,7 +5172,9 @@ impl ::std::fmt::Display for ServerMessage1Changes6PaneKind {
 }
 impl ::std::str::FromStr for ServerMessage1Changes6PaneKind {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value {
             "terminal" => Ok(Self::Terminal),
             "plan_review" => Ok(Self::PlanReview),
@@ -4865,7 +5185,9 @@ impl ::std::str::FromStr for ServerMessage1Changes6PaneKind {
 }
 impl ::std::convert::TryFrom<&str> for ServerMessage1Changes6PaneKind {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -4894,24 +5216,29 @@ impl ::std::convert::From<ServerMessage1Changes6PanePaneId> for ::std::string::S
 }
 impl ::std::str::FromStr for ServerMessage1Changes6PanePaneId {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for ServerMessage1Changes6PanePaneId {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<::std::string::String> for ServerMessage1Changes6PanePaneId {
+impl ::std::convert::TryFrom<::std::string::String>
+for ServerMessage1Changes6PanePaneId {
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -4941,31 +5268,37 @@ impl ::std::ops::Deref for ServerMessage1Changes6PaneSessionId0 {
         &self.0
     }
 }
-impl ::std::convert::From<ServerMessage1Changes6PaneSessionId0> for ::std::string::String {
+impl ::std::convert::From<ServerMessage1Changes6PaneSessionId0>
+for ::std::string::String {
     fn from(value: ServerMessage1Changes6PaneSessionId0) -> Self {
         value.0
     }
 }
 impl ::std::str::FromStr for ServerMessage1Changes6PaneSessionId0 {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for ServerMessage1Changes6PaneSessionId0 {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<::std::string::String> for ServerMessage1Changes6PaneSessionId0 {
+impl ::std::convert::TryFrom<::std::string::String>
+for ServerMessage1Changes6PaneSessionId0 {
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -5002,7 +5335,9 @@ impl ::std::convert::From<ServerMessage1Changes6PaneTitle> for ::std::string::St
 }
 impl ::std::str::FromStr for ServerMessage1Changes6PaneTitle {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         if value.chars().count() > 256usize {
             return Err("longer than 256 characters".into());
         }
@@ -5014,7 +5349,9 @@ impl ::std::str::FromStr for ServerMessage1Changes6PaneTitle {
 }
 impl ::std::convert::TryFrom<&str> for ServerMessage1Changes6PaneTitle {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -5048,31 +5385,37 @@ impl ::std::ops::Deref for ServerMessage1Changes6PaneWorkspaceId {
         &self.0
     }
 }
-impl ::std::convert::From<ServerMessage1Changes6PaneWorkspaceId> for ::std::string::String {
+impl ::std::convert::From<ServerMessage1Changes6PaneWorkspaceId>
+for ::std::string::String {
     fn from(value: ServerMessage1Changes6PaneWorkspaceId) -> Self {
         value.0
     }
 }
 impl ::std::str::FromStr for ServerMessage1Changes6PaneWorkspaceId {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for ServerMessage1Changes6PaneWorkspaceId {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<::std::string::String> for ServerMessage1Changes6PaneWorkspaceId {
+impl ::std::convert::TryFrom<::std::string::String>
+for ServerMessage1Changes6PaneWorkspaceId {
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -5109,20 +5452,24 @@ impl ::std::convert::From<ServerMessage1Changes7PaneId> for ::std::string::Strin
 }
 impl ::std::str::FromStr for ServerMessage1Changes7PaneId {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for ServerMessage1Changes7PaneId {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -5163,20 +5510,24 @@ impl ::std::convert::From<ServerMessage1Changes8PaneId> for ::std::string::Strin
 }
 impl ::std::str::FromStr for ServerMessage1Changes8PaneId {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for ServerMessage1Changes8PaneId {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -5217,24 +5568,29 @@ impl ::std::convert::From<ServerMessage1Changes9WorkspaceId> for ::std::string::
 }
 impl ::std::str::FromStr for ServerMessage1Changes9WorkspaceId {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for ServerMessage1Changes9WorkspaceId {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<::std::string::String> for ServerMessage1Changes9WorkspaceId {
+impl ::std::convert::TryFrom<::std::string::String>
+for ServerMessage1Changes9WorkspaceId {
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -5279,10 +5635,7 @@ pub enum ServerMessage1ChangesItem {
     },
     ///ServerMessage1Changes2
     #[serde(rename = "job_removed")]
-    JobRemoved {
-        #[serde(rename = "jobId")]
-        job_id: ServerMessage1Changes2JobId,
-    },
+    JobRemoved { #[serde(rename = "jobId")] job_id: ServerMessage1Changes2JobId },
     ///ServerMessage1Changes3
     #[serde(rename = "queue_item_added")]
     QueueItemAdded {
@@ -5295,25 +5648,16 @@ pub enum ServerMessage1ChangesItem {
     },
     ///ServerMessage1Changes4
     #[serde(rename = "queue_item_removed")]
-    QueueItemRemoved {
-        #[serde(rename = "jobId")]
-        job_id: ServerMessage1Changes4JobId,
-    },
+    QueueItemRemoved { #[serde(rename = "jobId")] job_id: ServerMessage1Changes4JobId },
     ///ServerMessage1Changes5
     #[serde(rename = "outbox_count_changed")]
-    OutboxCountChanged {
-        #[serde(rename = "pendingCount")]
-        pending_count: i64,
-    },
+    OutboxCountChanged { #[serde(rename = "pendingCount")] pending_count: i64 },
     ///ServerMessage1Changes6
     #[serde(rename = "pane_added")]
     PaneAdded { pane: ServerMessage1Changes6Pane },
     ///ServerMessage1Changes7
     #[serde(rename = "pane_removed")]
-    PaneRemoved {
-        #[serde(rename = "paneId")]
-        pane_id: ServerMessage1Changes7PaneId,
-    },
+    PaneRemoved { #[serde(rename = "paneId")] pane_id: ServerMessage1Changes7PaneId },
     ///ServerMessage1Changes8
     #[serde(rename = "pane_geometry_changed")]
     PaneGeometryChanged {
@@ -5355,20 +5699,24 @@ impl ::std::convert::From<ServerMessage1NodeId> for ::std::string::String {
 }
 impl ::std::str::FromStr for ServerMessage1NodeId {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for ServerMessage1NodeId {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -5409,12 +5757,14 @@ impl ::std::convert::From<ServerMessage2Data> for ::std::string::String {
 }
 impl ::std::str::FromStr for ServerMessage2Data {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         if value.chars().count() > 349530usize {
             return Err("longer than 349530 characters".into());
         }
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| ::regress::Regex::new("^[A-Za-z0-9+/]*={0,2}$").unwrap());
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9+/]*={0,2}$").unwrap() });
         if PATTERN.find(value).is_none() {
             return Err("doesn't match pattern \"^[A-Za-z0-9+/]*={0,2}$\"".into());
         }
@@ -5423,7 +5773,9 @@ impl ::std::str::FromStr for ServerMessage2Data {
 }
 impl ::std::convert::TryFrom<&str> for ServerMessage2Data {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -5464,20 +5816,24 @@ impl ::std::convert::From<ServerMessage2PaneId> for ::std::string::String {
 }
 impl ::std::str::FromStr for ServerMessage2PaneId {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for ServerMessage2PaneId {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -5518,20 +5874,24 @@ impl ::std::convert::From<ServerMessage3PaneId> for ::std::string::String {
 }
 impl ::std::str::FromStr for ServerMessage3PaneId {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for ServerMessage3PaneId {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -5572,7 +5932,9 @@ impl ::std::convert::From<ServerMessage4CommandType> for ::std::string::String {
 }
 impl ::std::str::FromStr for ServerMessage4CommandType {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         if value.chars().count() > 256usize {
             return Err("longer than 256 characters".into());
         }
@@ -5584,7 +5946,9 @@ impl ::std::str::FromStr for ServerMessage4CommandType {
 }
 impl ::std::convert::TryFrom<&str> for ServerMessage4CommandType {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -5619,7 +5983,7 @@ impl<'de> ::serde::Deserialize<'de> for ServerMessage4CommandType {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd,
+    PartialOrd
 )]
 pub enum ServerMessage5Code {
     #[serde(rename = "not_found")]
@@ -5649,7 +6013,9 @@ impl ::std::fmt::Display for ServerMessage5Code {
 }
 impl ::std::str::FromStr for ServerMessage5Code {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value {
             "not_found" => Ok(Self::NotFound),
             "not_allowed" => Ok(Self::NotAllowed),
@@ -5663,7 +6029,9 @@ impl ::std::str::FromStr for ServerMessage5Code {
 }
 impl ::std::convert::TryFrom<&str> for ServerMessage5Code {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -5692,7 +6060,9 @@ impl ::std::convert::From<ServerMessage5Message> for ::std::string::String {
 }
 impl ::std::str::FromStr for ServerMessage5Message {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         if value.chars().count() > 256usize {
             return Err("longer than 256 characters".into());
         }
@@ -5704,7 +6074,9 @@ impl ::std::str::FromStr for ServerMessage5Message {
 }
 impl ::std::convert::TryFrom<&str> for ServerMessage5Message {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -5780,7 +6152,7 @@ pub struct StateDiffChanges0Job {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd,
+    PartialOrd
 )]
 pub enum StateDiffChanges0JobBlockedReason0 {
     #[serde(rename = "plan_review")]
@@ -5804,7 +6176,9 @@ impl ::std::fmt::Display for StateDiffChanges0JobBlockedReason0 {
 }
 impl ::std::str::FromStr for StateDiffChanges0JobBlockedReason0 {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value {
             "plan_review" => Ok(Self::PlanReview),
             "permission" => Ok(Self::Permission),
@@ -5816,11 +6190,14 @@ impl ::std::str::FromStr for StateDiffChanges0JobBlockedReason0 {
 }
 impl ::std::convert::TryFrom<&str> for StateDiffChanges0JobBlockedReason0 {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<::std::string::String> for StateDiffChanges0JobBlockedReason0 {
+impl ::std::convert::TryFrom<::std::string::String>
+for StateDiffChanges0JobBlockedReason0 {
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -5845,7 +6222,9 @@ impl ::std::convert::From<StateDiffChanges0JobDetail0> for ::std::string::String
 }
 impl ::std::str::FromStr for StateDiffChanges0JobDetail0 {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         if value.chars().count() > 256usize {
             return Err("longer than 256 characters".into());
         }
@@ -5857,7 +6236,9 @@ impl ::std::str::FromStr for StateDiffChanges0JobDetail0 {
 }
 impl ::std::convert::TryFrom<&str> for StateDiffChanges0JobDetail0 {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -5898,20 +6279,24 @@ impl ::std::convert::From<StateDiffChanges0JobJobId> for ::std::string::String {
 }
 impl ::std::str::FromStr for StateDiffChanges0JobJobId {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for StateDiffChanges0JobJobId {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -5952,20 +6337,24 @@ impl ::std::convert::From<StateDiffChanges0JobProjectId> for ::std::string::Stri
 }
 impl ::std::str::FromStr for StateDiffChanges0JobProjectId {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for StateDiffChanges0JobProjectId {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -6006,20 +6395,24 @@ impl ::std::convert::From<StateDiffChanges0JobSessionId0> for ::std::string::Str
 }
 impl ::std::str::FromStr for StateDiffChanges0JobSessionId0 {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for StateDiffChanges0JobSessionId0 {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -6054,7 +6447,7 @@ impl<'de> ::serde::Deserialize<'de> for StateDiffChanges0JobSessionId0 {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd,
+    PartialOrd
 )]
 pub enum StateDiffChanges0JobState {
     #[serde(rename = "working")]
@@ -6078,7 +6471,9 @@ impl ::std::fmt::Display for StateDiffChanges0JobState {
 }
 impl ::std::str::FromStr for StateDiffChanges0JobState {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value {
             "working" => Ok(Self::Working),
             "blocked" => Ok(Self::Blocked),
@@ -6090,7 +6485,9 @@ impl ::std::str::FromStr for StateDiffChanges0JobState {
 }
 impl ::std::convert::TryFrom<&str> for StateDiffChanges0JobState {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -6119,14 +6516,16 @@ impl ::std::convert::From<StateDiffChanges0JobUpdatedAt> for ::std::string::Stri
 }
 impl ::std::str::FromStr for StateDiffChanges0JobUpdatedAt {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new(
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        {
+            ::regress::Regex::new(
                     "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,9})?Z$",
                 )
                 .unwrap()
-            });
+        });
         if PATTERN.find(value).is_none() {
             return Err(
                 "doesn't match pattern \"^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,9})?Z$\""
@@ -6138,7 +6537,9 @@ impl ::std::str::FromStr for StateDiffChanges0JobUpdatedAt {
 }
 impl ::std::convert::TryFrom<&str> for StateDiffChanges0JobUpdatedAt {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -6179,20 +6580,24 @@ impl ::std::convert::From<StateDiffChanges0JobWorkspaceId> for ::std::string::St
 }
 impl ::std::str::FromStr for StateDiffChanges0JobWorkspaceId {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for StateDiffChanges0JobWorkspaceId {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -6233,7 +6638,9 @@ impl ::std::convert::From<StateDiffChanges10Line> for ::std::string::String {
 }
 impl ::std::str::FromStr for StateDiffChanges10Line {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         if value.chars().count() > 4096usize {
             return Err("longer than 4096 characters".into());
         }
@@ -6242,7 +6649,9 @@ impl ::std::str::FromStr for StateDiffChanges10Line {
 }
 impl ::std::convert::TryFrom<&str> for StateDiffChanges10Line {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -6283,20 +6692,24 @@ impl ::std::convert::From<StateDiffChanges10PaneId> for ::std::string::String {
 }
 impl ::std::str::FromStr for StateDiffChanges10PaneId {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for StateDiffChanges10PaneId {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -6331,7 +6744,7 @@ impl<'de> ::serde::Deserialize<'de> for StateDiffChanges10PaneId {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd,
+    PartialOrd
 )]
 pub enum StateDiffChanges1BlockedReason0 {
     #[serde(rename = "plan_review")]
@@ -6355,7 +6768,9 @@ impl ::std::fmt::Display for StateDiffChanges1BlockedReason0 {
 }
 impl ::std::str::FromStr for StateDiffChanges1BlockedReason0 {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value {
             "plan_review" => Ok(Self::PlanReview),
             "permission" => Ok(Self::Permission),
@@ -6367,7 +6782,9 @@ impl ::std::str::FromStr for StateDiffChanges1BlockedReason0 {
 }
 impl ::std::convert::TryFrom<&str> for StateDiffChanges1BlockedReason0 {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -6396,7 +6813,9 @@ impl ::std::convert::From<StateDiffChanges1Detail0> for ::std::string::String {
 }
 impl ::std::str::FromStr for StateDiffChanges1Detail0 {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         if value.chars().count() > 256usize {
             return Err("longer than 256 characters".into());
         }
@@ -6408,7 +6827,9 @@ impl ::std::str::FromStr for StateDiffChanges1Detail0 {
 }
 impl ::std::convert::TryFrom<&str> for StateDiffChanges1Detail0 {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -6449,20 +6870,24 @@ impl ::std::convert::From<StateDiffChanges1JobId> for ::std::string::String {
 }
 impl ::std::str::FromStr for StateDiffChanges1JobId {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for StateDiffChanges1JobId {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -6497,7 +6922,7 @@ impl<'de> ::serde::Deserialize<'de> for StateDiffChanges1JobId {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd,
+    PartialOrd
 )]
 pub enum StateDiffChanges1State {
     #[serde(rename = "working")]
@@ -6521,7 +6946,9 @@ impl ::std::fmt::Display for StateDiffChanges1State {
 }
 impl ::std::str::FromStr for StateDiffChanges1State {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value {
             "working" => Ok(Self::Working),
             "blocked" => Ok(Self::Blocked),
@@ -6533,7 +6960,9 @@ impl ::std::str::FromStr for StateDiffChanges1State {
 }
 impl ::std::convert::TryFrom<&str> for StateDiffChanges1State {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -6562,14 +6991,16 @@ impl ::std::convert::From<StateDiffChanges1UpdatedAt> for ::std::string::String 
 }
 impl ::std::str::FromStr for StateDiffChanges1UpdatedAt {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new(
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        {
+            ::regress::Regex::new(
                     "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,9})?Z$",
                 )
                 .unwrap()
-            });
+        });
         if PATTERN.find(value).is_none() {
             return Err(
                 "doesn't match pattern \"^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,9})?Z$\""
@@ -6581,7 +7012,9 @@ impl ::std::str::FromStr for StateDiffChanges1UpdatedAt {
 }
 impl ::std::convert::TryFrom<&str> for StateDiffChanges1UpdatedAt {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -6622,20 +7055,24 @@ impl ::std::convert::From<StateDiffChanges2JobId> for ::std::string::String {
 }
 impl ::std::str::FromStr for StateDiffChanges2JobId {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for StateDiffChanges2JobId {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -6676,20 +7113,24 @@ impl ::std::convert::From<StateDiffChanges3JobId> for ::std::string::String {
 }
 impl ::std::str::FromStr for StateDiffChanges3JobId {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for StateDiffChanges3JobId {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -6730,14 +7171,16 @@ impl ::std::convert::From<StateDiffChanges3QueuedAt> for ::std::string::String {
 }
 impl ::std::str::FromStr for StateDiffChanges3QueuedAt {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new(
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        {
+            ::regress::Regex::new(
                     "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,9})?Z$",
                 )
                 .unwrap()
-            });
+        });
         if PATTERN.find(value).is_none() {
             return Err(
                 "doesn't match pattern \"^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,9})?Z$\""
@@ -6749,7 +7192,9 @@ impl ::std::str::FromStr for StateDiffChanges3QueuedAt {
 }
 impl ::std::convert::TryFrom<&str> for StateDiffChanges3QueuedAt {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -6784,7 +7229,7 @@ impl<'de> ::serde::Deserialize<'de> for StateDiffChanges3QueuedAt {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd,
+    PartialOrd
 )]
 pub enum StateDiffChanges3Status {
     #[serde(rename = "pending")]
@@ -6802,7 +7247,9 @@ impl ::std::fmt::Display for StateDiffChanges3Status {
 }
 impl ::std::str::FromStr for StateDiffChanges3Status {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value {
             "pending" => Ok(Self::Pending),
             "sending" => Ok(Self::Sending),
@@ -6812,7 +7259,9 @@ impl ::std::str::FromStr for StateDiffChanges3Status {
 }
 impl ::std::convert::TryFrom<&str> for StateDiffChanges3Status {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -6841,20 +7290,24 @@ impl ::std::convert::From<StateDiffChanges4JobId> for ::std::string::String {
 }
 impl ::std::str::FromStr for StateDiffChanges4JobId {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for StateDiffChanges4JobId {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -6883,10 +7336,7 @@ impl<'de> ::serde::Deserialize<'de> for StateDiffChanges4JobId {
 #[serde(deny_unknown_fields)]
 pub struct StateDiffChanges6Pane {
     pub columns: ::std::num::NonZeroU64,
-    #[serde(
-        rename = "jobId",
-        deserialize_with = "::std::option::Option::deserialize"
-    )]
+    #[serde(rename = "jobId", deserialize_with = "::std::option::Option::deserialize")]
     pub job_id: ::std::option::Option<StateDiffChanges6PaneJobId0>,
     pub kind: StateDiffChanges6PaneKind,
     #[serde(rename = "paneId")]
@@ -6920,20 +7370,24 @@ impl ::std::convert::From<StateDiffChanges6PaneJobId0> for ::std::string::String
 }
 impl ::std::str::FromStr for StateDiffChanges6PaneJobId0 {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for StateDiffChanges6PaneJobId0 {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -6968,7 +7422,7 @@ impl<'de> ::serde::Deserialize<'de> for StateDiffChanges6PaneJobId0 {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd,
+    PartialOrd
 )]
 pub enum StateDiffChanges6PaneKind {
     #[serde(rename = "terminal")]
@@ -6989,7 +7443,9 @@ impl ::std::fmt::Display for StateDiffChanges6PaneKind {
 }
 impl ::std::str::FromStr for StateDiffChanges6PaneKind {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value {
             "terminal" => Ok(Self::Terminal),
             "plan_review" => Ok(Self::PlanReview),
@@ -7000,7 +7456,9 @@ impl ::std::str::FromStr for StateDiffChanges6PaneKind {
 }
 impl ::std::convert::TryFrom<&str> for StateDiffChanges6PaneKind {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -7029,20 +7487,24 @@ impl ::std::convert::From<StateDiffChanges6PanePaneId> for ::std::string::String
 }
 impl ::std::str::FromStr for StateDiffChanges6PanePaneId {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for StateDiffChanges6PanePaneId {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -7083,20 +7545,24 @@ impl ::std::convert::From<StateDiffChanges6PaneSessionId0> for ::std::string::St
 }
 impl ::std::str::FromStr for StateDiffChanges6PaneSessionId0 {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for StateDiffChanges6PaneSessionId0 {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -7137,7 +7603,9 @@ impl ::std::convert::From<StateDiffChanges6PaneTitle> for ::std::string::String 
 }
 impl ::std::str::FromStr for StateDiffChanges6PaneTitle {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         if value.chars().count() > 256usize {
             return Err("longer than 256 characters".into());
         }
@@ -7149,7 +7617,9 @@ impl ::std::str::FromStr for StateDiffChanges6PaneTitle {
 }
 impl ::std::convert::TryFrom<&str> for StateDiffChanges6PaneTitle {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -7190,24 +7660,29 @@ impl ::std::convert::From<StateDiffChanges6PaneWorkspaceId> for ::std::string::S
 }
 impl ::std::str::FromStr for StateDiffChanges6PaneWorkspaceId {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for StateDiffChanges6PaneWorkspaceId {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<::std::string::String> for StateDiffChanges6PaneWorkspaceId {
+impl ::std::convert::TryFrom<::std::string::String>
+for StateDiffChanges6PaneWorkspaceId {
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -7244,20 +7719,24 @@ impl ::std::convert::From<StateDiffChanges7PaneId> for ::std::string::String {
 }
 impl ::std::str::FromStr for StateDiffChanges7PaneId {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for StateDiffChanges7PaneId {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -7298,20 +7777,24 @@ impl ::std::convert::From<StateDiffChanges8PaneId> for ::std::string::String {
 }
 impl ::std::str::FromStr for StateDiffChanges8PaneId {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for StateDiffChanges8PaneId {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -7352,20 +7835,24 @@ impl ::std::convert::From<StateDiffChanges9WorkspaceId> for ::std::string::Strin
 }
 impl ::std::str::FromStr for StateDiffChanges9WorkspaceId {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for StateDiffChanges9WorkspaceId {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -7414,10 +7901,7 @@ pub enum StateDiffChangesItem {
     },
     ///StateDiffChanges2
     #[serde(rename = "job_removed")]
-    JobRemoved {
-        #[serde(rename = "jobId")]
-        job_id: StateDiffChanges2JobId,
-    },
+    JobRemoved { #[serde(rename = "jobId")] job_id: StateDiffChanges2JobId },
     ///StateDiffChanges3
     #[serde(rename = "queue_item_added")]
     QueueItemAdded {
@@ -7430,25 +7914,16 @@ pub enum StateDiffChangesItem {
     },
     ///StateDiffChanges4
     #[serde(rename = "queue_item_removed")]
-    QueueItemRemoved {
-        #[serde(rename = "jobId")]
-        job_id: StateDiffChanges4JobId,
-    },
+    QueueItemRemoved { #[serde(rename = "jobId")] job_id: StateDiffChanges4JobId },
     ///StateDiffChanges5
     #[serde(rename = "outbox_count_changed")]
-    OutboxCountChanged {
-        #[serde(rename = "pendingCount")]
-        pending_count: i64,
-    },
+    OutboxCountChanged { #[serde(rename = "pendingCount")] pending_count: i64 },
     ///StateDiffChanges6
     #[serde(rename = "pane_added")]
     PaneAdded { pane: StateDiffChanges6Pane },
     ///StateDiffChanges7
     #[serde(rename = "pane_removed")]
-    PaneRemoved {
-        #[serde(rename = "paneId")]
-        pane_id: StateDiffChanges7PaneId,
-    },
+    PaneRemoved { #[serde(rename = "paneId")] pane_id: StateDiffChanges7PaneId },
     ///StateDiffChanges8
     #[serde(rename = "pane_geometry_changed")]
     PaneGeometryChanged {
@@ -7490,20 +7965,24 @@ impl ::std::convert::From<StateDiffNodeId> for ::std::string::String {
 }
 impl ::std::str::FromStr for StateDiffNodeId {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for StateDiffNodeId {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -7564,14 +8043,16 @@ impl ::std::convert::From<StateSnapshotGeneratedAt> for ::std::string::String {
 }
 impl ::std::str::FromStr for StateSnapshotGeneratedAt {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new(
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        {
+            ::regress::Regex::new(
                     "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,9})?Z$",
                 )
                 .unwrap()
-            });
+        });
         if PATTERN.find(value).is_none() {
             return Err(
                 "doesn't match pattern \"^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,9})?Z$\""
@@ -7583,7 +8064,9 @@ impl ::std::str::FromStr for StateSnapshotGeneratedAt {
 }
 impl ::std::convert::TryFrom<&str> for StateSnapshotGeneratedAt {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -7618,7 +8101,7 @@ impl<'de> ::serde::Deserialize<'de> for StateSnapshotGeneratedAt {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd,
+    PartialOrd
 )]
 pub enum StateSnapshotJobsBlockedReason0 {
     #[serde(rename = "plan_review")]
@@ -7642,7 +8125,9 @@ impl ::std::fmt::Display for StateSnapshotJobsBlockedReason0 {
 }
 impl ::std::str::FromStr for StateSnapshotJobsBlockedReason0 {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value {
             "plan_review" => Ok(Self::PlanReview),
             "permission" => Ok(Self::Permission),
@@ -7654,7 +8139,9 @@ impl ::std::str::FromStr for StateSnapshotJobsBlockedReason0 {
 }
 impl ::std::convert::TryFrom<&str> for StateSnapshotJobsBlockedReason0 {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -7683,7 +8170,9 @@ impl ::std::convert::From<StateSnapshotJobsDetail0> for ::std::string::String {
 }
 impl ::std::str::FromStr for StateSnapshotJobsDetail0 {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         if value.chars().count() > 256usize {
             return Err("longer than 256 characters".into());
         }
@@ -7695,7 +8184,9 @@ impl ::std::str::FromStr for StateSnapshotJobsDetail0 {
 }
 impl ::std::convert::TryFrom<&str> for StateSnapshotJobsDetail0 {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -7762,20 +8253,24 @@ impl ::std::convert::From<StateSnapshotJobsJobId> for ::std::string::String {
 }
 impl ::std::str::FromStr for StateSnapshotJobsJobId {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for StateSnapshotJobsJobId {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -7816,20 +8311,24 @@ impl ::std::convert::From<StateSnapshotJobsProjectId> for ::std::string::String 
 }
 impl ::std::str::FromStr for StateSnapshotJobsProjectId {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for StateSnapshotJobsProjectId {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -7870,20 +8369,24 @@ impl ::std::convert::From<StateSnapshotJobsSessionId0> for ::std::string::String
 }
 impl ::std::str::FromStr for StateSnapshotJobsSessionId0 {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for StateSnapshotJobsSessionId0 {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -7918,7 +8421,7 @@ impl<'de> ::serde::Deserialize<'de> for StateSnapshotJobsSessionId0 {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd,
+    PartialOrd
 )]
 pub enum StateSnapshotJobsState {
     #[serde(rename = "working")]
@@ -7942,7 +8445,9 @@ impl ::std::fmt::Display for StateSnapshotJobsState {
 }
 impl ::std::str::FromStr for StateSnapshotJobsState {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value {
             "working" => Ok(Self::Working),
             "blocked" => Ok(Self::Blocked),
@@ -7954,7 +8459,9 @@ impl ::std::str::FromStr for StateSnapshotJobsState {
 }
 impl ::std::convert::TryFrom<&str> for StateSnapshotJobsState {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -7983,14 +8490,16 @@ impl ::std::convert::From<StateSnapshotJobsUpdatedAt> for ::std::string::String 
 }
 impl ::std::str::FromStr for StateSnapshotJobsUpdatedAt {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new(
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        {
+            ::regress::Regex::new(
                     "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,9})?Z$",
                 )
                 .unwrap()
-            });
+        });
         if PATTERN.find(value).is_none() {
             return Err(
                 "doesn't match pattern \"^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,9})?Z$\""
@@ -8002,7 +8511,9 @@ impl ::std::str::FromStr for StateSnapshotJobsUpdatedAt {
 }
 impl ::std::convert::TryFrom<&str> for StateSnapshotJobsUpdatedAt {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -8043,20 +8554,24 @@ impl ::std::convert::From<StateSnapshotJobsWorkspaceId> for ::std::string::Strin
 }
 impl ::std::str::FromStr for StateSnapshotJobsWorkspaceId {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for StateSnapshotJobsWorkspaceId {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -8097,20 +8612,24 @@ impl ::std::convert::From<StateSnapshotNodeId> for ::std::string::String {
 }
 impl ::std::str::FromStr for StateSnapshotNodeId {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for StateSnapshotNodeId {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -8139,10 +8658,7 @@ impl<'de> ::serde::Deserialize<'de> for StateSnapshotNodeId {
 #[serde(deny_unknown_fields)]
 pub struct StateSnapshotPanesItem {
     pub columns: ::std::num::NonZeroU64,
-    #[serde(
-        rename = "jobId",
-        deserialize_with = "::std::option::Option::deserialize"
-    )]
+    #[serde(rename = "jobId", deserialize_with = "::std::option::Option::deserialize")]
     pub job_id: ::std::option::Option<StateSnapshotPanesJobId0>,
     pub kind: StateSnapshotPanesKind,
     #[serde(rename = "paneId")]
@@ -8176,20 +8692,24 @@ impl ::std::convert::From<StateSnapshotPanesJobId0> for ::std::string::String {
 }
 impl ::std::str::FromStr for StateSnapshotPanesJobId0 {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for StateSnapshotPanesJobId0 {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -8224,7 +8744,7 @@ impl<'de> ::serde::Deserialize<'de> for StateSnapshotPanesJobId0 {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd,
+    PartialOrd
 )]
 pub enum StateSnapshotPanesKind {
     #[serde(rename = "terminal")]
@@ -8245,7 +8765,9 @@ impl ::std::fmt::Display for StateSnapshotPanesKind {
 }
 impl ::std::str::FromStr for StateSnapshotPanesKind {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value {
             "terminal" => Ok(Self::Terminal),
             "plan_review" => Ok(Self::PlanReview),
@@ -8256,7 +8778,9 @@ impl ::std::str::FromStr for StateSnapshotPanesKind {
 }
 impl ::std::convert::TryFrom<&str> for StateSnapshotPanesKind {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -8285,20 +8809,24 @@ impl ::std::convert::From<StateSnapshotPanesPaneId> for ::std::string::String {
 }
 impl ::std::str::FromStr for StateSnapshotPanesPaneId {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for StateSnapshotPanesPaneId {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -8339,20 +8867,24 @@ impl ::std::convert::From<StateSnapshotPanesSessionId0> for ::std::string::Strin
 }
 impl ::std::str::FromStr for StateSnapshotPanesSessionId0 {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for StateSnapshotPanesSessionId0 {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -8393,7 +8925,9 @@ impl ::std::convert::From<StateSnapshotPanesTitle> for ::std::string::String {
 }
 impl ::std::str::FromStr for StateSnapshotPanesTitle {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         if value.chars().count() > 256usize {
             return Err("longer than 256 characters".into());
         }
@@ -8405,7 +8939,9 @@ impl ::std::str::FromStr for StateSnapshotPanesTitle {
 }
 impl ::std::convert::TryFrom<&str> for StateSnapshotPanesTitle {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -8446,20 +8982,24 @@ impl ::std::convert::From<StateSnapshotPanesWorkspaceId> for ::std::string::Stri
 }
 impl ::std::str::FromStr for StateSnapshotPanesWorkspaceId {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for StateSnapshotPanesWorkspaceId {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -8510,7 +9050,9 @@ impl ::std::convert::From<StateSnapshotTailscaleAddress0> for ::std::string::Str
 }
 impl ::std::str::FromStr for StateSnapshotTailscaleAddress0 {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         if value.chars().count() > 256usize {
             return Err("longer than 256 characters".into());
         }
@@ -8522,7 +9064,9 @@ impl ::std::str::FromStr for StateSnapshotTailscaleAddress0 {
 }
 impl ::std::convert::TryFrom<&str> for StateSnapshotTailscaleAddress0 {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -8557,7 +9101,7 @@ impl<'de> ::serde::Deserialize<'de> for StateSnapshotTailscaleAddress0 {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd,
+    PartialOrd
 )]
 pub enum StateSnapshotTailscaleStatus {
     #[serde(rename = "active")]
@@ -8581,7 +9125,9 @@ impl ::std::fmt::Display for StateSnapshotTailscaleStatus {
 }
 impl ::std::str::FromStr for StateSnapshotTailscaleStatus {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value {
             "active" => Ok(Self::Active),
             "stopped" => Ok(Self::Stopped),
@@ -8593,7 +9139,9 @@ impl ::std::str::FromStr for StateSnapshotTailscaleStatus {
 }
 impl ::std::convert::TryFrom<&str> for StateSnapshotTailscaleStatus {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -8635,7 +9183,9 @@ impl ::std::convert::From<StateSnapshotWorkspacesName> for ::std::string::String
 }
 impl ::std::str::FromStr for StateSnapshotWorkspacesName {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         if value.chars().count() > 256usize {
             return Err("longer than 256 characters".into());
         }
@@ -8647,7 +9197,9 @@ impl ::std::str::FromStr for StateSnapshotWorkspacesName {
 }
 impl ::std::convert::TryFrom<&str> for StateSnapshotWorkspacesName {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -8688,24 +9240,29 @@ impl ::std::convert::From<StateSnapshotWorkspacesProjectId> for ::std::string::S
 }
 impl ::std::str::FromStr for StateSnapshotWorkspacesProjectId {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for StateSnapshotWorkspacesProjectId {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<::std::string::String> for StateSnapshotWorkspacesProjectId {
+impl ::std::convert::TryFrom<::std::string::String>
+for StateSnapshotWorkspacesProjectId {
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -8742,7 +9299,9 @@ impl ::std::convert::From<StateSnapshotWorkspacesProjectRoot> for ::std::string:
 }
 impl ::std::str::FromStr for StateSnapshotWorkspacesProjectRoot {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         if value.chars().count() > 4096usize {
             return Err("longer than 4096 characters".into());
         }
@@ -8754,11 +9313,14 @@ impl ::std::str::FromStr for StateSnapshotWorkspacesProjectRoot {
 }
 impl ::std::convert::TryFrom<&str> for StateSnapshotWorkspacesProjectRoot {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<::std::string::String> for StateSnapshotWorkspacesProjectRoot {
+impl ::std::convert::TryFrom<::std::string::String>
+for StateSnapshotWorkspacesProjectRoot {
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -8795,24 +9357,29 @@ impl ::std::convert::From<StateSnapshotWorkspacesWorkspaceId> for ::std::string:
 }
 impl ::std::str::FromStr for StateSnapshotWorkspacesWorkspaceId {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for StateSnapshotWorkspacesWorkspaceId {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
-impl ::std::convert::TryFrom<::std::string::String> for StateSnapshotWorkspacesWorkspaceId {
+impl ::std::convert::TryFrom<::std::string::String>
+for StateSnapshotWorkspacesWorkspaceId {
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -8859,7 +9426,9 @@ impl ::std::convert::From<TailscaleStatusViewAddress0> for ::std::string::String
 }
 impl ::std::str::FromStr for TailscaleStatusViewAddress0 {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         if value.chars().count() > 256usize {
             return Err("longer than 256 characters".into());
         }
@@ -8871,7 +9440,9 @@ impl ::std::str::FromStr for TailscaleStatusViewAddress0 {
 }
 impl ::std::convert::TryFrom<&str> for TailscaleStatusViewAddress0 {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -8906,7 +9477,7 @@ impl<'de> ::serde::Deserialize<'de> for TailscaleStatusViewAddress0 {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd,
+    PartialOrd
 )]
 pub enum TailscaleStatusViewStatus {
     #[serde(rename = "active")]
@@ -8930,7 +9501,9 @@ impl ::std::fmt::Display for TailscaleStatusViewStatus {
 }
 impl ::std::str::FromStr for TailscaleStatusViewStatus {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value {
             "active" => Ok(Self::Active),
             "stopped" => Ok(Self::Stopped),
@@ -8942,7 +9515,9 @@ impl ::std::str::FromStr for TailscaleStatusViewStatus {
 }
 impl ::std::convert::TryFrom<&str> for TailscaleStatusViewStatus {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -8984,7 +9559,9 @@ impl ::std::convert::From<WorkspaceViewName> for ::std::string::String {
 }
 impl ::std::str::FromStr for WorkspaceViewName {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         if value.chars().count() > 256usize {
             return Err("longer than 256 characters".into());
         }
@@ -8996,7 +9573,9 @@ impl ::std::str::FromStr for WorkspaceViewName {
 }
 impl ::std::convert::TryFrom<&str> for WorkspaceViewName {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -9037,20 +9616,24 @@ impl ::std::convert::From<WorkspaceViewProjectId> for ::std::string::String {
 }
 impl ::std::str::FromStr for WorkspaceViewProjectId {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for WorkspaceViewProjectId {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -9091,7 +9674,9 @@ impl ::std::convert::From<WorkspaceViewProjectRoot> for ::std::string::String {
 }
 impl ::std::str::FromStr for WorkspaceViewProjectRoot {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         if value.chars().count() > 4096usize {
             return Err("longer than 4096 characters".into());
         }
@@ -9103,7 +9688,9 @@ impl ::std::str::FromStr for WorkspaceViewProjectRoot {
 }
 impl ::std::convert::TryFrom<&str> for WorkspaceViewProjectRoot {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -9144,20 +9731,24 @@ impl ::std::convert::From<WorkspaceViewWorkspaceId> for ::std::string::String {
 }
 impl ::std::str::FromStr for WorkspaceViewWorkspaceId {
     type Err = self::error::ConversionError;
-    fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static PATTERN: ::std::sync::LazyLock<::regress::Regex> =
-            ::std::sync::LazyLock::new(|| {
-                ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap()
-            });
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
+        { ::regress::Regex::new("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$").unwrap() });
         if PATTERN.find(value).is_none() {
-            return Err("doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into());
+            return Err(
+                "doesn't match pattern \"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$\"".into(),
+            );
         }
         Ok(Self(value.to_string()))
     }
 }
 impl ::std::convert::TryFrom<&str> for WorkspaceViewWorkspaceId {
     type Error = self::error::ConversionError;
-    fn try_from(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
 }
@@ -9187,12 +9778,18 @@ pub mod error {
     pub struct ConversionError(::std::borrow::Cow<'static, str>);
     impl ::std::error::Error for ConversionError {}
     impl ::std::fmt::Display for ConversionError {
-        fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> Result<(), ::std::fmt::Error> {
+        fn fmt(
+            &self,
+            f: &mut ::std::fmt::Formatter<'_>,
+        ) -> Result<(), ::std::fmt::Error> {
             ::std::fmt::Display::fmt(&self.0, f)
         }
     }
     impl ::std::fmt::Debug for ConversionError {
-        fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> Result<(), ::std::fmt::Error> {
+        fn fmt(
+            &self,
+            f: &mut ::std::fmt::Formatter<'_>,
+        ) -> Result<(), ::std::fmt::Error> {
             ::std::fmt::Debug::fmt(&self.0, f)
         }
     }

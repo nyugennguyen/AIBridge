@@ -156,6 +156,19 @@ pub enum Action {
     },
     /// The approval modal closed and input returns to the underlying mode.
     ModalClosed,
+    /// Close a pane.
+    ClosePane {
+        /// The pane to close.
+        pane_id: String,
+    },
+    /// Jump focus directly to a pending HITL approval card.
+    FocusApprovalCard,
+    /// Open the universal command palette.
+    OpenCommandPalette,
+    /// Open the keymap setup modal and cheatsheet.
+    OpenKeymapModal,
+    /// Switch active keybinding profile.
+    SwitchProfile(crate::state::KeybindingProfile),
 }
 
 /// A short-lived status-bar message.
@@ -288,6 +301,13 @@ impl PartialEq for Action {
                 left == right
             }
             (Self::ModalClosed, Self::ModalClosed) => true,
+            (Self::ClosePane { pane_id: left }, Self::ClosePane { pane_id: right }) => {
+                left == right
+            }
+            (Self::FocusApprovalCard, Self::FocusApprovalCard) => true,
+            (Self::OpenCommandPalette, Self::OpenCommandPalette) => true,
+            (Self::OpenKeymapModal, Self::OpenKeymapModal) => true,
+            (Self::SwitchProfile(left), Self::SwitchProfile(right)) => left == right,
             _ => false,
         }
     }

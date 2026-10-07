@@ -159,16 +159,25 @@ pub fn near(rect: Rect, column: u16, row: u16, tolerance: u16) -> bool {
 pub fn partition(area: Rect, sidebar: Option<u16>) -> ChromeRects {
     let top = area.y;
     let status = area.y.saturating_add(area.height.saturating_sub(1));
-    let body_top = top.saturating_add(1);
-    let body_height = area.height.saturating_sub(2);
+    let top_header_height = if area.height >= 4 {
+        2
+    } else {
+        area.height.min(1)
+    };
+    let tab_height = if area.height >= 4 { 1 } else { 0 };
+    let body_top = top.saturating_add(top_header_height);
+    let body_height = area
+        .height
+        .saturating_sub(top_header_height.saturating_add(1));
 
     let (sidebar_rect, canvas) = match sidebar {
         Some(width) if width > 0 && area.width.saturating_sub(width) >= MIN_CANVAS_COLUMNS => {
-            let sidebar_rect = Rect::new(area.x, body_top, width, body_height);
-            let canvas = Rect::new(
-                area.x.saturating_add(width),
+            let canvas_width = area.width.saturating_sub(width);
+            let canvas = Rect::new(area.x, body_top, canvas_width, body_height);
+            let sidebar_rect = Rect::new(
+                area.x.saturating_add(canvas_width),
                 body_top,
-                area.width.saturating_sub(width),
+                width,
                 body_height,
             );
             (Some(sidebar_rect), canvas)
@@ -177,19 +186,16 @@ pub fn partition(area: Rect, sidebar: Option<u16>) -> ChromeRects {
         // drawing. Dropping the sidebar is better than a one-column canvas the
         // operator cannot read, and the status bar still reports the queue count,
         // so nothing the operator needs becomes invisible.
-        //
-        // The check lives HERE as well as in `clamp_sidebar` because `partition`
-        // is what actually subtracts. A caller that passes an unclamped width would
-        // otherwise get a canvas too narrow to render, and the sidebar is easier to
-        // live without than the panes are.
         _ => (None, Rect::new(area.x, body_top, area.width, body_height)),
     };
 
     ChromeRects {
         full: area,
-        top_bar: Rect::new(area.x, top, area.width, 1),
+        top_header_bar: Rect::new(area.x, top, area.width, top_header_height),
+        top_bar: Rect::new(area.x, top, area.width, 1.min(area.height)),
+        tab_bar: Rect::new(area.x, top.saturating_add(1), area.width, tab_height),
         sidebar: sidebar_rect,
         canvas,
-        status_bar: Rect::new(area.x, status, area.width, 1),
+        status_bar: Rect::new(area.x, status, area.width, 1.min(area.height)),
     }
 }

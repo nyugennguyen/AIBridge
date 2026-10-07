@@ -297,13 +297,17 @@ fn layout_for(ids: &[&str]) -> TileLayout {
 }
 
 #[test]
-fn chrome_takes_two_rows_and_leaves_the_rest_for_panes() {
+fn chrome_takes_header_tab_and_status_rows_and_leaves_the_rest_for_panes() {
     let chrome = partition(Rect::new(0, 0, 100, 30), Some(SIDEBAR_DEFAULT));
+    assert_eq!(chrome.top_header_bar.height, 2);
     assert_eq!(chrome.top_bar.height, 1);
+    assert_eq!(chrome.tab_bar.height, 1);
     assert_eq!(chrome.status_bar.height, 1);
-    assert_eq!(chrome.canvas.height, 28);
-    assert_eq!(chrome.canvas.x, SIDEBAR_DEFAULT);
+    assert_eq!(chrome.canvas.height, 27);
+    assert_eq!(chrome.canvas.x, 0);
     assert_eq!(chrome.canvas.width, 100 - SIDEBAR_DEFAULT);
+    assert_eq!(chrome.sidebar.unwrap().x, 100 - SIDEBAR_DEFAULT);
+    assert_eq!(chrome.sidebar.unwrap().width, SIDEBAR_DEFAULT);
 }
 
 #[test]
@@ -474,7 +478,8 @@ fn sidebar_background_resolves_to_the_sidebar_not_a_row() {
 
     // Inside the sidebar, past the last row (there are none): the sidebar itself,
     // not a row and not the canvas.
-    let target = HitTest::hit(2, chrome.canvas.y + 3, &rects, &chrome, &rows);
+    let sidebar = chrome.sidebar.unwrap();
+    let target = HitTest::hit(sidebar.x + 2, chrome.canvas.y + 3, &rects, &chrome, &rows);
     assert_eq!(target, HitTarget::Sidebar);
 }
 

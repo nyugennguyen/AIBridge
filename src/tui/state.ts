@@ -38,6 +38,8 @@ export function initialTuiState(dimensions: TuiDimensions): TuiUiState {
     terminalView: null,
     takeoverReason: "",
     permissionDecision: null,
+    telemetry: null,
+    inspectorVisible: false,
   }
 }
 
@@ -141,6 +143,10 @@ export function reduceTui(state: TuiUiState, action: TuiAction): TuiUiState {
       return state.shell === "closed" ? state : { ...state, shell: "closing", overlay: "none" }
     case "closed":
       return { ...state, shell: "closed", overlay: "none" }
+    case "toggle-inspector":
+      return { ...state, inspectorVisible: !state.inspectorVisible }
+    case "telemetry-updated":
+      return { ...state, telemetry: action.telemetry }
   }
 }
 
@@ -155,6 +161,9 @@ export function routeTuiKey(state: TuiUiState, key: TuiKey): TuiKeyIntent {
   if (key.name === "q" && state.overlay === "none") return { type: "close" }
   if (key.name === "f" && state.overlay === "none" && state.snapshot?.canRefresh !== false) return { type: "refresh" }
 
+  if ((key.alt || key.meta || key.sequence === "\x1bb") && key.name.toLowerCase() === "b") {
+    return { type: "dispatch", action: { type: "toggle-inspector" } }
+  }
   // Shell navigation is local and deliberately has no authorization/effect semantics.
   const screenByKey = {
     p: "projects",

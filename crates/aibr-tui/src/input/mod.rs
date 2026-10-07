@@ -79,7 +79,10 @@ pub mod tree;
 pub use action::{Action, Toast, ToastKind};
 pub use commands::InvalidCommand;
 pub use engine::{key, Chord, ChordPolicy, InputState, PrefixKey, PREFIX_TIMEOUT, TOAST_DURATION};
-pub use menu::{ContextMenu, MenuItem};
+pub use menu::{
+    CommandPaletteState, ContextMenu, KeybindingRow, KeymapModalState, KeymapOutcome, MenuItem,
+    PaletteCommand, PaletteOutcome, KEYBINDING_ROWS,
+};
 pub use mouse::{mouse, WHEEL_LINES};
 pub use redact::{redact_to_text, ConservativeRedactor, RedactedText};
 pub use sanitize::{sanitize_url, SanitizedUrl, UrlRejection};

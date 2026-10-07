@@ -276,6 +276,14 @@ impl TileLayout {
         self.walk(&self.root, canvas, None, &mut rects);
         rects
     }
+    /// Recalibrate the tile layout for an updated canvas area without shifting focus or resetting split ratios.
+    ///
+    /// When a collapsible sidebar toggles (e.g. 28-column inspector sidebar on the right),
+    /// this cleanly recalculates the central BSP tile dimensions and seams to fit the new canvas bounds.
+    #[must_use]
+    pub fn recalibrate(&self, canvas: Rect) -> LayoutRects {
+        self.compute(canvas)
+    }
 
     /// Assign rectangles to the leaves under `node`.
     ///
@@ -631,5 +639,55 @@ fn is_towards(direction: Focus, origin: (f64, f64), candidate: (f64, f64)) -> bo
         Focus::Up => dy < 0.0,
         Focus::Down => dy > 0.0,
         Focus::Next | Focus::Previous => true,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_inspector_sidebar_toggle_recalibrates_cleanly() {
+        let panes = vec!["pane1".to_string(), "pane2".to_string()];
+        let mut layout = TileLayout::from_panes(&panes);
+        layout.focused = Some("pane1".to_string());
+
+        // Terminal 100x30 with chrome top 3 rows, status 1 row -> body 26 rows.
+        // Without inspector sidebar: canvas width is 100.
+        let canvas_full = Rect::new(0, 3, 100, 26);
+        let rects_full = layout.recalibrate(canvas_full);
+        assert_eq!(rects_full.panes.len(), 2);
+        assert_eq!(layout.focused.as_deref(), Some("pane1"));
+
+        // Leftmost pane origin is 0.
+        assert_eq!(rects_full.panes["pane1"].area.x, 0);
+
+        // Toggle inspector sidebar (28 cols on right) -> canvas width is 72 (100 - 28).
+        let canvas_with_sidebar = Rect::new(0, 3, 72, 26);
+        let rects_with_sidebar = layout.recalibrate(canvas_with_sidebar);
+
+        // Focused pane remains intact.
+        assert_eq!(layout.focused.as_deref(), Some("pane1"));
+
+        // Leftmost pane origin remains stable at 0 without horizontal jump.
+        assert_eq!(rects_with_sidebar.panes["pane1"].area.x, 0);
+        assert_eq!(rects_with_sidebar.panes["pane1"].area.y, 3);
+
+        // Central BSP tiles scale into the 72-col canvas without overlap or gaps.
+        let p1 = &rects_with_sidebar.panes["pane1"].area;
+        let p2 = &rects_with_sidebar.panes["pane2"].area;
+        let seam = &rects_with_sidebar.borders[0];
+
+        assert_eq!(p1.width + seam.width + p2.width, 72);
+        assert_eq!(seam.x, p1.x + p1.width);
+        assert_eq!(p2.x, seam.x + seam.width);
+
+        // Toggle back off -> canvas expands back to 100.
+        let rects_restored = layout.recalibrate(canvas_full);
+        assert_eq!(rects_restored.panes["pane1"].area.x, 0);
+        assert_eq!(
+            rects_restored.panes["pane2"].area.x + rects_restored.panes["pane2"].area.width,
+            100
+        );
     }
 }

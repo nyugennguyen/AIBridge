@@ -519,3 +519,84 @@ fn the_menu_is_as_wide_as_its_widest_label() {
 fn the_wheel_step_is_three_lines() {
     assert_eq!(WHEEL_LINES, 3);
 }
+
+#[test]
+fn command_palette_fuzzy_search_and_actions() {
+    use aibr_tui::input::{CommandPaletteState, PaletteCommand, PaletteOutcome};
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let mut state = CommandPaletteState::new();
+    assert_eq!(state.filtered_items().len(), 10);
+
+    // Search "split" -> should match both vertical and horizontal
+    state.query = "split".to_string();
+    let filtered = state.filtered_items();
+    assert!(filtered.len() >= 2);
+    assert!(filtered.contains(&PaletteCommand::SplitVertical));
+    assert!(filtered.contains(&PaletteCommand::SplitHorizontal));
+
+    // Search "zoom"
+    state.query = "zoom".to_string();
+    assert_eq!(state.filtered_items()[0], PaletteCommand::ToggleZoom);
+
+    // Search "insp"
+    state.query = "insp".to_string();
+    assert_eq!(state.filtered_items()[0], PaletteCommand::ToggleInspector);
+
+    // Search "detach"
+    state.query = "detach".to_string();
+    assert_eq!(state.filtered_items()[0], PaletteCommand::SafeDetach);
+
+    // Test execution via Enter
+    let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::empty());
+    let outcome = state.handle_key(&enter);
+    assert_eq!(outcome, PaletteOutcome::Execute(PaletteCommand::SafeDetach));
+
+    // Test dismissal via Esc
+    let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::empty());
+    assert_eq!(state.handle_key(&esc), PaletteOutcome::Dismissed);
+}
+
+#[test]
+fn keymap_modal_switching_and_cheatsheet() {
+    use aibr_tui::input::{KeymapModalState, KeymapOutcome, KEYBINDING_ROWS};
+    use aibr_tui::state::KeybindingProfile;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let mut state = KeymapModalState::new(KeybindingProfile::ModernErgonomic);
+    assert_eq!(state.active_profile, KeybindingProfile::ModernErgonomic);
+    assert_eq!(KEYBINDING_ROWS.len(), 10);
+
+    // Number keys switch profiles
+    let k2 = KeyEvent::new(KeyCode::Char('2'), KeyModifiers::empty());
+    assert_eq!(
+        state.handle_key(&k2),
+        KeymapOutcome::SwitchProfile(KeybindingProfile::TmuxClassic)
+    );
+    assert_eq!(state.active_profile, KeybindingProfile::TmuxClassic);
+
+    let k3 = KeyEvent::new(KeyCode::Char('3'), KeyModifiers::empty());
+    assert_eq!(
+        state.handle_key(&k3),
+        KeymapOutcome::SwitchProfile(KeybindingProfile::VimCentric)
+    );
+    assert_eq!(state.active_profile, KeybindingProfile::VimCentric);
+
+    let k1 = KeyEvent::new(KeyCode::Char('1'), KeyModifiers::empty());
+    assert_eq!(
+        state.handle_key(&k1),
+        KeymapOutcome::SwitchProfile(KeybindingProfile::ModernErgonomic)
+    );
+    assert_eq!(state.active_profile, KeybindingProfile::ModernErgonomic);
+
+    // Tab cycles profile
+    let tab = KeyEvent::new(KeyCode::Tab, KeyModifiers::empty());
+    assert_eq!(
+        state.handle_key(&tab),
+        KeymapOutcome::SwitchProfile(KeybindingProfile::TmuxClassic)
+    );
+
+    // Esc dismisses
+    let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::empty());
+    assert_eq!(state.handle_key(&esc), KeymapOutcome::Dismissed);
+}

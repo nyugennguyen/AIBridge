@@ -62,6 +62,24 @@ pub enum HitTarget {
         /// The job id the queue row refers to.
         job_id: String,
     },
+    /// Clickable header chip: universal command palette search `[Ctrl+K Search]`.
+    HeaderChipSearch,
+    /// Clickable header chip: keyboard & UI configuration keymap `[? Keymap]`.
+    HeaderChipKeymap,
+    /// Clickable header chip: toggle side inspector `[Alt+B Inspector]`.
+    HeaderChipInspector,
+    /// Workspace tab in the tab bar.
+    WorkspaceTab {
+        /// Tab index (0-indexed).
+        index: usize,
+    },
+    /// Close button (×) on a workspace tab.
+    WorkspaceTabClose {
+        /// Tab index (0-indexed).
+        index: usize,
+    },
+    /// Add button ([+]) for spawning a new workspace tab.
+    WorkspaceTabNew,
     /// The header bar.
     TopBar,
     /// The footer bar.
@@ -107,7 +125,16 @@ impl HitTest {
         chrome: &ChromeRects,
         sidebar_rows: &SidebarRows,
     ) -> HitTarget {
+        if hit_rect(chrome.tab_bar, column, row) {
+            if let Some(target) = tab_at(column, chrome.tab_bar) {
+                return target;
+            }
+            return HitTarget::TopBar;
+        }
         if hit_rect(chrome.top_bar, column, row) {
+            if let Some(target) = header_chip_at(column, chrome.top_bar) {
+                return target;
+            }
             return HitTarget::TopBar;
         }
         if hit_rect(chrome.status_bar, column, row) {
@@ -251,4 +278,147 @@ fn hit_rect(rect: ratatui::layout::Rect, column: u16, row: u16) -> bool {
         && column < rect.x.saturating_add(rect.width)
         && row >= rect.y
         && row < rect.y.saturating_add(rect.height)
+}
+
+/// Find header chip under coordinate, if any.
+fn header_chip_at(column: u16, top_bar: ratatui::layout::Rect) -> Option<HitTarget> {
+    let right = top_bar.x.saturating_add(top_bar.width);
+    if top_bar.width >= 90 {
+        // [Alt+B Inspector] (width 17) -> [right - 18 .. right - 1]
+        let insp_start = right.saturating_sub(18);
+        let insp_end = right.saturating_sub(1);
+        if column >= insp_start && column < insp_end {
+            return Some(HitTarget::HeaderChipInspector);
+        }
+        // [? Keymap] (width 10) -> [right - 29 .. right - 19]
+        let keymap_start = right.saturating_sub(29);
+        let keymap_end = right.saturating_sub(19);
+        if column >= keymap_start && column < keymap_end {
+            return Some(HitTarget::HeaderChipKeymap);
+        }
+        // [Ctrl+K Search] (width 15) -> [right - 45 .. right - 30]
+        let search_start = right.saturating_sub(45);
+        let search_end = right.saturating_sub(30);
+        if column >= search_start && column < search_end {
+            return Some(HitTarget::HeaderChipSearch);
+        }
+    } else if top_bar.width >= 60 {
+        // Compact chips
+        // [Alt+B] (width 7) -> [right - 8 .. right - 1]
+        let insp_start = right.saturating_sub(8);
+        let insp_end = right.saturating_sub(1);
+        if column >= insp_start && column < insp_end {
+            return Some(HitTarget::HeaderChipInspector);
+        }
+        // [? Keymap] (width 10) -> [right - 19 .. right - 9]
+        let keymap_start = right.saturating_sub(19);
+        let keymap_end = right.saturating_sub(9);
+        if column >= keymap_start && column < keymap_end {
+            return Some(HitTarget::HeaderChipKeymap);
+        }
+        // [Ctrl+K] (width 8) -> [right - 28 .. right - 20]
+        let search_start = right.saturating_sub(28);
+        let search_end = right.saturating_sub(20);
+        if column >= search_start && column < search_end {
+            return Some(HitTarget::HeaderChipSearch);
+        }
+    }
+    None
+}
+
+/// Find workspace tab or tab action under coordinate, if any.
+fn tab_at(column: u16, tab_bar: ratatui::layout::Rect) -> Option<HitTarget> {
+    let start = tab_bar.x.saturating_add(1);
+    const TAB_WIDTH: u16 = 16;
+    const TAB_GAP: u16 = 1;
+    for i in 0..3 {
+        let tab_start = start.saturating_add(i * (TAB_WIDTH + TAB_GAP));
+        let tab_end = tab_start.saturating_add(TAB_WIDTH);
+        if tab_end > tab_bar.x.saturating_add(tab_bar.width) {
+            break;
+        }
+        if column >= tab_start && column < tab_end {
+            if column >= tab_end.saturating_sub(2) {
+                return Some(HitTarget::WorkspaceTabClose { index: i as usize });
+            }
+            return Some(HitTarget::WorkspaceTab { index: i as usize });
+        }
+    }
+    let new_start = start.saturating_add(3 * (TAB_WIDTH + TAB_GAP));
+    let new_end = new_start.saturating_add(5);
+    if column >= new_start
+        && column <= new_end
+        && new_end <= tab_bar.x.saturating_add(tab_bar.width)
+    {
+        return Some(HitTarget::WorkspaceTabNew);
+    }
+    None
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::layout::partition;
+    use ratatui::layout::Rect;
+
+    #[test]
+    fn header_chips_hit_test_correctly() {
+        let chrome = partition(Rect::new(0, 0, 100, 30), None);
+        let panes = LayoutRects::default();
+        let rows = SidebarRows::default();
+
+        // [Alt+B Inspector] at [100 - 18 .. 100 - 1] = 82..99
+        assert_eq!(
+            HitTest::hit(90, 0, &panes, &chrome, &rows),
+            HitTarget::HeaderChipInspector
+        );
+        // [? Keymap] at [100 - 29 .. 100 - 19] = 71..81
+        assert_eq!(
+            HitTest::hit(75, 0, &panes, &chrome, &rows),
+            HitTarget::HeaderChipKeymap
+        );
+        // [Ctrl+K Search] at [100 - 45 .. 100 - 30] = 55..70
+        assert_eq!(
+            HitTest::hit(60, 0, &panes, &chrome, &rows),
+            HitTarget::HeaderChipSearch
+        );
+        // Outside chips on top bar
+        assert_eq!(
+            HitTest::hit(10, 0, &panes, &chrome, &rows),
+            HitTarget::TopBar
+        );
+    }
+
+    #[test]
+    fn workspace_tabs_hit_test_correctly() {
+        let chrome = partition(Rect::new(0, 0, 100, 30), None);
+        let panes = LayoutRects::default();
+        let rows = SidebarRows::default();
+
+        // Row 1 is tab_bar
+        // Tab 0 is at 1..17
+        assert_eq!(
+            HitTest::hit(5, 1, &panes, &chrome, &rows),
+            HitTarget::WorkspaceTab { index: 0 }
+        );
+        // Tab 0 close button (×) is at 15..17
+        assert_eq!(
+            HitTest::hit(16, 1, &panes, &chrome, &rows),
+            HitTarget::WorkspaceTabClose { index: 0 }
+        );
+        // Tab 1 is at 18..34
+        assert_eq!(
+            HitTest::hit(22, 1, &panes, &chrome, &rows),
+            HitTarget::WorkspaceTab { index: 1 }
+        );
+        // Tab 1 close button is at 32..34
+        assert_eq!(
+            HitTest::hit(33, 1, &panes, &chrome, &rows),
+            HitTarget::WorkspaceTabClose { index: 1 }
+        );
+        // [+] button is at 52..56
+        assert_eq!(
+            HitTest::hit(53, 1, &panes, &chrome, &rows),
+            HitTarget::WorkspaceTabNew
+        );
+    }
 }

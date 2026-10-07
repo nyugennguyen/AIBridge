@@ -264,30 +264,48 @@ impl ApprovalModal for ModalHost {
             return crate::input::traits::ModalOutcome::Consumed;
         };
         let area = crate::widgets::modal::modal_rect(self.screen);
-        let outcome = match modal.action_at(area, column, row) {
-            Some(action) => {
-                modal.focused = action.target();
-                // Abort cancels the job rather than deciding this prompt, and
-                // `ApprovalModalState::outcome` maps it to `Dismissed` because the
-                // widget has no way to express "cancel the job". Translating it here
-                // is what makes the button do what it says -- as `Dismissed` it would
-                // close the modal and send nothing at all.
-                if action == crate::widgets::modal::ModalAction::Abort {
-                    crate::input::traits::ModalOutcome::Abort
-                } else {
-                    modal.outcome()
+        let card_area = crate::widgets::modal::embedded_card_rect(self.screen);
+
+        let card_action = modal.card_action_at(card_area, column, row);
+        let outcome = match card_action {
+            Some(crate::widgets::modal::CardAction::ApproveOnce) => {
+                crate::input::traits::ModalOutcome::Approve {
+                    scope: crate::input::traits::ApproveScope::Apply,
                 }
             }
-            // Inside the modal but not on a button: move focus, decide nothing.
-            None if column >= area.x
-                && column < area.x.saturating_add(area.width)
-                && row >= area.y
-                && row < area.y.saturating_add(area.height) =>
-            {
-                modal.focused = target;
+            Some(crate::widgets::modal::CardAction::Deny) => {
+                crate::input::traits::ModalOutcome::Reject {
+                    justification: None,
+                }
+            }
+            Some(crate::widgets::modal::CardAction::RevisePrompt) => {
+                modal.focused = crate::input::traits::FocusTarget::Justification;
+                modal.typing = true;
                 crate::input::traits::ModalOutcome::Consumed
             }
-            None => crate::input::traits::ModalOutcome::Consumed,
+            None => match modal.action_at(area, column, row) {
+                Some(action) => {
+                    modal.focused = action.target();
+                    if action == crate::widgets::modal::ModalAction::Abort {
+                        crate::input::traits::ModalOutcome::Abort
+                    } else {
+                        modal.outcome()
+                    }
+                }
+                None if (column >= area.x
+                    && column < area.x.saturating_add(area.width)
+                    && row >= area.y
+                    && row < area.y.saturating_add(area.height))
+                    || (column >= card_area.x
+                        && column < card_area.x.saturating_add(card_area.width)
+                        && row >= card_area.y
+                        && row < card_area.y.saturating_add(card_area.height)) =>
+                {
+                    modal.focused = target;
+                    crate::input::traits::ModalOutcome::Consumed
+                }
+                None => crate::input::traits::ModalOutcome::Consumed,
+            },
         };
         if outcome == crate::input::traits::ModalOutcome::Consumed {
             self.modal = Some(modal);
@@ -299,34 +317,10 @@ impl ApprovalModal for ModalHost {
         &mut self,
         event: &crate::input::traits::KeyEventLike,
     ) -> crate::input::traits::ModalOutcome {
-        // The modal is TAKEN before the outcome is computed, and put back only if the
-        // key was not a decision.
-        //
-        // Every terminal outcome means the prompt's job is done -- dismissed,
-        // approved, rejected, or aborted -- and a prompt that stays on screen after
-        // its decision has been sent is a prompt the operator has to stare through
-        // while the next one waits behind it. Restoring it on `Consumed` is what
-        // keeps a keystroke that means nothing here from looking like a dismissal.
-        //
-        // This was a live bug, not a design choice: the engine emits
-        // `Action::ModalClosed` for a dismissal, and nothing consumed it, so `Esc`
-        // did nothing at all and neither did approving. An operator looking at a
-        // blocked job had no way to move forward AND no way to back out.
         let Some(mut modal) = self.modal.take() else {
             return crate::input::traits::ModalOutcome::Consumed;
         };
-        if let Some(character) = event.char {
-            if modal.typing || modal.focused == crate::input::traits::FocusTarget::Justification {
-                modal.justification.push(character);
-            }
-        }
-        let outcome = match event.named {
-            Some(crate::input::traits::NamedKey::Enter) => modal.outcome(),
-            Some(crate::input::traits::NamedKey::Esc) => {
-                crate::input::traits::ModalOutcome::Dismissed
-            }
-            _ => crate::input::traits::ModalOutcome::Consumed,
-        };
+        let outcome = modal.handle_key(event);
         if outcome == crate::input::traits::ModalOutcome::Consumed {
             self.modal = Some(modal);
         }
@@ -418,13 +412,7 @@ impl Session {
             sidebar: SidebarScroll::default(),
             modal: None,
             scroll,
-            chrome: ChromeRects {
-                full: Rect::new(0, 0, 0, 0),
-                top_bar: Rect::new(0, 0, 0, 0),
-                sidebar: None,
-                canvas: Rect::new(0, 0, 0, 0),
-                status_bar: Rect::new(0, 0, 0, 0),
-            },
+            chrome: ChromeRects::default(),
             rects: LayoutRects::default(),
             rows: SidebarRows::default(),
             outbound: Vec::new(),
@@ -488,6 +476,12 @@ pub fn draw(
             scroll: &session.scroll,
         };
         captured = Some(render_frame(&session.ui, &input, frame.buffer_mut()));
+        if let Some(palette) = &session.input.command_palette {
+            crate::widgets::draw_command_palette(palette, frame.area(), frame.buffer_mut());
+        }
+        if let Some(keymap) = &session.input.keymap_modal {
+            crate::widgets::draw_keymap_modal(keymap, frame.area(), frame.buffer_mut());
+        }
     })?;
     // Remembered OUTSIDE the closure: the render closure borrows `session`
     // immutably, so writing back into it from inside would not compile. This is also
@@ -511,8 +505,37 @@ pub fn handle_event(session: &mut Session, event: Event, now: Instant) -> bool {
         Event::Key(key) => {
             // `Release` is ignored: with keyboard enhancement enabled, a key that
             // repeats produces press/release pairs, and acting on the release would
-            // send every held key twice.
             if key.kind == KeyEventKind::Release {
+                return session.input.detach_requested();
+            }
+            if let Some(mut palette) = session.input.command_palette.take() {
+                let outcome = palette.handle_key(&key);
+                match outcome {
+                    crate::input::PaletteOutcome::Consumed => {
+                        session.input.command_palette = Some(palette);
+                    }
+                    crate::input::PaletteOutcome::Execute(cmd) => {
+                        actions.extend(cmd.to_actions(&session.ui));
+                    }
+                    crate::input::PaletteOutcome::Dismissed => {}
+                }
+                session.pending_actions.extend(actions);
+                return session.input.detach_requested();
+            }
+            if let Some(mut keymap) = session.input.keymap_modal.take() {
+                let outcome = keymap.handle_key(&key);
+                match outcome {
+                    crate::input::KeymapOutcome::Consumed => {
+                        session.input.keymap_modal = Some(keymap);
+                    }
+                    crate::input::KeymapOutcome::SwitchProfile(profile) => {
+                        session.ui.presentation.keybinding_profile = profile;
+                        actions.push(crate::input::Action::SwitchProfile(profile));
+                        session.input.keymap_modal = Some(keymap);
+                    }
+                    crate::input::KeymapOutcome::Dismissed => {}
+                }
+                session.pending_actions.extend(actions);
                 return session.input.detach_requested();
             }
             let mut modal = ModalHost::new(session.modal.take(), session.chrome.full);
@@ -528,6 +551,44 @@ pub fn handle_event(session: &mut Session, event: Event, now: Instant) -> bool {
             session.modal = modal.modal;
         }
         Event::Mouse(mouse) => {
+            if let Some(mut palette) = session.input.command_palette.take() {
+                let outcome = palette.click_at(
+                    crate::widgets::command_palette_rect(session.chrome.full),
+                    mouse.column,
+                    mouse.row,
+                );
+                match outcome {
+                    crate::input::PaletteOutcome::Consumed => {
+                        session.input.command_palette = Some(palette);
+                    }
+                    crate::input::PaletteOutcome::Execute(cmd) => {
+                        actions.extend(cmd.to_actions(&session.ui));
+                    }
+                    crate::input::PaletteOutcome::Dismissed => {}
+                }
+                session.pending_actions.extend(actions);
+                return session.input.detach_requested();
+            }
+            if let Some(mut keymap) = session.input.keymap_modal.take() {
+                let outcome = keymap.click_at(
+                    crate::widgets::keymap_modal_rect(session.chrome.full),
+                    mouse.column,
+                    mouse.row,
+                );
+                match outcome {
+                    crate::input::KeymapOutcome::Consumed => {
+                        session.input.keymap_modal = Some(keymap);
+                    }
+                    crate::input::KeymapOutcome::SwitchProfile(profile) => {
+                        session.ui.presentation.keybinding_profile = profile;
+                        actions.push(crate::input::Action::SwitchProfile(profile));
+                        session.input.keymap_modal = Some(keymap);
+                    }
+                    crate::input::KeymapOutcome::Dismissed => {}
+                }
+                session.pending_actions.extend(actions);
+                return session.input.detach_requested();
+            }
             let mut modal = ModalHost::new(session.modal.take(), session.chrome.full);
             actions = crate::input::mouse(
                 &mut session.input,
@@ -640,11 +701,35 @@ pub fn drain_actions(session: &mut Session) -> Vec<Outbound> {
                 }
             }
             crate::input::Action::Detach => {}
-            // Everything else is local presentation (focus, zoom, split ratio,
-            // scroll), a clipboard write, a link open, or a shell-level request
-            // needing information the engine does not have — `spawn_pane` needs a
-            // command and a working directory, and neither is something a click can
-            // say.
+            crate::input::Action::FocusApprovalCard => {
+                if let Some(job) = session.ui.blocked_job() {
+                    if let Some(pane) = session
+                        .ui
+                        .world
+                        .panes
+                        .values()
+                        .find(|p| p.job_id.as_deref() == Some(&job.id))
+                    {
+                        session.layout.focused = Some(pane.id.clone());
+                    }
+                    if session.modal.is_none() {
+                        session.modal =
+                            Some(crate::widgets::modal::ApprovalModalState::new(job.clone()));
+                    }
+                }
+            }
+            crate::input::Action::OpenCommandPalette => {
+                session.input.command_palette =
+                    Some(crate::input::menu::CommandPaletteState::new());
+            }
+            crate::input::Action::OpenKeymapModal => {
+                session.input.keymap_modal = Some(crate::input::menu::KeymapModalState::new(
+                    session.ui.presentation.keybinding_profile,
+                ));
+            }
+            crate::input::Action::SwitchProfile(profile) => {
+                session.ui.presentation.keybinding_profile = profile;
+            }
             _ => {}
         }
     }

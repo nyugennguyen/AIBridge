@@ -51,6 +51,14 @@ export interface CliDeps {
     readonly configPath?: string
     readonly reason?: string
     readonly preflight?: unknown
+    readonly launchTui?: boolean
+    readonly daemon?: {
+      readonly installed: boolean
+      readonly unitPath: string | null
+      readonly command: string | null
+      readonly started: boolean
+      readonly error: string | null
+    }
   }>
   /** Start a tmux profile (opencode + bridge windows). */
   readonly startProfile: (profile: string) => Promise<{
@@ -194,6 +202,37 @@ function helpText(): string {
   ].join("\n")
 }
 
+/**
+ * Returns the ASCII splash banner with brand colors matching
+ * Docs/assets/logos/logo-design-system.html:
+ * Electric Cyan, Neural Violet, and Mesh Emerald.
+ */
+export function getCliBanner(hasColor = true): string {
+  const cyan = hasColor ? "\x1b[38;2;0;240;255m" : ""
+  const violet = hasColor ? "\x1b[38;2;168;85;247m" : ""
+  const emerald = hasColor ? "\x1b[38;2;16;185;129m" : ""
+  const dim = hasColor ? "\x1b[2m" : ""
+  const reset = hasColor ? "\x1b[0m" : ""
+
+  return [
+    `${cyan} █████╗ ██╗██████╗ ██████╗ ██╗██████╗  ██████╗ ███████╗${reset}`,
+    `${cyan}██╔══██╗██║██╔══██╗██╔══██╗██║██╔══██╗██╔════╝ ██╔════╝${reset}`,
+    `${violet}███████║██║██████╔╝██████╔╝██║██║  ██║██║  ███╗█████╗  ${reset}`,
+    `${violet}██╔══██║██║██╔══██╗██╔══██╗██║██║  ██║██║   ██║██╔══╝  ${reset}`,
+    `${emerald}██║  ██║██║██████╔╝██║  ██║██║██████╔╝╚██████╔╝███████╗${reset}`,
+    `${emerald}╚═╝  ╚═╝╚═╝╚═════╝ ╚═╝  ╚═╝╚═╝╚═════╝  ╚═════╝ ╚══════╝${reset}`,
+    `${dim}[ aibr v2.0 ] > Tailscale Mesh Control Plane for AI Agents${reset}`,
+  ].join("\n")
+}
+
+/**
+ * Prints the CLI splash banner to stdout or custom writer.
+ */
+export function printCliBanner(writer?: (s: string) => void, hasColor = true): void {
+  const out = writer ?? ((s: string) => process.stdout.write(s))
+  out(getCliBanner(hasColor) + "\n")
+}
+
 // ── Profile validation ─────────────────────────────────────────────────
 
 /**
@@ -232,6 +271,9 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<Cl
   }
 
   if (args.hasFlag("--version")) {
+    if (deps.isTTY) {
+      printCliBanner(deps.writer)
+    }
     deps.writer(`${deps.version}\n`)
     return 0
   }
@@ -262,11 +304,30 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<Cl
       deps.writer("Error: setup requires an interactive TTY\n")
       return 1
     }
+    printCliBanner(deps.writer)
     try {
       const outcome = await deps.runSetup(args.profile ?? undefined)
       switch (outcome.kind) {
         case "persisted":
           deps.writer(`Profile "${outcome.profileName}" created. Config: ${outcome.configPath}\n`)
+          // The supervisor unit is `KeepAlive`, so "written but not running" is
+          // the single most misleading thing setup can report. Say which it is.
+          if (outcome.daemon) {
+            if (outcome.daemon.error !== null) {
+              deps.writer(`Daemon: not started (${outcome.daemon.error})\n`)
+            } else if (outcome.daemon.started) {
+              deps.writer("Daemon: started\n")
+            } else if (outcome.daemon.installed) {
+              deps.writer(
+                `Daemon: unit written to ${outcome.daemon.unitPath ?? "?"} but not started. Start it with: ${outcome.daemon.command ?? "?"}\n`,
+              )
+            } else {
+              deps.writer("Daemon: no supervisor unit written on this platform\n")
+            }
+          }
+          if (outcome.launchTui && deps.runTui) {
+            return await deps.runTui(outcome.profileName ?? "default")
+          }
           return 0
         case "blocked":
           deps.writer(`Setup blocked: ${outcome.reason ?? "unknown reason"}\n`)
@@ -732,7 +793,7 @@ async function createRealDeps(): Promise<CliDeps> {
         isTTY: Boolean(process.stdin?.isTTY),
       })
       const result = await runUpdate(options, {
-        currentVersion: "2.0.0",
+        currentVersion: "2.1.0",
         processRunner,
         prompter,
         isTTY: Boolean(process.stdout?.isTTY),
@@ -768,7 +829,7 @@ async function createRealDeps(): Promise<CliDeps> {
       }
     },
 
-    version: "2.0.0",
+    version: "2.1.0",
   }
 }
 

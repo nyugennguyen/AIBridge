@@ -153,13 +153,13 @@ fn a_pane_shows_its_emulators_output() {
         &mut buffer,
     );
 
-    // The canvas starts at row 1 (below the header), column 24 (past the sidebar).
-    let body = line(&buffer, 1);
+    // The canvas starts at row 2 (below the 2-row header), column 0 (with right sidebar).
+    let body = line(&buffer, 2);
     assert!(
         body.contains("$ opencode refactor"),
         "the pane did not render its output: {body:?}"
     );
-    assert!(line(&buffer, 2).contains("Reading AST"));
+    assert!(line(&buffer, 3).contains("Reading AST"));
 }
 
 #[test]
@@ -184,7 +184,7 @@ fn truecolor_reaches_the_buffer() {
         &mut buffer,
     );
 
-    let cell = &buffer[(24, 1)];
+    let cell = &buffer[(0, 2)];
     assert_eq!(
         cell.fg,
         ratatui::style::Color::Rgb(255, 0, 128),
@@ -214,13 +214,13 @@ fn a_wide_glyph_occupies_two_columns_and_is_not_drawn_twice() {
         &mut buffer,
     );
 
-    assert!(has_glyph(&buffer, 24, 1), "the wide glyph's first column");
+    assert!(has_glyph(&buffer, 0, 2), "the wide glyph's first column");
     assert!(
-        !has_glyph(&buffer, 25, 1),
+        !has_glyph(&buffer, 1, 2),
         "the second column is a continuation and must stay blank, or the glyph renders twice"
     );
     assert!(
-        has_glyph(&buffer, 26, 1),
+        has_glyph(&buffer, 2, 2),
         "the next glyph lands two columns on"
     );
 }
@@ -391,7 +391,7 @@ fn a_zoomed_pane_takes_the_whole_canvas() {
         1,
         "a zoom hides its siblings rather than drawing them underneath"
     );
-    assert!(line(&buffer, 1).contains("ZOOMED"));
+    assert!(line(&buffer, 2).contains("ZOOMED"));
 }
 
 #[test]

@@ -34,6 +34,26 @@ export interface SetupPersisted {
   readonly profileName: string
   readonly configPath: string
   readonly preflight: PreflightResult
+  readonly launchTui?: boolean
+  /**
+   * What happened to the platform supervisor unit, if one was written.
+   *
+   * Reported rather than logged and dropped: a `KeepAlive` unit that was never
+   * activated looks identical to one that is running until an operator goes
+   * looking for a process.
+   */
+  readonly daemon?: DaemonOutcome
+}
+
+/** Why the wizard wrote a supervisor unit and why it did or did not start it. */
+export interface DaemonOutcome {
+  readonly installed: boolean
+  readonly unitPath: string | null
+  /** The exact command that activates it, for an operator running it by hand. */
+  readonly command: string | null
+  readonly started: boolean
+  /** Populated when writing or starting failed; the setup itself still succeeded. */
+  readonly error: string | null
 }
 
 export interface SetupBlocked {
@@ -48,6 +68,8 @@ export interface SetupDeclined {
 }
 
 export type SetupOutcome = SetupPersisted | SetupBlocked | SetupDeclined
+
+export * from "./daemonizer.js"
 
 // ── File operations interface ──────────────────────────────────────────
 

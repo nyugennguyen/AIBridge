@@ -23,19 +23,19 @@ fn sidebar_rows() -> SidebarRows {
     SidebarRows {
         entries: vec![
             (
-                row(1),
+                row(2),
                 LayoutHitTarget::SidebarWorkspace {
                     workspace_id: "ws-1".to_owned(),
                 },
             ),
             (
-                row(2),
+                row(3),
                 LayoutHitTarget::SidebarJob {
                     job_id: "job-1".to_owned(),
                 },
             ),
             (
-                row(3),
+                row(4),
                 LayoutHitTarget::SidebarQueueItem {
                     job_id: "job-2".to_owned(),
                 },
@@ -93,26 +93,28 @@ fn every_hit_target_resolves_from_the_render_geometry() {
     // Status bar.
     assert_eq!(hit(0, 29), LayoutHitTarget::StatusBar);
     // Sidebar rows.
+    let sx = chrome.sidebar.unwrap().x;
+    // Sidebar rows.
     assert_eq!(
-        hit(2, 1),
+        hit(sx + 2, 2),
         LayoutHitTarget::SidebarWorkspace {
             workspace_id: "ws-1".to_owned()
         }
     );
     assert_eq!(
-        hit(2, 2),
+        hit(sx + 2, 3),
         LayoutHitTarget::SidebarJob {
             job_id: "job-1".to_owned()
         }
     );
     assert_eq!(
-        hit(2, 3),
+        hit(sx + 2, 4),
         LayoutHitTarget::SidebarQueueItem {
             job_id: "job-2".to_owned()
         }
     );
     // Sidebar, on no row.
-    assert_eq!(hit(2, 10), LayoutHitTarget::Sidebar);
+    assert_eq!(hit(sx + 2, 10), LayoutHitTarget::Sidebar);
     // A pane, and the seam between the two panes.
     let (column, row) = inside_pane_a();
     assert_eq!(
@@ -183,6 +185,62 @@ fn a_click_in_a_pane_focuses_it() {
     assert!(actions.contains(&Action::FocusPane {
         pane_id: "pane-a".to_owned()
     }));
+}
+
+/// A double click on a pane titlebar toggles zoom.
+#[test]
+fn double_click_pane_header_toggles_zoom() {
+    let mut layout = two_pane_layout();
+    let mut state = input();
+    let mut ui = two_pane_state();
+    crate::common::focus(&mut ui, &mut layout, "pane-b");
+    let mut pane = FakePane::default();
+    let r = rects(&layout);
+    let pane_rect = r.panes.get("pane-a").unwrap();
+    let (col, row) = (pane_rect.area.x + 2, pane_rect.area.y);
+    let t1 = now();
+
+    // First click focuses
+    let actions1 = mouse(
+        &mut state,
+        &press(col, row),
+        &r,
+        &chrome(),
+        &sidebar_rows(),
+        t1,
+        &mut ui,
+        &mut pane,
+        &mut FakeList::default(),
+        &mut layout,
+        &mut FakeModal::default(),
+    );
+    assert!(actions1.contains(&Action::FocusPane {
+        pane_id: "pane-a".to_owned()
+    }));
+    assert_eq!(ui.presentation.zoomed, None);
+
+    // Second click within 200ms at same titlebar coordinate toggles zoom
+    let t2 = crate::common::later(t1, 150);
+    let actions2 = mouse(
+        &mut state,
+        &press(col, row),
+        &r,
+        &chrome(),
+        &sidebar_rows(),
+        t2,
+        &mut ui,
+        &mut pane,
+        &mut FakeList::default(),
+        &mut layout,
+        &mut FakeModal::default(),
+    );
+    assert_eq!(
+        actions2,
+        vec![Action::ZoomPane {
+            pane_id: Some("pane-a".to_owned())
+        }]
+    );
+    assert_eq!(ui.presentation.zoomed.as_deref(), Some("pane-a"));
 }
 
 /// A click on a sidebar workspace row makes it active, on the daemon too.
@@ -295,7 +353,12 @@ fn the_wheel_scrolls_where_it_is_pointed_and_nowhere_else() {
     let mut list = FakeList::default();
     let actions = mouse(
         &mut state,
-        &press_mods(MouseEventKind::ScrollDown, 2, 2, KeyModifiers::NONE),
+        &press_mods(
+            MouseEventKind::ScrollDown,
+            chrome().sidebar.unwrap().x + 2,
+            2,
+            KeyModifiers::NONE,
+        ),
         &rects,
         &chrome(),
         &sidebar_rows(),

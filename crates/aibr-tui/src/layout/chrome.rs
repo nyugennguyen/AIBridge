@@ -30,9 +30,8 @@ pub const SIDEBAR_MIN: u16 = 24;
 /// operator came to read.
 pub const SIDEBAR_MAX: u16 = 32;
 
-/// The width the shell starts with.
-pub const SIDEBAR_DEFAULT: u16 = SIDEBAR_MIN;
-
+/// The width the shell starts with (28 columns for right inspector sidebar).
+pub const SIDEBAR_DEFAULT: u16 = 28;
 /// The sidebar width, type-aliased so a caller cannot pass a height by mistake.
 pub type SidebarWidth = u16;
 
@@ -47,7 +46,7 @@ pub fn clamp_sidebar(requested: SidebarWidth, terminal_width: u16) -> SidebarWid
 }
 
 /// The chrome rectangles for one frame.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ChromeRects {
     /// The whole area the layout was computed for.
     ///
@@ -55,9 +54,13 @@ pub struct ChromeRects {
     /// be handed an area that disagrees with the rects it is drawing into. That
     /// disagreement is invisible in a screenshot and maddening in use.
     pub full: Rect,
-    /// The single-row header: Tailscale status, workspace, outbox count.
+    /// The 2-row top header bar region: Tailscale mesh status, breadcrumbs, status pills, chips, and tabs.
+    pub top_header_bar: Rect,
+    /// The single-row header (Row 1): Tailscale status, breadcrumbs, agent status pills, quick action chips.
     pub top_bar: Rect,
-    /// The workspace tree, or `None` when collapsed or unaffordable.
+    /// The single-row workspace tab bar (Row 2): numbered tab badges (Alt+1..N) and new tab button.
+    pub tab_bar: Rect,
+    /// The collapsible right inspector sidebar, or `None` when collapsed or unaffordable.
     pub sidebar: Option<Rect>,
     /// Everything left for panes.
     pub canvas: Rect,

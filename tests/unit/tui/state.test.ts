@@ -4,6 +4,8 @@ import {
   initialTuiState,
   reduceTui,
   routeTuiKey,
+  buildInspectorLines,
+  buildTelemetrySummary,
 } from "../../../src/tui/index.js"
 
 const snapshot = {
@@ -120,5 +122,56 @@ describe("TUI pure reducer and view model", () => {
     expect(rendered).not.toContain("line-0\n")
     expect(rendered).toContain("INPUT — Ctrl+] returns to commands")
     expect(rendered.split("\n").length).toBeLessThanOrEqual(18)
+  })
+  it("integrates telemetry and collapsible inspector in view model", () => {
+    let state = reduceTui(initialTuiState({ columns: 120, rows: 40 }), { type: "loaded", snapshot })
+    expect(routeTuiKey(state, { name: "b", alt: true })).toEqual({ type: "dispatch", action: { type: "toggle-inspector" } })
+    expect(routeTuiKey(state, { name: "b", sequence: "\x1bb" })).toEqual({ type: "dispatch", action: { type: "toggle-inspector" } })
+
+    state = reduceTui(state, { type: "toggle-inspector" })
+    expect(state.inspectorVisible).toBe(true)
+
+    const defaultInspector = buildInspectorLines(state)
+    expect(defaultInspector.some((l) => l.includes("Mesh & Run Inspector"))).toBe(true)
+    expect(defaultInspector.some((l) => l.includes("macbook-local [Host]"))).toBe(true)
+    expect(defaultInspector.some((l) => l.includes("dev-vps [24ms]"))).toBe(true)
+    expect(defaultInspector.some((l) => l.includes("gpu-cluster [68ms]"))).toBe(true)
+    expect(defaultInspector.some((l) => l.includes("✔ Plan [Done]"))).toBe(true)
+    expect(defaultInspector.some((l) => l.includes("● Execute [Working]"))).toBe(true)
+    expect(defaultInspector.some((l) => l.includes("▲ Verify [Blocked]"))).toBe(true)
+    expect(defaultInspector.some((l) => l.includes("cost $0.18 | tokens 24.8k | secret redactions 14"))).toBe(true)
+
+    let view = buildTuiView(state)
+    expect(view).toContain("Mesh & Run Inspector")
+    expect(view).toContain("macbook-local [Host]")
+
+    state = reduceTui(state, {
+      type: "telemetry-updated",
+      telemetry: {
+        cost: "$0.42",
+        tokens: "50k",
+        secretRedactions: 7,
+        enrolledNodes: [
+          { name: "custom-host", isHost: true },
+          { name: "worker-1", latency: "12ms" },
+        ],
+        tasks: [
+          { name: "Compile", status: "Done" },
+          { name: "Test", status: "Working" },
+        ],
+      },
+    })
+
+    expect(buildTelemetrySummary(state)).toContain("cost $0.42 | tokens 50k | secret redactions 7")
+    view = buildTuiView(state)
+    expect(view).toContain("custom-host [Host]")
+    expect(view).toContain("worker-1 [12ms]")
+    expect(view).toContain("cost $0.42 | tokens 50k | secret redactions 7")
+
+    state = reduceTui(state, { type: "toggle-inspector" })
+    expect(state.inspectorVisible).toBe(false)
+    view = buildTuiView(state)
+    expect(view).not.toContain("Mesh & Run Inspector")
+    expect(view).toContain("cost $0.42 | tokens 50k | secret redactions 7")
   })
 })

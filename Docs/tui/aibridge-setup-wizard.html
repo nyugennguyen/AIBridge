@@ -1,0 +1,881 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AIBridge Setup Wizard — Interactive TUI Onboarding</title>
+  <style>
+    :root {
+      --bg-terminal: oklch(10% 0.02 260);
+      --bg-surface: oklch(14% 0.025 260);
+      --bg-elevated: oklch(18% 0.03 260);
+      --bg-panel: oklch(12% 0.022 260);
+      --bg-hover: oklch(22% 0.035 260);
+      --bg-active: oklch(26% 0.04 260);
+
+      --border-subtle: oklch(22% 0.02 260);
+      --border-normal: oklch(30% 0.03 260);
+      --border-bright: oklch(45% 0.06 260);
+      --border-focus: oklch(78% 0.16 205);
+
+      --fg-primary: oklch(98% 0.005 260);
+      --fg-secondary: oklch(76% 0.015 260);
+      --fg-muted: oklch(52% 0.018 260);
+      --fg-dim: oklch(38% 0.015 260);
+
+      --cyan: oklch(78% 0.16 205);
+      --cyan-dim: oklch(78% 0.16 205 / 0.18);
+      --violet: oklch(72% 0.20 295);
+      --violet-dim: oklch(72% 0.20 295 / 0.18);
+      --green: oklch(80% 0.21 142);
+      --green-dim: oklch(80% 0.21 142 / 0.18);
+      --amber: oklch(78% 0.19 72);
+      --amber-dim: oklch(78% 0.19 72 / 0.2);
+      --red: oklch(65% 0.24 28);
+
+      --font-mono: "JetBrains Mono", "SF Mono", "Fira Code", monospace;
+      --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", sans-serif;
+      --radius-sm: 4px;
+      --radius-md: 8px;
+      --radius-lg: 14px;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
+    
+    body {
+      background-color: var(--bg-terminal);
+      color: var(--fg-primary);
+      font-family: var(--font-mono);
+      font-size: 13px;
+      height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      overflow: hidden;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* Outer TUI Window */
+    .tui-window {
+      width: 860px;
+      height: 640px;
+      background: var(--bg-surface);
+      border: 1px solid var(--border-normal);
+      border-radius: var(--radius-lg);
+      box-shadow: 0 24px 60px oklch(0% 0 0 / 0.7);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      position: relative;
+    }
+
+    /* Window Header / Titlebar */
+    .window-header {
+      background: var(--bg-panel);
+      border-bottom: 1px solid var(--border-subtle);
+      height: 42px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 16px;
+      flex-shrink: 0;
+    }
+
+    .header-branding {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .header-logo {
+      width: 22px;
+      height: 22px;
+    }
+
+    .header-title {
+      font-weight: 700;
+      font-size: 13px;
+      letter-spacing: 0.3px;
+      color: var(--fg-primary);
+    }
+    .header-title span { color: var(--cyan); }
+
+    .header-badge {
+      background: var(--cyan-dim);
+      color: var(--cyan);
+      font-size: 10px;
+      padding: 2px 7px;
+      border-radius: 3px;
+      font-weight: 600;
+      border: 1px solid oklch(78% 0.16 205 / 0.3);
+    }
+
+    .window-controls {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .control-dot {
+      width: 11px;
+      height: 11px;
+      border-radius: 50%;
+    }
+    .dot-close { background: oklch(65% 0.22 25); }
+    .dot-min { background: oklch(75% 0.18 70); }
+    .dot-max { background: oklch(78% 0.18 142); }
+
+    /* Stepper Navigation Bar */
+    .stepper-nav {
+      background: oklch(11% 0.02 260);
+      border-bottom: 1px solid var(--border-subtle);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 18px;
+      flex-shrink: 0;
+    }
+
+    .step-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 11px;
+      color: var(--fg-muted);
+      cursor: pointer;
+      transition: all 0.15s ease;
+      padding: 4px 8px;
+      border-radius: var(--radius-sm);
+    }
+    .step-item:hover { color: var(--fg-secondary); background: var(--bg-hover); }
+    .step-item.active {
+      color: var(--cyan);
+      font-weight: 700;
+      background: var(--cyan-dim);
+    }
+    .step-item.completed {
+      color: var(--green);
+    }
+
+    .step-num {
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: var(--bg-elevated);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 10px;
+      font-weight: 700;
+    }
+    .step-item.active .step-num {
+      background: var(--cyan);
+      color: #000;
+    }
+    .step-item.completed .step-num {
+      background: var(--green);
+      color: #000;
+    }
+
+    .step-divider {
+      color: var(--fg-dim);
+      font-size: 11px;
+    }
+
+    /* Main Content Form Area */
+    .wizard-body {
+      flex: 1;
+      padding: 24px 28px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .step-content {
+      display: none;
+      flex-direction: column;
+      gap: 18px;
+      height: 100%;
+      animation: fadeIn 0.18s ease;
+    }
+    .step-content.active { display: flex; }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .step-title-wrap {
+      border-bottom: 1px solid var(--border-subtle);
+      padding-bottom: 12px;
+    }
+    .step-title {
+      font-size: 16px;
+      font-weight: 700;
+      color: var(--fg-primary);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .step-desc {
+      color: var(--fg-secondary);
+      font-size: 12px;
+      margin-top: 4px;
+    }
+
+    /* Cards & Form Widgets */
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .form-label {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--fg-secondary);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .input-box {
+      background: var(--bg-panel);
+      border: 1px solid var(--border-normal);
+      border-radius: var(--radius-sm);
+      color: var(--fg-primary);
+      font-family: var(--font-mono);
+      font-size: 13px;
+      padding: 8px 12px;
+      outline: none;
+      transition: border-color 0.15s ease;
+    }
+    .input-box:focus {
+      border-color: var(--border-focus);
+      box-shadow: 0 0 0 1px var(--border-focus);
+    }
+
+    .input-with-button {
+      display: flex;
+      gap: 8px;
+    }
+    .input-with-button input { flex: 1; }
+
+    .btn-secondary {
+      background: var(--bg-elevated);
+      color: var(--fg-primary);
+      border: 1px solid var(--border-normal);
+      font-family: var(--font-mono);
+      font-size: 12px;
+      padding: 8px 14px;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.15s ease;
+    }
+    .btn-secondary:hover {
+      background: var(--bg-hover);
+      border-color: var(--border-bright);
+    }
+
+    /* Checkbox & Options */
+    .check-card {
+      background: var(--bg-panel);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-sm);
+      padding: 10px 14px;
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .check-card:hover {
+      background: var(--bg-hover);
+      border-color: var(--border-normal);
+    }
+    .check-card.checked {
+      border-color: var(--cyan);
+      background: oklch(16% 0.03 205 / 0.4);
+    }
+
+    .custom-checkbox {
+      width: 16px;
+      height: 16px;
+      border-radius: 3px;
+      border: 1px solid var(--border-bright);
+      background: var(--bg-elevated);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-top: 2px;
+      flex-shrink: 0;
+      color: var(--cyan);
+      font-size: 11px;
+      font-weight: 700;
+    }
+    .check-card.checked .custom-checkbox {
+      background: var(--cyan);
+      color: #000;
+      border-color: var(--cyan);
+    }
+
+    .check-card-content {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .check-card-title {
+      font-weight: 600;
+      font-size: 12px;
+      color: var(--fg-primary);
+    }
+    .check-card-desc {
+      font-size: 11px;
+      color: var(--fg-muted);
+    }
+
+    /* Diagnostic Probes */
+    .probe-row {
+      background: var(--bg-panel);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-sm);
+      padding: 10px 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .probe-info {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .probe-status {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .status-ok { color: var(--green); }
+    .status-warn { color: var(--amber); }
+
+    /* Footer Action Buttons */
+    .wizard-footer {
+      background: var(--bg-panel);
+      border-top: 1px solid var(--border-subtle);
+      height: 52px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 20px;
+      flex-shrink: 0;
+    }
+
+    .footer-hints {
+      color: var(--fg-muted);
+      font-size: 11px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .footer-hints kbd {
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-subtle);
+      padding: 1px 5px;
+      border-radius: 3px;
+      color: var(--fg-secondary);
+      font-size: 10px;
+    }
+
+    .footer-buttons {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .btn-primary {
+      background: var(--cyan);
+      color: #000;
+      border: none;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      font-weight: 700;
+      padding: 8px 18px;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      transition: filter 0.15s ease;
+    }
+    .btn-primary:hover {
+      filter: brightness(1.15);
+    }
+
+    /* Toast */
+    .toast {
+      position: absolute;
+      top: 50px;
+      right: 20px;
+      background: var(--bg-elevated);
+      border: 1px solid var(--cyan);
+      color: var(--fg-primary);
+      padding: 8px 14px;
+      border-radius: var(--radius-sm);
+      font-size: 12px;
+      box-shadow: 0 8px 24px oklch(0% 0 0 / 0.5);
+      opacity: 0;
+      transform: translateY(-8px);
+      transition: all 0.2s ease;
+      pointer-events: none;
+      z-index: 50;
+    }
+    .toast.show {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  </style>
+</head>
+<body>
+
+<div class="tui-window" id="setupApp">
+  <!-- Window Header -->
+  <header class="window-header">
+    <div class="header-branding">
+      <svg class="header-logo" viewBox="0 0 512 512" fill="none">
+        <rect width="512" height="512" rx="112" fill="#0e1017"/>
+        <path d="M 104 368 L 408 368" stroke="#00f0ff" stroke-width="24" stroke-linecap="round"/>
+        <path d="M 148 368 L 176 156 L 208 368" stroke="#00f0ff" stroke-width="24" stroke-linejoin="round"/>
+        <path d="M 304 368 L 336 156 L 364 368" stroke="#00f0ff" stroke-width="24" stroke-linejoin="round"/>
+        <path d="M 104 350 Q 186 168 256 220 Q 326 272 408 170" stroke="#a855f7" stroke-width="28" stroke-linecap="round"/>
+        <circle cx="256" cy="220" r="16" fill="#10b981"/>
+      </svg>
+      <div class="header-title">AI<span>Bridge</span> Onboarding Wizard</div>
+      <div class="header-badge">aibr setup v2.0</div>
+    </div>
+    
+    <div class="window-controls">
+      <div class="control-dot dot-close"></div>
+      <div class="control-dot dot-min"></div>
+      <div class="control-dot dot-max"></div>
+    </div>
+  </header>
+
+  <!-- Horizontal Stepper Nav -->
+  <nav class="stepper-nav" id="stepperNav">
+    <div class="step-item active" data-step="1">
+      <div class="step-num">1</div>
+      <span>Network</span>
+    </div>
+    <div class="step-divider">──▶</div>
+
+    <div class="step-item" data-step="2">
+      <div class="step-num">2</div>
+      <span>Security</span>
+    </div>
+    <div class="step-divider">──▶</div>
+
+    <div class="step-item" data-step="3">
+      <div class="step-num">3</div>
+      <span>Allowlists</span>
+    </div>
+    <div class="step-divider">──▶</div>
+
+    <div class="step-item" data-step="4">
+      <div class="step-num">4</div>
+      <span>AI Runtimes</span>
+    </div>
+    <div class="step-divider">──▶</div>
+
+    <div class="step-item" data-step="5">
+      <div class="step-num">5</div>
+      <span>Install & Test</span>
+    </div>
+  </nav>
+
+  <!-- Wizard Step Bodies -->
+  <main class="wizard-body">
+    
+    <!-- STEP 1: Network & Tailscale Discovery -->
+    <div class="step-content active" id="step1">
+      <div class="step-title-wrap">
+        <div class="step-title">🌐 Network & Tailscale Interface Discovery</div>
+        <div class="step-desc">Verify local network topology and auto-detect your private Tailscale mesh coordinates.</div>
+      </div>
+
+      <div class="probe-row">
+        <div class="probe-info">
+          <span>🔒</span>
+          <div>
+            <div style="font-weight: 600;">Tailscale Daemon (tailscaled)</div>
+            <div style="font-size: 11px; color: var(--fg-muted);">Active socket at /var/run/tailscaled.sock</div>
+          </div>
+        </div>
+        <div class="probe-status status-ok">
+          <span>●</span> <span>RUNNING</span>
+        </div>
+      </div>
+
+      <div class="probe-row">
+        <div class="probe-info">
+          <span>📡</span>
+          <div>
+            <div style="font-weight: 600;">Tailscale Mesh IPv4 Coordinate</div>
+            <div style="font-size: 11px; color: var(--fg-muted);">Bound to utun3 (100.64.0.0/10 Carrier Grade NAT)</div>
+          </div>
+        </div>
+        <div style="font-weight: 700; color: var(--cyan); font-size: 13px;">
+          100.64.42.18
+        </div>
+      </div>
+
+      <div class="probe-row">
+        <div class="probe-info">
+          <span>🔌</span>
+          <div>
+            <div style="font-weight: 600;">Port Availability Preflight Check</div>
+            <div style="font-size: 11px; color: var(--fg-muted);">Verifying 4095 (Ingress Router) & 8787 (Fastify Bridge)</div>
+          </div>
+        </div>
+        <div class="probe-status status-ok">
+          <span>✔</span> <span>AVAILABLE (NO CONFLICTS)</span>
+        </div>
+      </div>
+
+      <div style="background: var(--bg-panel); border-left: 3px solid var(--cyan); padding: 10px 14px; border-radius: 0 var(--radius-sm) var(--radius-sm) 0; font-size: 11px; color: var(--fg-secondary);">
+        <strong>Tailnet Verification:</strong> Traffic to AIBridge port 4095 will be constrained strictly to your private tailnet peers via constant-time bearer validation.
+      </div>
+    </div>
+
+    <!-- STEP 2: Security & Token Invariants -->
+    <div class="step-content" id="step2">
+      <div class="step-title-wrap">
+        <div class="step-title">🛡️ Router Security & Invariants Enforcement</div>
+        <div class="step-desc">Configure constant-time bearer credentials and hard safety floor rules.</div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Listening Port (Ingress Router)</label>
+        <input type="text" class="input-box" id="portInput" value="4095" style="width: 140px;">
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Bearer Authentication Secret Token</label>
+        <div class="input-with-button">
+          <input type="text" class="input-box" id="tokenInput" value="aibr_sec_8f9024b81c2e4318a9942a1b94d1f05e" readonly>
+          <button class="btn-secondary" id="regenTokenBtn">
+            <span>🔄 Regenerate</span>
+            <kbd>r</kbd>
+          </button>
+          <button class="btn-secondary" id="copyTokenBtn">
+            <span>📋 Copy</span>
+          </button>
+        </div>
+        <div style="font-size: 11px; color: var(--fg-muted); margin-top: 2px;">Generated via 128-bit CSPRNG (16 bytes). Stored with 0600 permissions under ~/.config/aibridge/</div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Security Floor Invariants</label>
+        
+        <div class="check-card checked" data-invariant="const-time">
+          <div class="custom-checkbox">✔</div>
+          <div class="check-card-content">
+            <div class="check-card-title">Enforce Constant-Time Token Comparison</div>
+            <div class="check-card-desc">Prevents timing side-channel attacks during admission handshake.</div>
+          </div>
+        </div>
+
+        <div class="check-card checked" data-invariant="body-limit">
+          <div class="custom-checkbox">✔</div>
+          <div class="check-card-content">
+            <div class="check-card-title">Enforce Strict 2 MB Body Payload Cap</div>
+            <div class="check-card-desc">Disallows oversized JSON injections and memory exhaustion DOS vectors.</div>
+          </div>
+        </div>
+
+        <div class="check-card checked" data-invariant="redact">
+          <div class="custom-checkbox">✔</div>
+          <div class="check-card-content">
+            <div class="check-card-title">Automated Secret Redaction Pipeline</div>
+            <div class="check-card-desc">Scrubs API keys, passwords, and private tokens before writing to disk or terminals.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- STEP 3: Project Allowlists -->
+    <div class="step-content" id="step3">
+      <div class="step-title-wrap">
+        <div class="step-title">📁 Project Allowlists & Containment Boundaries</div>
+        <div class="step-desc">Specify canonical project roots. Agents are strictly contained to authorized paths.</div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Allowlisted Workspaces</label>
+        
+        <div class="check-card checked" data-path="aibr">
+          <div class="custom-checkbox">✔</div>
+          <div class="check-card-content">
+            <div class="check-card-title">/Users/mac/Projects/AIBrigde</div>
+            <div class="check-card-desc">Active repository root (contains AGENTS.md, src/, crates/)</div>
+          </div>
+        </div>
+
+        <div class="check-card checked" data-path="demo">
+          <div class="custom-checkbox">✔</div>
+          <div class="check-card-content">
+            <div class="check-card-title">/Users/mac/Projects/paryaj-demo</div>
+            <div class="check-card-desc">Secondary project linked to OpenDesign prototypes</div>
+          </div>
+        </div>
+
+        <div class="check-card" data-path="custom">
+          <div class="custom-checkbox"></div>
+          <div class="check-card-content">
+            <div class="check-card-title">/Users/mac/Projects/scratchpad</div>
+            <div class="check-card-desc">Optional sandbox directory for temporary spikes</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Add Custom Directory Path</label>
+        <div class="input-with-button">
+          <input type="text" class="input-box" placeholder="/absolute/path/to/project">
+          <button class="btn-secondary">+ Add Allowlist</button>
+        </div>
+      </div>
+
+      <div style="background: var(--bg-panel); border-left: 3px solid var(--amber); padding: 10px 14px; border-radius: 0 var(--radius-sm) var(--radius-sm) 0; font-size: 11px; color: var(--fg-secondary);">
+        <strong>Fail-Closed Subpath Policy:</strong> Any path outside these roots or any symlink target escaping this boundary will trigger an immediate hard <code>403 Forbidden</code> dispatch rejection.
+      </div>
+    </div>
+
+    <!-- STEP 4: AI Agent Runtimes Diagnostics -->
+    <div class="step-content" id="step4">
+      <div class="step-title-wrap">
+        <div class="step-title">🤖 AI Agent Runtime Discovery & Loopback Ping</div>
+        <div class="step-desc">Test loopback connectivity and PTY capabilities of local CLI agent tools.</div>
+      </div>
+
+      <div class="probe-row">
+        <div class="probe-info">
+          <span style="font-size: 18px;">⚡</span>
+          <div>
+            <div style="font-weight: 600;">OpenCode Serve Loopback (127.0.0.1:4096)</div>
+            <div style="font-size: 11px; color: var(--fg-muted);">Loopback password auth & SSE event stream</div>
+          </div>
+        </div>
+        <div class="probe-status status-ok">
+          <span>✔</span> <span>CONNECTED (HTTP 200)</span>
+        </div>
+      </div>
+
+      <div class="probe-row">
+        <div class="probe-info">
+          <span style="font-size: 18px;">🧠</span>
+          <div>
+            <div style="font-weight: 600;">Claude Code CLI Binary</div>
+            <div style="font-size: 11px; color: var(--fg-muted);">Detected at /usr/local/bin/claude (v1.4.2) • Headless mode verified</div>
+          </div>
+        </div>
+        <div class="probe-status status-ok">
+          <span>✔</span> <span>READY</span>
+        </div>
+      </div>
+
+      <div class="probe-row">
+        <div class="probe-info">
+          <span style="font-size: 18px;">🛠️</span>
+          <div>
+            <div style="font-weight: 600;">Codex CLI Runtime</div>
+            <div style="font-size: 11px; color: var(--fg-muted);">Detected at ~/.codex/bin/codex (v0.9.1) • Exec session handle verified</div>
+          </div>
+        </div>
+        <div class="probe-status status-ok">
+          <span>✔</span> <span>READY</span>
+        </div>
+      </div>
+
+      <div style="display: flex; justify-content: flex-end;">
+        <button class="btn-secondary" id="retestRuntimesBtn">🔄 Retest All Runtimes</button>
+      </div>
+    </div>
+
+    <!-- STEP 5: Installation & Preflight Self-Test -->
+    <div class="step-content" id="step5">
+      <div class="step-title-wrap">
+        <div class="step-title">🚀 Installation & System Service Daemonization</div>
+        <div class="step-desc">Save configuration, initialize SQLite WAL queues, and launch services.</div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">System Background Service Provider</label>
+        <div class="check-card checked" id="launchdOption">
+          <div class="custom-checkbox">✔</div>
+          <div class="check-card-content">
+            <div class="check-card-title">macOS launchd Daemon (~/Library/LaunchAgents/com.aibridge.daemon.plist)</div>
+            <div class="check-card-desc">Automatically starts aibr-router and worker on login with auto-restart.</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Preflight Health Audit</label>
+        <div class="probe-row">
+          <div class="probe-info">
+            <span>💾</span>
+            <span>SQLite WAL Queue Database (~/.aibridge/ingress_outbox.db)</span>
+          </div>
+          <span class="status-ok">INITIALIZED</span>
+        </div>
+        <div class="probe-row">
+          <div class="probe-info">
+            <span>🔑</span>
+            <span>Config Zod Schema Validation & File Permissions (0600)</span>
+          </div>
+          <span class="status-ok">VERIFIED</span>
+        </div>
+        <div class="probe-row">
+          <div class="probe-info">
+            <span>🌐</span>
+            <span>Tailscale Router Handshake Verification</span>
+          </div>
+          <span class="status-ok">READY</span>
+        </div>
+      </div>
+
+      <div style="background: var(--green-dim); border: 1px solid var(--green); border-radius: var(--radius-sm); padding: 12px; color: var(--green); font-weight: 600; text-align: center;">
+        🎉 Onboarding Complete! AIBridge is configured and ready to coordinate mesh agents.
+      </div>
+    </div>
+
+  </main>
+
+  <!-- Wizard Footer Controls -->
+  <footer class="wizard-footer">
+    <div class="footer-hints">
+      <span><kbd>Tab</kbd> Focus</span>
+      <span><kbd>Space</kbd> Toggle</span>
+      <span><kbd>Enter</kbd> Continue</span>
+      <span><kbd>Esc</kbd> Back</span>
+    </div>
+
+    <div class="footer-buttons">
+      <button class="btn-secondary" id="prevBtn" style="display: none;">◀ Back</button>
+      <button class="btn-primary" id="nextBtn">Continue ▶</button>
+    </div>
+  </footer>
+
+  <div class="toast" id="toast">Token copied to clipboard!</div>
+</div>
+
+<script>
+  (function () {
+    let currentStep = 1;
+    const totalSteps = 5;
+
+    const stepItems = document.querySelectorAll('.step-item');
+    const stepContents = document.querySelectorAll('.step-content');
+    const prevBtn = document.getElementById('prevBtn');
+    const nextBtn = document.getElementById('nextBtn');
+    const tokenInput = document.getElementById('tokenInput');
+    const regenBtn = document.getElementById('regenTokenBtn');
+    const copyBtn = document.getElementById('copyTokenBtn');
+    const toast = document.getElementById('toast');
+
+    function showToast(msg) {
+      toast.textContent = msg;
+      toast.classList.add('show');
+      setTimeout(() => toast.classList.remove('show'), 2200);
+    }
+
+    function goToStep(step) {
+      if (step < 1 || step > totalSteps) return;
+      currentStep = step;
+
+      stepItems.forEach(item => {
+        const s = parseInt(item.dataset.step, 10);
+        item.classList.remove('active');
+        if (s === currentStep) item.classList.add('active');
+        if (s < currentStep) item.classList.add('completed');
+        else item.classList.remove('completed');
+      });
+
+      stepContents.forEach(c => c.classList.remove('active'));
+      const activeContent = document.getElementById(`step${currentStep}`);
+      if (activeContent) activeContent.classList.add('active');
+
+      prevBtn.style.display = currentStep === 1 ? 'none' : 'inline-flex';
+      nextBtn.textContent = currentStep === totalSteps ? 'Launch aibr tui 🚀' : 'Continue ▶';
+    }
+
+    stepItems.forEach(item => {
+      item.addEventListener('click', () => {
+        goToStep(parseInt(item.dataset.step, 10));
+      });
+    });
+
+    prevBtn.addEventListener('click', () => goToStep(currentStep - 1));
+    nextBtn.addEventListener('click', () => {
+      if (currentStep === totalSteps) {
+        showToast('Launching aibr tui session...');
+        setTimeout(() => {
+          window.location.href = 'index.html';
+        }, 800);
+      } else {
+        goToStep(currentStep + 1);
+      }
+    });
+
+    // Checkbox toggles
+    document.querySelectorAll('.check-card').forEach(card => {
+      card.addEventListener('click', () => {
+        card.classList.toggle('checked');
+        const box = card.querySelector('.custom-checkbox');
+        box.textContent = card.classList.contains('checked') ? '✔' : '';
+      });
+    });
+
+    // Token regeneration
+    function generateToken() {
+      const chars = '0123456789abcdef';
+      let rand = '';
+      for (let i = 0; i < 32; i++) {
+        rand += chars[Math.floor(Math.random() * chars.length)];
+      }
+      return 'aibr_sec_' + rand;
+    }
+
+    regenBtn.addEventListener('click', () => {
+      tokenInput.value = generateToken();
+      showToast('Generated new CSPRNG Bearer Token');
+    });
+
+    copyBtn.addEventListener('click', () => {
+      navigator.clipboard.writeText(tokenInput.value);
+      showToast('Bearer Token copied to clipboard!');
+    });
+
+    document.getElementById('retestRuntimesBtn')?.addEventListener('click', () => {
+      showToast('Re-probed all runtimes: 3/3 Healthy');
+    });
+
+    // Keyboard navigation
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        nextBtn.click();
+      } else if (e.key === 'Escape') {
+        if (currentStep > 1) prevBtn.click();
+      } else if (e.key === 'r' && currentStep === 2) {
+        regenBtn.click();
+      } else if (['1', '2', '3', '4', '5'].includes(e.key) && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        goToStep(parseInt(e.key, 10));
+      }
+    });
+
+  })();
+</script>
+</body>
+</html>

@@ -293,3 +293,97 @@ fn expiry_is_not_needed_because_a_dismissed_modal_does_not_leak_a_timer() {
          would render against the previous one's"
     );
 }
+
+#[test]
+fn y_key_approves_once() {
+    let mut host = host(Rect::new(0, 0, 120, 40));
+    let event = aibr_tui::input::traits::KeyEventLike {
+        char: Some('y'),
+        ..Default::default()
+    };
+
+    let outcome = host.handle_key(&event);
+    assert_eq!(
+        outcome,
+        ModalOutcome::Approve {
+            scope: aibr_tui::input::traits::ApproveScope::Apply,
+        }
+    );
+    assert!(!host.is_open(), "y key decided and closed the prompt");
+}
+
+#[test]
+fn d_key_denies() {
+    let mut host = host(Rect::new(0, 0, 120, 40));
+    let event = aibr_tui::input::traits::KeyEventLike {
+        char: Some('d'),
+        ..Default::default()
+    };
+
+    let outcome = host.handle_key(&event);
+    assert_eq!(
+        outcome,
+        ModalOutcome::Reject {
+            justification: None
+        }
+    );
+    assert!(!host.is_open(), "d key denied and closed the prompt");
+}
+
+#[test]
+fn e_key_enters_prompt_revision_mode_and_submits_on_enter() {
+    let mut host = host(Rect::new(0, 0, 120, 40));
+    let e_event = aibr_tui::input::traits::KeyEventLike {
+        char: Some('e'),
+        ..Default::default()
+    };
+
+    let outcome = host.handle_key(&e_event);
+    assert_eq!(outcome, ModalOutcome::Consumed);
+    assert!(host.is_open(), "e key keeps card open for prompt revision");
+
+    for ch in "revise prompt".chars() {
+        host.handle_key(&aibr_tui::input::traits::KeyEventLike {
+            char: Some(ch),
+            ..Default::default()
+        });
+    }
+
+    let enter_event = aibr_tui::input::traits::KeyEventLike {
+        named: Some(aibr_tui::input::traits::NamedKey::Enter),
+        ..Default::default()
+    };
+    let final_outcome = host.handle_key(&enter_event);
+    assert_eq!(
+        final_outcome,
+        ModalOutcome::Reject {
+            justification: Some("revise prompt".to_owned())
+        }
+    );
+    assert!(!host.is_open());
+}
+
+#[test]
+fn embedded_card_actions_resolve_cleanly() {
+    use aibr_tui::widgets::CardAction;
+    let modal = ApprovalModalState::new(blocked_job());
+    let area = Rect::new(0, 0, 80, 24);
+    let rects = modal.card_button_rects(area);
+    assert_eq!(rects.len(), 3);
+
+    for (action, rect) in rects {
+        assert_eq!(modal.card_action_at(area, rect.x, rect.y), Some(action));
+    }
+    assert_eq!(CardAction::ALL.len(), 3);
+}
+
+#[test]
+fn risk_badge_and_countdown_are_present() {
+    let mut job = blocked_job();
+    job.detail = Some("rm -rf /tmp/build && deploy".to_owned());
+    let modal = ApprovalModalState::new(job);
+    let badge = modal.risk_badge();
+    assert_eq!(badge.level, aibr_tui::widgets::RiskLevel::High);
+    assert!(badge.text.contains("HIGH RISK"));
+    assert_eq!(modal.countdown_str(), "04:35");
+}

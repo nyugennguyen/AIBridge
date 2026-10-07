@@ -26,12 +26,31 @@ pub mod chrome;
 pub mod diff;
 pub mod frame;
 pub mod modal;
+pub mod setup;
 pub mod terminal;
 
-pub use chrome::{draw_chrome, SidebarSection};
-pub use diff::{draw_diff_pane, DiffLine, DiffView};
-pub use frame::{render_frame, FrameInput};
-pub use modal::{draw_approval_modal, modal_rect, ApprovalModalState, ModalAction};
+pub use chrome::{
+    draw_chrome, draw_inspector_sidebar, logo_mark_spans, InspectorWidget, SidebarSection,
+    TopHeaderBarWidget, WindowHeader, WorkspaceTabBarWidget, LOGO_ELECTRIC_CYAN, LOGO_MESH_EMERALD,
+    LOGO_NEURAL_VIOLET,
+};
+pub use diff::{
+    classify_diff_risk, draw_diff_pane, draw_embedded_diff_card, DiffLine, DiffView, RiskBadge,
+    RiskLevel,
+};
+pub use frame::{draw_overlays, render_frame, FrameInput};
+pub use modal::{
+    command_palette_rect, draw_approval_modal, draw_command_palette, draw_embedded_approval_card,
+    draw_keymap_modal, draw_setup_wizard_modal, embedded_card_rect, keymap_modal_rect,
+    setup_wizard_modal_rect, ApprovalModalState, CardAction, CommandPaletteWidget,
+    KeymapSetupModalWidget, ModalAction, OnboardingWizardModal, SetupWizardModalState,
+    SetupWizardModalWidget, BRAND_ELECTRIC_CYAN, BRAND_MESH_EMERALD, BRAND_NEURAL_VIOLET,
+};
+pub use setup::{
+    DirectorySelectorState, DirectorySelectorWidget, NetworkProbeState, NetworkProbeWidget,
+    ProbeStatus, ProjectDirectoryItem, RuntimeProbeState, RuntimeProbeWidget, StepperNavWidget,
+    TokenGeneratorState, TokenGeneratorWidget,
+};
 // `FocusTarget` lives in the input engine, which defines the modal's focus model;
 // re-exported so a widget consumer needs one `use`.
 pub use crate::input::traits::FocusTarget;

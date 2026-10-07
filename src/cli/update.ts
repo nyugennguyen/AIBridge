@@ -68,7 +68,7 @@ export async function runUpdate(
   options?: UpdateOptions,
   deps?: UpdateDeps,
 ): Promise<UpdateResult> {
-  const currentVersion = deps?.currentVersion ?? "2.0.0"
+  const currentVersion = deps?.currentVersion ?? "2.1.0"
   const fetchVersion = deps?.fetchLatestVersion ?? defaultFetchLatestVersion
 
   // ── 1. Fetch latest version from registry ──────────────────────────

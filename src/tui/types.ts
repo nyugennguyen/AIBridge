@@ -36,6 +36,25 @@ export type TuiActionControl =
   | "refresh" | "terminal" | "result" | "cancel" | "terminate" | "allow-once" | "deny"
   | "request-input" | "takeover" | "detach" | "back"
 
+export interface TuiTailscaleNodeInfo {
+  readonly name: string
+  readonly latency?: string
+  readonly isHost?: boolean
+}
+
+export interface TuiTaskDagNode {
+  readonly name: string
+  readonly status: "Done" | "Working" | "Blocked" | "Idle" | string
+}
+
+export interface TuiTelemetrySummary {
+  readonly cost?: string | number
+  readonly tokens?: string | number
+  readonly secretRedactions?: number
+  readonly enrolledNodes?: readonly TuiTailscaleNodeInfo[]
+  readonly tasks?: readonly TuiTaskDagNode[]
+}
+
 export interface TuiUiState {
   readonly shell: "booting" | "ready" | "too-small" | "fatal" | "closing" | "closed"
   readonly snapshot: TuiSnapshot | null
@@ -63,6 +82,8 @@ export interface TuiUiState {
   readonly terminalView: TerminalViewModel | null
   readonly takeoverReason: string
   readonly permissionDecision: "allow_once" | "deny" | null
+  readonly telemetry?: TuiTelemetrySummary | null
+  readonly inspectorVisible?: boolean
 }
 
 export type TuiAction =
@@ -92,6 +113,8 @@ export type TuiAction =
   | { readonly type: "fatal"; readonly message: string }
   | { readonly type: "closing" }
   | { readonly type: "closed" }
+  | { readonly type: "toggle-inspector" }
+  | { readonly type: "telemetry-updated"; readonly telemetry: TuiTelemetrySummary | null }
 
 export type TuiKeyIntent =
   | { readonly type: "dispatch"; readonly action: TuiAction }
@@ -104,4 +127,6 @@ export interface TuiKey {
   readonly ctrl?: boolean
   readonly sequence?: string
   readonly shift?: boolean
+  readonly meta?: boolean
+  readonly alt?: boolean
 }

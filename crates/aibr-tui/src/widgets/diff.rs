@@ -23,6 +23,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
+use ratatui::widgets::Widget;
 
 use crate::input::redact::{redact_with_report, ConservativeRedactor};
 use crate::input::traits::Redactor;
@@ -49,6 +50,155 @@ pub struct DiffView {
     pub lines: Vec<DiffLine>,
     /// First visible line index.
     pub top: usize,
+}
+
+impl DiffView {
+    /// Create a classified `DiffView` by parsing unified diff lines.
+    #[must_use]
+    pub fn from_patch(patch: &str) -> Self {
+        let lines = patch.lines().map(|line| classify(line).0).collect();
+        Self { lines, top: 0 }
+    }
+}
+
+/// Risk stratification levels for plan reviews and tool calls.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RiskLevel {
+    /// Destructive actions, file rewrites, database drops, privilege escalation.
+    High,
+    /// Shell executions, network egress, policy prompts.
+    Medium,
+    /// Read-only inspection or benign operation.
+    Low,
+}
+
+impl RiskLevel {
+    /// Human-readable label for the risk level.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::High => "HIGH RISK",
+            Self::Medium => "MEDIUM RISK",
+            Self::Low => "LOW RISK",
+        }
+    }
+
+    /// Color associated with the risk level.
+    #[must_use]
+    pub fn color(self) -> Color {
+        match self {
+            Self::High => Color::LightRed,
+            Self::Medium => Color::LightYellow,
+            Self::Low => Color::LightGreen,
+        }
+    }
+}
+
+/// A prominent badge displaying risk level and category.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RiskBadge {
+    /// The risk tier.
+    pub level: RiskLevel,
+    /// Display text including tier and category.
+    pub text: String,
+}
+
+impl RiskBadge {
+    /// Create a new risk badge for the given level and category.
+    #[must_use]
+    pub fn new(level: RiskLevel, category: &str) -> Self {
+        Self {
+            level,
+            text: format!("{}: {}", level.label(), category),
+        }
+    }
+}
+
+/// Classify the risk of a diff based on sensitive rules and content keywords.
+#[must_use]
+pub fn classify_diff_risk(lines: &[DiffLine], fallback_detail: Option<&str>) -> RiskBadge {
+    let mut has_high = false;
+    let mut high_reason = "FILE REWRITE";
+    let mut has_medium = false;
+    let mut medium_reason = "SHELL EXEC";
+
+    for line in lines {
+        let sensitive = sensitive_for(line);
+        for rule in sensitive {
+            match rule {
+                "destructive delete" => {
+                    return RiskBadge::new(RiskLevel::High, "DESTRUCTIVE SHELL");
+                }
+                "destructive sql" => {
+                    return RiskBadge::new(RiskLevel::High, "DESTRUCTIVE SQL");
+                }
+                "history rewrite" => {
+                    return RiskBadge::new(RiskLevel::High, "HISTORY REWRITE");
+                }
+                "privilege change" => {
+                    return RiskBadge::new(RiskLevel::High, "PRIVILEGE ESCALATION");
+                }
+                "credential path" => {
+                    return RiskBadge::new(RiskLevel::High, "CREDENTIAL ACCESS");
+                }
+                "network egress" => {
+                    has_medium = true;
+                    medium_reason = "NETWORK EGRESS";
+                }
+                _ => {}
+            }
+        }
+        match line {
+            DiffLine::Added(text) | DiffLine::Removed(text) => {
+                let lower = text.to_lowercase();
+                if lower.contains("rewrite")
+                    || lower.contains("truncate")
+                    || lower.contains("format")
+                {
+                    has_high = true;
+                    high_reason = "FILE REWRITE";
+                } else if lower.contains("exec")
+                    || lower.contains("sh ")
+                    || lower.contains("bash")
+                    || lower.contains("cargo ")
+                    || lower.contains("bun ")
+                {
+                    has_medium = true;
+                    medium_reason = "SHELL EXEC";
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if let Some(detail) = fallback_detail {
+        let lower = detail.to_lowercase();
+        if lower.contains("rm -rf")
+            || lower.contains("drop ")
+            || lower.contains("delete")
+            || lower.contains("rewrite")
+            || lower.contains("truncate")
+        {
+            return RiskBadge::new(RiskLevel::High, "FILE REWRITE");
+        }
+        if lower.contains("exec")
+            || lower.contains("shell")
+            || lower.contains("run")
+            || lower.contains("build")
+        {
+            return RiskBadge::new(RiskLevel::Medium, "SHELL EXEC");
+        }
+    }
+
+    if has_high {
+        RiskBadge::new(RiskLevel::High, high_reason)
+    } else if has_medium {
+        RiskBadge::new(RiskLevel::Medium, medium_reason)
+    } else if !lines.is_empty() {
+        RiskBadge::new(RiskLevel::High, "FILE REWRITE")
+    } else {
+        RiskBadge::new(RiskLevel::Medium, "SHELL EXEC")
+    }
 }
 
 /// Why a line was flagged.
@@ -158,7 +308,7 @@ pub fn draw_diff_pane(view: &DiffView, area: Rect, buffer: &mut Buffer) {
         let y = area.y + offset as u16;
         let (text, style) = match line {
             DiffLine::File(text) => (text.as_str(), Style::default().add_modifier(Modifier::BOLD)),
-            DiffLine::Hunk(text) => (text.as_str(), Style::default().fg(Color::DarkGray)),
+            DiffLine::Hunk(text) => (text.as_str(), Style::default().fg(Color::Cyan)),
             DiffLine::Added(text) => (text.as_str(), Style::default().fg(Color::LightGreen)),
             DiffLine::Removed(text) => (text.as_str(), Style::default().fg(Color::LightRed)),
             DiffLine::Context(text) => (text.as_str(), Style::default().fg(Color::DarkGray)),
@@ -226,4 +376,41 @@ fn write(buffer: &mut Buffer, area: Rect, text: &str, style: Style) {
         x += 1;
     }
     let _ = Span::raw("");
+}
+
+/// Draw an embedded diff card within the given area (e.g. inside a pane viewport).
+///
+/// Syntax-highlights additions in green (`+`), deletions in red (`-`),
+/// hunk headers in cyan (`@@`), and displays risk badges prominently.
+pub fn draw_embedded_diff_card(
+    view: &DiffView,
+    area: Rect,
+    risk_badge: Option<&RiskBadge>,
+    buffer: &mut Buffer,
+) {
+    if area.width < 6 || area.height < 3 {
+        return;
+    }
+
+    ratatui::widgets::Clear.render(area, buffer);
+
+    let default_badge = RiskBadge::new(RiskLevel::High, "FILE REWRITE");
+    let badge = risk_badge.unwrap_or(&default_badge);
+
+    let block = ratatui::widgets::Block::default()
+        .borders(ratatui::widgets::Borders::ALL)
+        .border_style(Style::default().fg(badge.level.color()))
+        .title(Span::styled(
+            format!(" {} ", badge.text),
+            Style::default()
+                .fg(badge.level.color())
+                .add_modifier(Modifier::BOLD),
+        ));
+
+    let inner = block.inner(area);
+    ratatui::widgets::Widget::render(block, area, buffer);
+
+    if inner.width > 0 && inner.height > 0 {
+        draw_diff_pane(view, inner, buffer);
+    }
 }

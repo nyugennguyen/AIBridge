@@ -117,6 +117,28 @@ pub fn mouse(
             }
             HitTarget::Pane { pane_id } => {
                 state.button_down = true;
+                let is_double_click =
+                    state
+                        .last_click
+                        .is_some_and(|(prev_time, prev_col, prev_row)| {
+                            now.saturating_duration_since(prev_time)
+                                <= std::time::Duration::from_millis(450)
+                                && event.column.abs_diff(prev_col) <= 2
+                                && event.row == prev_row
+                        });
+                state.last_click = Some((now, event.column, event.row));
+
+                let is_titlebar = rects
+                    .panes
+                    .get(pane_id)
+                    .is_some_and(|p| event.row == p.area.y);
+
+                if is_double_click && is_titlebar {
+                    let target = layout.toggle_zoom();
+                    ui.presentation.zoomed = target.clone();
+                    return vec![Action::ZoomPane { pane_id: target }];
+                }
+
                 let mut actions = focus_pane(ui, layout, pane_id);
                 actions.extend(begin_selection(state, rects, event, pane_id));
                 actions
@@ -125,10 +147,64 @@ pub fn mouse(
                 set_workspace(state, now, ui, workspace_id)
             }
             HitTarget::SidebarJob { job_id } => focus_job(ui, layout, job_id),
-            // A queue row opens on RIGHT click, where the plan puts the menu; a left
-            // click on it is a no-op rather than a guess.
+            HitTarget::HeaderChipSearch => vec![Action::OpenCommandPalette],
+            HitTarget::HeaderChipKeymap => vec![Action::OpenKeymapModal],
+            HitTarget::HeaderChipInspector => {
+                vec![Action::SidebarVisible(!ui.presentation.sidebar_visible)]
+            }
+            HitTarget::WorkspaceTab { index } => {
+                if let Some(ws_id) = ui.world.workspaces.keys().nth(*index).cloned() {
+                    set_workspace(state, now, ui, &ws_id)
+                } else {
+                    Vec::new()
+                }
+            }
+            HitTarget::WorkspaceTabClose { index } => {
+                if let Some(ws_id) = ui.world.workspaces.keys().nth(*index).cloned() {
+                    if let Some(pane_id) = ui
+                        .world
+                        .panes
+                        .values()
+                        .find(|p| p.workspace_id == ws_id)
+                        .map(|p| p.id.clone())
+                    {
+                        vec![Action::ClosePane { pane_id }]
+                    } else {
+                        Vec::new()
+                    }
+                } else {
+                    Vec::new()
+                }
+            }
+            HitTarget::WorkspaceTabNew => {
+                if let Some(ws_id) = ui.presentation.active_workspace.clone() {
+                    vec![Action::NewTabRequested {
+                        workspace_id: ws_id,
+                    }]
+                } else {
+                    Vec::new()
+                }
+            }
+            HitTarget::TopBar => {
+                let is_double_click =
+                    state
+                        .last_click
+                        .is_some_and(|(prev_time, prev_col, prev_row)| {
+                            now.saturating_duration_since(prev_time)
+                                <= std::time::Duration::from_millis(450)
+                                && event.column.abs_diff(prev_col) <= 2
+                                && event.row == prev_row
+                        });
+                state.last_click = Some((now, event.column, event.row));
+                if is_double_click {
+                    let target = layout.toggle_zoom();
+                    ui.presentation.zoomed = target.clone();
+                    vec![Action::ZoomPane { pane_id: target }]
+                } else {
+                    Vec::new()
+                }
+            }
             HitTarget::SidebarQueueItem { .. }
-            | HitTarget::TopBar
             | HitTarget::StatusBar
             | HitTarget::Sidebar
             | HitTarget::Canvas
@@ -625,6 +701,12 @@ fn wheel(
         }
         HitTarget::TopBar
         | HitTarget::StatusBar
+        | HitTarget::HeaderChipSearch
+        | HitTarget::HeaderChipKeymap
+        | HitTarget::HeaderChipInspector
+        | HitTarget::WorkspaceTab { .. }
+        | HitTarget::WorkspaceTabClose { .. }
+        | HitTarget::WorkspaceTabNew
         | HitTarget::Border { .. }
         | HitTarget::Canvas
         | HitTarget::None => Vec::new(),

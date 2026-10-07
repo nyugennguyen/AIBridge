@@ -1,5 +1,70 @@
 # Changelog
 
+## [2.1.0] - 2026-10-07
+
+### TUI control plane upgrade & onboarding wizard
+
+Implements the second phase of ADR 0010. Full record in
+[`Docs/implementation-reports/tui-deamon-update-07102026.md`](Docs/implementation-reports/tui-deamon-update-07102026.md).
+
+#### Added
+
+- **Dual-profile keybinding engine** (`crates/aibr-tui/src/input/`): Profile A exposes
+  zero-prefix `Alt+H/J/K/L` focus, `Alt+V`/`Alt+S` splits, `Alt+Z` zoom, `Alt+1..9` workspace
+  tabs, `Alt+B` inspector, and `Alt+Q` detach. Profile B arms the tmux-classic `Ctrl+B` prefix.
+- **Shell chrome**: 2-row top header with Tailscale health and agent status pills, a numbered
+  workspace tab bar with close/new hit-testing, and a status bar.
+- **Embedded in-pane HITL approval card and colourised diff viewer**, replacing the disruptive
+  full-screen takeover.
+- **Universal command palette** (`Ctrl+K`) with fuzzy filtering, and an interactive keymap /
+  profile-switcher modal.
+- **Collapsible 28-column inspector sidebar** with node latencies, run DAG, and telemetry.
+- **Brand identity**: ANSI logo, design-system colour tokens, and a 7-row CLI splash banner.
+- **5-step onboarding wizard** (`aibr setup`): network probe, security, project allowlists,
+  AI runtime probes, and install. Interactive keyboard and mouse parity, with a headless
+  fallback for non-interactive test suites.
+- **Platform supervisor generation**: launchd plist and systemd user unit.
+
+### Fixed
+
+- **The setup wizard no longer creates the ingress outbox.** The `ingress_outbox` table belongs
+  to the Rust router and is provisioned by `aibr-router --init-store`. The wizard was creating a
+  different set of columns at a path the router does not read, and reporting `walEnabled: true`
+  without reading `PRAGMA journal_mode` back. `aibr worker` documents why an implicitly-created
+  store is worse than none: the router refuses to serve against it, the worker drains an empty
+  one, and both look healthy.
+- **Supervisor units are written without being activated**, and `aibr setup` now asks before
+  starting the daemon. Both units are `KeepAlive`, so activating one whose config does not match
+  the router's store turns a setup mistake into a restart loop. Setup reports which of four
+  states the daemon is actually in, so a unit that was never started cannot read as running.
+- **Profile names and the binary path are escaped** when interpolated into a plist and a systemd
+  `ExecStart`. Units are now written `0600`.
+- `cargo fmt --all --check` and `cargo clippy --workspace --all-targets -- -D warnings` are
+  clean across the workspace.
+
+### Known limitations
+
+Carried forward from `tui-daemon-modernization.md` and unchanged by this release:
+
+- `approve_plan` / `reject_plan` reach the daemon and are answered `accepted: false`. The HITL
+  card renders and the frame is sent, but the engine's plan-review path sits behind the job
+  manager and is not wired yet.
+- The PTY host has no `PtySink` wired to the listener, so pane commands from a real client are
+  answered `not_allowed`. No real `opencode` has been run through the bus end to end.
+
+### Documentation corrections
+
+An earlier revision of the implementation report made four claims that the code did not support;
+they are corrected in place rather than left to mislead:
+
+- The `aibr_sec_<32-hex>` bearer token is **128 bits** (16 bytes), not 256. The mislabel also
+  appeared in `aibr-onboarding/SKILL.md` and the wizard mockup; both now say 128.
+- The `Ctrl+B` prefix window is **2000 ms**, not the 500 ms the report claimed. The longer
+  window is deliberate and documented in `tui-daemon-modernization.md` §5.
+- The wizard does **not** load the platform service daemon as part of a completed setup;
+  activation is a separate opt-in.
+- The HITL approval card does not yet produce an effective approval (`accepted: false`).
+
 ## [2.0.0] - 2026-10-05
 
 ### Major Architectural Evolution (v1 -> v2)

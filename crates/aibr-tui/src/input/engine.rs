@@ -40,12 +40,12 @@ use crate::input::keys::{encode_key, encode_paste};
 use crate::input::redact::redact_to_text;
 use crate::input::selection::{CellCoords, Selection};
 use crate::input::traits::{
-    ApprovalModal, ApproveScope, KeyEventLike, ModalOutcome, ScrollbackPane,
+    ApprovalModal, ApproveScope, FocusTarget, KeyEventLike, ModalOutcome, ScrollbackPane,
 };
 use crate::input::tree::PaneLayout;
 use crate::layout::tile::Focus;
 use crate::layout::Axis;
-use crate::state::{InputMode, PaneKind, Presentation, UiState};
+use crate::state::{InputMode, KeybindingProfile, PaneKind, Presentation, UiState};
 
 /// How long a `Ctrl+B` prefix stays armed.
 ///
@@ -119,6 +119,10 @@ pub struct InputState {
     pub(crate) prefix_armed_at: Option<Instant>,
     /// The open context menu, if any.
     pub(crate) menu: Option<crate::input::menu::ContextMenu>,
+    /// Universal command palette state when open.
+    pub command_palette: Option<crate::input::menu::CommandPaletteState>,
+    /// Keymap cheatsheet and profile switcher modal state when open.
+    pub keymap_modal: Option<crate::input::menu::KeymapModalState>,
     /// The active selection, if any.
     pub(crate) selection: Option<Selection>,
     /// What the pointer is doing.
@@ -136,6 +140,8 @@ pub struct InputState {
     /// Latched rather than left to a one-shot action, because a detach that is lost in
     /// a dropped frame leaves a client the operator cannot leave by keyboard.
     pub(crate) detach_requested: bool,
+    /// Last left click timestamp and coordinates for double-click detection.
+    pub(crate) last_click: Option<(Instant, u16, u16)>,
 }
 
 impl InputState {
@@ -149,6 +155,17 @@ impl InputState {
     #[must_use]
     pub fn menu(&self) -> Option<&crate::input::menu::ContextMenu> {
         self.menu.as_ref()
+    }
+    /// Universal command palette state when open, for rendering.
+    #[must_use]
+    pub fn command_palette(&self) -> Option<&crate::input::menu::CommandPaletteState> {
+        self.command_palette.as_ref()
+    }
+
+    /// Keymap cheatsheet modal state when open, for rendering.
+    #[must_use]
+    pub fn keymap_modal(&self) -> Option<&crate::input::menu::KeymapModalState> {
+        self.keymap_modal.as_ref()
     }
 
     /// The active selection, for the render pass to invert.
@@ -275,10 +292,20 @@ pub enum Chord {
     SplitHorizontal,
     /// Zoom or unzoom the focused pane.
     Zoom,
+    /// Close focused pane.
+    ClosePane,
+    /// Switch workspace tab (1..=9).
+    SwitchWorkspace(u8),
+    /// Jump focus directly to pending HITL approval card.
+    FocusApprovalCard,
     /// Toggle the sidebar.
     ToggleSidebar,
     /// Detach.
     Detach,
+    /// Open universal command palette modal.
+    OpenCommandPalette,
+    /// Open keybinding cheatsheet & profile switcher modal.
+    OpenKeymapModal,
 }
 
 impl Chord {
@@ -308,24 +335,147 @@ impl Chord {
     /// needs telling. [`ChordPolicy::ForwardToPane`] exists for that case.
     #[must_use]
     pub fn from_event(event: &KeyEvent) -> Option<Self> {
-        if !event.modifiers.contains(KeyModifiers::CONTROL)
-            || !event.modifiers.contains(KeyModifiers::ALT)
-            || event.modifiers.contains(KeyModifiers::SHIFT)
-            || event.modifiers.contains(KeyModifiers::SUPER)
+        Self::from_event_for_profile(event, KeybindingProfile::ModernErgonomic)
+    }
+
+    /// Recognise a chord according to the active keybinding profile.
+    #[must_use]
+    pub fn from_event_for_profile(event: &KeyEvent, profile: KeybindingProfile) -> Option<Self> {
+        // Universal command palette: Ctrl+K or Cmd+K (Super+K)
+        if (event.modifiers.contains(KeyModifiers::CONTROL)
+            || event.modifiers.contains(KeyModifiers::SUPER))
+            && !event.modifiers.contains(KeyModifiers::ALT)
+            && matches!(event.code, KeyCode::Char('k') | KeyCode::Char('K'))
         {
-            return None;
+            return Some(Self::OpenCommandPalette);
         }
-        match event.code {
-            KeyCode::Char('h') | KeyCode::Left => Some(Self::FocusLeft),
-            KeyCode::Char('j') | KeyCode::Down => Some(Self::FocusDown),
-            KeyCode::Char('k') | KeyCode::Up => Some(Self::FocusUp),
-            KeyCode::Char('l') | KeyCode::Right => Some(Self::FocusRight),
-            KeyCode::Char('v') | KeyCode::Char('d') => Some(Self::SplitVertical),
-            KeyCode::Char('-') => Some(Self::SplitHorizontal),
-            KeyCode::Char('z') => Some(Self::Zoom),
-            KeyCode::Char('b') => Some(Self::ToggleSidebar),
-            KeyCode::Char('q') => Some(Self::Detach),
-            _ => None,
+
+        // Keymap cheatsheet: F1 or Alt+?
+        if event.code == KeyCode::F(1) {
+            return Some(Self::OpenKeymapModal);
+        }
+        if event.modifiers.contains(KeyModifiers::ALT)
+            && !event.modifiers.contains(KeyModifiers::CONTROL)
+            && matches!(event.code, KeyCode::Char('?') | KeyCode::Char('/'))
+        {
+            return Some(Self::OpenKeymapModal);
+        }
+
+        // Backward compatibility: Ctrl+Alt chords work across profiles.
+        // Requires Ctrl+Alt, neither Shift nor Super.
+        if event.modifiers.contains(KeyModifiers::CONTROL)
+            && event.modifiers.contains(KeyModifiers::ALT)
+            && !event.modifiers.contains(KeyModifiers::SHIFT)
+            && !event.modifiers.contains(KeyModifiers::SUPER)
+        {
+            return match event.code {
+                KeyCode::Char('h') | KeyCode::Char('H') | KeyCode::Left => Some(Self::FocusLeft),
+                KeyCode::Char('j') | KeyCode::Char('J') | KeyCode::Down => Some(Self::FocusDown),
+                KeyCode::Char('k') | KeyCode::Char('K') | KeyCode::Up => Some(Self::FocusUp),
+                KeyCode::Char('l') | KeyCode::Char('L') | KeyCode::Right => Some(Self::FocusRight),
+                KeyCode::Char('v')
+                | KeyCode::Char('V')
+                | KeyCode::Char('d')
+                | KeyCode::Char('D') => Some(Self::SplitVertical),
+                KeyCode::Char('-') => Some(Self::SplitHorizontal),
+                KeyCode::Char('z') | KeyCode::Char('Z') => Some(Self::Zoom),
+                KeyCode::Char('b') | KeyCode::Char('B') => Some(Self::ToggleSidebar),
+                KeyCode::Char('q') | KeyCode::Char('Q') => Some(Self::Detach),
+                _ => None,
+            };
+        }
+
+        match profile {
+            KeybindingProfile::ModernErgonomic => {
+                // '?' alone opens keymap modal
+                if event.code == KeyCode::Char('?')
+                    && !event.modifiers.contains(KeyModifiers::CONTROL)
+                    && !event.modifiers.contains(KeyModifiers::ALT)
+                    && !event.modifiers.contains(KeyModifiers::SUPER)
+                {
+                    return Some(Self::OpenKeymapModal);
+                }
+
+                // Alt-chords: Alt present, Control absent, Super absent, Shift absent.
+                if !event.modifiers.contains(KeyModifiers::ALT)
+                    || event.modifiers.contains(KeyModifiers::CONTROL)
+                    || event.modifiers.contains(KeyModifiers::SUPER)
+                    || event.modifiers.contains(KeyModifiers::SHIFT)
+                {
+                    return None;
+                }
+
+                match event.code {
+                    KeyCode::Char('h') | KeyCode::Char('H') | KeyCode::Left => {
+                        Some(Self::FocusLeft)
+                    }
+                    KeyCode::Char('j') | KeyCode::Char('J') | KeyCode::Down => {
+                        Some(Self::FocusDown)
+                    }
+                    KeyCode::Char('k') | KeyCode::Char('K') | KeyCode::Up => Some(Self::FocusUp),
+                    KeyCode::Char('l') | KeyCode::Char('L') | KeyCode::Right => {
+                        Some(Self::FocusRight)
+                    }
+                    KeyCode::Char('v') | KeyCode::Char('V') => Some(Self::SplitVertical),
+                    KeyCode::Char('s') | KeyCode::Char('S') | KeyCode::Char('-') => {
+                        Some(Self::SplitHorizontal)
+                    }
+                    KeyCode::Char('z') | KeyCode::Char('Z') => Some(Self::Zoom),
+                    KeyCode::Char('w') | KeyCode::Char('W') => Some(Self::ClosePane),
+                    KeyCode::Char(c @ '1'..='9') => Some(Self::SwitchWorkspace((c as u8) - b'0')),
+                    KeyCode::Char('a') | KeyCode::Char('A') => Some(Self::FocusApprovalCard),
+                    KeyCode::Char('b') | KeyCode::Char('B') => Some(Self::ToggleSidebar),
+                    KeyCode::Char('q') | KeyCode::Char('Q') => Some(Self::Detach),
+                    _ => None,
+                }
+            }
+            KeybindingProfile::TmuxClassic => {
+                // In TmuxClassic, Ctrl+B prefix is primary. Zero-prefix Alt chords
+                // are not intercepted so terminal/readline Alt bindings pass through.
+                None
+            }
+            KeybindingProfile::VimCentric => {
+                // '?' alone opens keymap modal
+                if event.code == KeyCode::Char('?')
+                    && !event.modifiers.contains(KeyModifiers::CONTROL)
+                    && !event.modifiers.contains(KeyModifiers::ALT)
+                    && !event.modifiers.contains(KeyModifiers::SUPER)
+                {
+                    return Some(Self::OpenKeymapModal);
+                }
+
+                if !event.modifiers.contains(KeyModifiers::ALT)
+                    || event.modifiers.contains(KeyModifiers::CONTROL)
+                    || event.modifiers.contains(KeyModifiers::SUPER)
+                    || event.modifiers.contains(KeyModifiers::SHIFT)
+                {
+                    return None;
+                }
+
+                match event.code {
+                    KeyCode::Char('h') | KeyCode::Char('H') | KeyCode::Left => {
+                        Some(Self::FocusLeft)
+                    }
+                    KeyCode::Char('j') | KeyCode::Char('J') | KeyCode::Down => {
+                        Some(Self::FocusDown)
+                    }
+                    KeyCode::Char('k') | KeyCode::Char('K') | KeyCode::Up => Some(Self::FocusUp),
+                    KeyCode::Char('l') | KeyCode::Char('L') | KeyCode::Right => {
+                        Some(Self::FocusRight)
+                    }
+                    KeyCode::Char('v') | KeyCode::Char('V') => Some(Self::SplitVertical),
+                    KeyCode::Char('s') | KeyCode::Char('S') | KeyCode::Char('-') => {
+                        Some(Self::SplitHorizontal)
+                    }
+                    KeyCode::Char('z') | KeyCode::Char('Z') => Some(Self::Zoom),
+                    KeyCode::Char('w') | KeyCode::Char('W') => Some(Self::ClosePane),
+                    KeyCode::Char(c @ '1'..='9') => Some(Self::SwitchWorkspace((c as u8) - b'0')),
+                    KeyCode::Char('a') | KeyCode::Char('A') => Some(Self::FocusApprovalCard),
+                    KeyCode::Char('b') | KeyCode::Char('B') => Some(Self::ToggleSidebar),
+                    KeyCode::Char('q') | KeyCode::Char('Q') => Some(Self::Detach),
+                    _ => None,
+                }
+            }
         }
     }
 }
@@ -381,15 +531,15 @@ impl PrefixKey {
     pub fn from_event(event: &KeyEvent) -> Option<Self> {
         match event.code {
             KeyCode::Char('c') => Some(Self::NewTab),
-            KeyCode::Char('v') => Some(Self::SplitVertical),
-            KeyCode::Char('-') => Some(Self::SplitHorizontal),
+            KeyCode::Char('v') | KeyCode::Char('%') => Some(Self::SplitVertical),
+            KeyCode::Char('-') | KeyCode::Char('"') => Some(Self::SplitHorizontal),
             KeyCode::Char('h') | KeyCode::Left => Some(Self::Focus(Focus::Left)),
             KeyCode::Char('j') | KeyCode::Down => Some(Self::Focus(Focus::Down)),
             KeyCode::Char('k') | KeyCode::Up => Some(Self::Focus(Focus::Up)),
             KeyCode::Char('l') | KeyCode::Right => Some(Self::Focus(Focus::Right)),
             KeyCode::Char('z') => Some(Self::Zoom),
             KeyCode::Char('[') => Some(Self::CopyMode),
-            KeyCode::Char('q') => Some(Self::Detach),
+            KeyCode::Char('q') | KeyCode::Char('d') => Some(Self::Detach),
             KeyCode::Char('b') => Some(Self::ToggleSidebar),
             _ => None,
         }
@@ -449,10 +599,74 @@ pub fn key(
     layout: &mut dyn PaneLayout,
     modal: &mut dyn ApprovalModal,
 ) -> Vec<Action> {
-    // (1) The modal takes everything, including keys that would otherwise be chords
+    // (0) Palette modal interception, if active.
+    if let Some(palette) = &mut state.command_palette {
+        let outcome = palette.handle_key(event);
+        return match outcome {
+            crate::input::menu::PaletteOutcome::Dismissed => {
+                state.command_palette = None;
+                vec![Action::ModalClosed]
+            }
+            crate::input::menu::PaletteOutcome::Execute(cmd) => {
+                state.command_palette = None;
+                execute_palette_command(state, cmd, now, ui, layout)
+            }
+            crate::input::menu::PaletteOutcome::Consumed => Vec::new(),
+        };
+    }
+
+    // (0b) Keymap modal interception, if active.
+    if let Some(modal_state) = &mut state.keymap_modal {
+        let outcome = modal_state.handle_key(event);
+        return match outcome {
+            crate::input::menu::KeymapOutcome::Dismissed => {
+                state.keymap_modal = None;
+                vec![Action::ModalClosed]
+            }
+            crate::input::menu::KeymapOutcome::SwitchProfile(profile) => {
+                ui.presentation.keybinding_profile = profile;
+                vec![Action::SwitchProfile(profile)]
+            }
+            crate::input::menu::KeymapOutcome::Consumed => Vec::new(),
+        };
+    }
+
+    // (1) The approval modal takes everything, including keys that would otherwise be chords
     // or a prefix.
     if modal.is_open() {
         return route_to_modal(state, event, now, ui, modal);
+    }
+
+    // (1b) Safety floor: When agent/job is in Blocked state (even if embedded HITL card is used instead of full-screen modal),
+    // keys y/d/e route strictly to approval decisions and zero bytes leak to PTY.
+    if let Some(job) = ui.blocked_job() {
+        let no_ctrl_alt = !event.modifiers.contains(KeyModifiers::CONTROL)
+            && !event.modifiers.contains(KeyModifiers::ALT)
+            && !event.modifiers.contains(KeyModifiers::SUPER);
+        if no_ctrl_alt {
+            match event.code {
+                KeyCode::Char('y' | 'Y') => {
+                    return finish(
+                        state,
+                        now,
+                        commands::approve_plan(&job.id, ApproveScope::Apply),
+                    );
+                }
+                KeyCode::Char('d' | 'D') => {
+                    return finish(state, now, commands::reject_plan(&job.id, None));
+                }
+                KeyCode::Char('e' | 'E') => {
+                    return vec![
+                        Action::FocusApprovalCard,
+                        state.raise_toast(
+                            now,
+                            Toast::info("Revision mode: enter new instructions in terminal"),
+                        ),
+                    ];
+                }
+                _ => {}
+            }
+        }
     }
 
     match ui.presentation.mode {
@@ -482,8 +696,8 @@ pub fn key(
     }
 
     // (5) Chords.
-    if let Some(chord) = Chord::from_event(event) {
-        return chord_actions(state, chord, ui, layout);
+    if let Some(chord) = Chord::from_event_for_profile(event, ui.presentation.keybinding_profile) {
+        return chord_actions(state, chord, now, ui, layout);
     }
 
     // (6) Passthrough.
@@ -497,6 +711,9 @@ fn passthrough(
     now: Instant,
     ui: &mut UiState,
 ) -> Vec<Action> {
+    if ui.blocked_job().is_some() {
+        return Vec::new();
+    }
     let Some(pane_id) = ui.presentation.focused.clone() else {
         return Vec::new();
     };
@@ -526,6 +743,7 @@ pub fn is_prefix_key(event: &KeyEvent) -> bool {
 fn chord_actions(
     state: &mut InputState,
     chord: Chord,
+    now: Instant,
     ui: &mut UiState,
     layout: &mut dyn PaneLayout,
 ) -> Vec<Action> {
@@ -537,8 +755,118 @@ fn chord_actions(
         Chord::SplitVertical => split_pane(ui, Axis::Vertical),
         Chord::SplitHorizontal => split_pane(ui, Axis::Horizontal),
         Chord::Zoom => zoom(ui, layout),
+        Chord::ClosePane => close_focused_pane(state, now, layout, ui),
+        Chord::SwitchWorkspace(index) => switch_workspace(ui, index),
+        Chord::FocusApprovalCard => vec![Action::FocusApprovalCard],
         Chord::ToggleSidebar => toggle_sidebar(ui),
         Chord::Detach => detach(state),
+        Chord::OpenCommandPalette => {
+            state.command_palette = Some(crate::input::menu::CommandPaletteState::new());
+            vec![Action::OpenCommandPalette]
+        }
+        Chord::OpenKeymapModal => {
+            state.keymap_modal = Some(crate::input::menu::KeymapModalState::new(
+                ui.presentation.keybinding_profile,
+            ));
+            vec![Action::OpenKeymapModal]
+        }
+    }
+}
+
+fn close_focused_pane(
+    state: &mut InputState,
+    now: Instant,
+    layout: &mut dyn PaneLayout,
+    ui: &mut UiState,
+) -> Vec<Action> {
+    let Some(pane_id) = ui.presentation.focused.clone() else {
+        return Vec::new();
+    };
+    match commands::close_pane(&pane_id) {
+        Ok(command) => {
+            layout.close_pane(&pane_id);
+            ui.presentation.focused = layout.focused();
+            ui.presentation.zoomed = layout.zoomed().filter(|zoomed| zoomed != &pane_id);
+            vec![
+                Action::ClosePane {
+                    pane_id: pane_id.clone(),
+                },
+                Action::Command(command),
+            ]
+        }
+        Err(error) => vec![state.raise_toast(now, Toast::warning(error.to_string()))],
+    }
+}
+
+fn switch_workspace(ui: &mut UiState, index: u8) -> Vec<Action> {
+    if index == 0 {
+        return Vec::new();
+    }
+    let target_id = ui
+        .world
+        .workspaces
+        .values()
+        .nth((index - 1) as usize)
+        .map(|w| w.id.clone())
+        .unwrap_or_else(|| format!("ws-{index}"));
+
+    ui.presentation.active_workspace = Some(target_id.clone());
+    for workspace in ui.world.workspaces.values_mut() {
+        workspace.selected = workspace.id == target_id;
+    }
+    let mut actions = vec![Action::SetActiveWorkspace {
+        workspace_id: target_id.clone(),
+    }];
+    if let Ok(command) = commands::set_active_workspace(&target_id) {
+        actions.insert(0, Action::Command(command));
+    }
+    actions
+}
+
+fn execute_palette_command(
+    state: &mut InputState,
+    cmd: crate::input::menu::PaletteCommand,
+    now: Instant,
+    ui: &mut UiState,
+    layout: &mut dyn PaneLayout,
+) -> Vec<Action> {
+    use crate::input::menu::PaletteCommand;
+    match cmd {
+        PaletteCommand::ApprovePlan => {
+            if let Some(job) = ui.blocked_job() {
+                finish(
+                    state,
+                    now,
+                    commands::approve_plan(&job.id, ApproveScope::Apply),
+                )
+            } else {
+                vec![state.raise_toast(now, Toast::warning("no job to approve"))]
+            }
+        }
+        PaletteCommand::RejectPlan => {
+            if let Some(job) = ui.blocked_job() {
+                finish(state, now, commands::reject_plan(&job.id, None))
+            } else {
+                vec![state.raise_toast(now, Toast::warning("no job to reject"))]
+            }
+        }
+        PaletteCommand::SplitVertical => split_pane(ui, Axis::Vertical),
+        PaletteCommand::SplitHorizontal => split_pane(ui, Axis::Horizontal),
+        PaletteCommand::ToggleZoom => zoom(ui, layout),
+        PaletteCommand::ToggleInspector => toggle_sidebar(ui),
+        PaletteCommand::SwitchModernErgonomic => {
+            ui.presentation.keybinding_profile = KeybindingProfile::ModernErgonomic;
+            vec![Action::SwitchProfile(KeybindingProfile::ModernErgonomic)]
+        }
+        PaletteCommand::SwitchTmuxClassic => {
+            ui.presentation.keybinding_profile = KeybindingProfile::TmuxClassic;
+            vec![Action::SwitchProfile(KeybindingProfile::TmuxClassic)]
+        }
+        PaletteCommand::SwitchVimCentric => {
+            ui.presentation.keybinding_profile = KeybindingProfile::VimCentric;
+            vec![Action::SwitchProfile(KeybindingProfile::VimCentric)]
+        }
+        PaletteCommand::SafeDetach => detach(state),
     }
 }
 
@@ -554,6 +882,13 @@ fn prefix_key(
     // Any prefix key ends the prefix. Doing this FIRST means no exit path below has to
     // remember to, and a mistyped key leaves the client in a clean Terminal mode.
     state.enter(&mut ui.presentation, InputMode::Terminal);
+
+    if event.code == KeyCode::Char('?') {
+        state.keymap_modal = Some(crate::input::menu::KeymapModalState::new(
+            ui.presentation.keybinding_profile,
+        ));
+        return vec![Action::OpenKeymapModal];
+    }
 
     let Some(key) = PrefixKey::from_event(event) else {
         return Vec::new();
@@ -909,8 +1244,43 @@ fn route_to_modal(
     }
 
     let outcome = modal.handle_key(&KeyEventLike::from(event));
+    let outcome = if matches!(outcome, ModalOutcome::Consumed) {
+        // Intercept y/d/e when not typing into a justification field
+        if modal.focus() != FocusTarget::Justification
+            && !event.modifiers.contains(KeyModifiers::CONTROL)
+            && !event.modifiers.contains(KeyModifiers::ALT)
+            && !event.modifiers.contains(KeyModifiers::SUPER)
+        {
+            match event.code {
+                KeyCode::Char('y' | 'Y') => ModalOutcome::Approve {
+                    scope: ApproveScope::Apply,
+                },
+                KeyCode::Char('d' | 'D') => ModalOutcome::Reject {
+                    justification: None,
+                },
+                KeyCode::Char('e' | 'E') => {
+                    modal.set_focus(FocusTarget::Justification);
+                    return vec![Action::ModalFocus {
+                        target: FocusTarget::Justification,
+                    }];
+                }
+                _ => outcome,
+            }
+        } else {
+            outcome
+        }
+    } else {
+        outcome
+    };
+
     let actions = modal_actions(state, now, modal, &outcome);
-    if matches!(outcome, ModalOutcome::Dismissed) {
+    if matches!(
+        outcome,
+        ModalOutcome::Dismissed
+            | ModalOutcome::Approve { .. }
+            | ModalOutcome::Reject { .. }
+            | ModalOutcome::Abort
+    ) {
         state.enter(&mut ui.presentation, InputMode::Terminal);
     }
     actions

@@ -1,0 +1,1983 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AIBridge TUI — Next-Gen Terminal Control Plane & Keybinding System</title>
+  <style>
+    /* ==========================================================================
+       AIBridge Next-Gen TUI Design System
+       Theme: Deep Obsidian & Cyber-Mesh (OKLCH-based)
+       ========================================================================== */
+    :root {
+      /* Base Surface Colors */
+      --bg-terminal: oklch(10% 0.02 260);
+      --bg-surface: oklch(14% 0.025 260);
+      --bg-elevated: oklch(18% 0.03 260);
+      --bg-panel: oklch(12% 0.022 260);
+      --bg-hover: oklch(22% 0.035 260);
+      --bg-active: oklch(25% 0.04 260);
+
+      /* Borders & Dividers */
+      --border-subtle: oklch(22% 0.02 260);
+      --border-normal: oklch(30% 0.03 260);
+      --border-bright: oklch(45% 0.06 260);
+      --border-focus: oklch(75% 0.18 205);
+
+      /* Typography */
+      --fg-primary: oklch(98% 0.005 260);
+      --fg-secondary: oklch(76% 0.015 260);
+      --fg-muted: oklch(52% 0.018 260);
+      --fg-dim: oklch(38% 0.015 260);
+
+      /* Accents & Status Semantics */
+      --accent-cyan: oklch(78% 0.16 205);
+      --accent-cyan-dim: oklch(78% 0.16 205 / 0.18);
+      --accent-violet: oklch(72% 0.20 295);
+      --accent-violet-dim: oklch(72% 0.20 295 / 0.18);
+      
+      --status-working: oklch(80% 0.21 142);
+      --status-working-dim: oklch(80% 0.21 142 / 0.18);
+      --status-blocked: oklch(78% 0.19 72);
+      --status-blocked-dim: oklch(78% 0.19 72 / 0.22);
+      --status-done: oklch(72% 0.15 230);
+      --status-done-dim: oklch(72% 0.15 230 / 0.18);
+      --status-error: oklch(65% 0.24 28);
+      --status-error-dim: oklch(65% 0.24 28 / 0.22);
+
+      /* Syntax Highlighting Tokens */
+      --syn-keyword: oklch(78% 0.19 320);
+      --syn-func: oklch(80% 0.15 210);
+      --syn-string: oklch(82% 0.18 135);
+      --syn-comment: oklch(50% 0.02 260);
+      --syn-add: oklch(82% 0.20 145);
+      --syn-del: oklch(70% 0.22 25);
+      --syn-diff-add-bg: oklch(35% 0.09 145 / 0.25);
+      --syn-diff-del-bg: oklch(35% 0.10 25 / 0.25);
+
+      /* Typography & Metrics */
+      --font-mono: "JetBrains Mono", "SF Mono", "Fira Code", "Menlo", "Consolas", monospace;
+      --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", sans-serif;
+      --radius-sm: 4px;
+      --radius-md: 7px;
+      --radius-lg: 12px;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+    }
+
+    body {
+      background-color: var(--bg-terminal);
+      color: var(--fg-primary);
+      font-family: var(--font-mono);
+      font-size: 13px;
+      line-height: 1.45;
+      height: 100vh;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* ==========================================================================
+       Main Terminal Canvas & Chrome
+       ========================================================================== */
+    .tui-app {
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      width: 100vw;
+      background: var(--bg-terminal);
+      position: relative;
+    }
+
+    /* Top Master Control Header */
+    .tui-header {
+      background: var(--bg-surface);
+      border-bottom: 1px solid var(--border-normal);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 12px;
+      height: 38px;
+      flex-shrink: 0;
+      z-index: 10;
+    }
+
+    .tui-header-left {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .logo-badge {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      font-weight: 700;
+      color: var(--accent-cyan);
+      letter-spacing: 0.5px;
+      font-size: 13px;
+    }
+
+    .logo-icon {
+      width: 14px;
+      height: 14px;
+      border: 2px solid var(--accent-cyan);
+      border-radius: 3px;
+      position: relative;
+    }
+    .logo-icon::after {
+      content: "";
+      position: absolute;
+      inset: 2px;
+      background: var(--accent-cyan);
+      border-radius: 1px;
+    }
+
+    .breadcrumb {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--fg-secondary);
+      font-size: 12px;
+      background: var(--bg-panel);
+      padding: 3px 8px;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border-subtle);
+    }
+    .breadcrumb-sep {
+      color: var(--fg-dim);
+    }
+    .breadcrumb-current {
+      color: var(--fg-primary);
+      font-weight: 600;
+    }
+
+    /* Mesh Health Indicator */
+    .mesh-badge {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 3px 8px;
+      border-radius: var(--radius-sm);
+      background: oklch(18% 0.04 205 / 0.5);
+      border: 1px solid var(--accent-cyan-dim);
+      color: var(--accent-cyan);
+      font-size: 11px;
+      cursor: pointer;
+      transition: background 0.15s ease;
+    }
+    .mesh-badge:hover {
+      background: oklch(24% 0.06 205 / 0.7);
+    }
+    .pulse-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--status-working);
+      box-shadow: 0 0 8px var(--status-working);
+      animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.4; transform: scale(0.85); }
+    }
+
+    /* Header Right Actions */
+    .tui-header-right {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .agent-summary-pills {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-right: 6px;
+    }
+
+    .status-pill {
+      font-size: 11px;
+      padding: 2px 7px;
+      border-radius: var(--radius-sm);
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      font-weight: 500;
+    }
+    .status-pill.working {
+      background: var(--status-working-dim);
+      color: var(--status-working);
+      border: 1px solid oklch(80% 0.21 142 / 0.35);
+    }
+    .status-pill.blocked {
+      background: var(--status-blocked-dim);
+      color: var(--status-blocked);
+      border: 1px solid oklch(78% 0.19 72 / 0.45);
+      animation: blink-border 1.5s infinite;
+    }
+    @keyframes blink-border {
+      0%, 100% { border-color: oklch(78% 0.19 72 / 0.7); }
+      50% { border-color: oklch(78% 0.19 72 / 0.2); }
+    }
+    .status-pill.done {
+      background: var(--status-done-dim);
+      color: var(--status-done);
+      border: 1px solid oklch(72% 0.15 230 / 0.35);
+    }
+
+    .btn-chip {
+      background: var(--bg-panel);
+      border: 1px solid var(--border-normal);
+      color: var(--fg-secondary);
+      font-family: var(--font-mono);
+      font-size: 11px;
+      padding: 3px 8px;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      transition: all 0.12s ease;
+    }
+    .btn-chip:hover {
+      background: var(--bg-hover);
+      color: var(--fg-primary);
+      border-color: var(--border-bright);
+    }
+    .btn-chip kbd {
+      background: var(--bg-elevated);
+      padding: 1px 4px;
+      border-radius: 3px;
+      font-size: 10px;
+      color: var(--accent-cyan);
+      border: 1px solid var(--border-subtle);
+    }
+
+    /* ==========================================================================
+       Workspace Tab Bar & Breadcrumbs
+       ========================================================================== */
+    .tui-tab-bar {
+      background: oklch(11% 0.02 260);
+      border-bottom: 1px solid var(--border-subtle);
+      display: flex;
+      align-items: stretch;
+      padding: 0 8px;
+      height: 32px;
+      flex-shrink: 0;
+      gap: 4px;
+    }
+
+    .tui-tab {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 12px;
+      background: var(--bg-panel);
+      color: var(--fg-secondary);
+      border-top: 2px solid transparent;
+      border-left: 1px solid var(--border-subtle);
+      border-right: 1px solid var(--border-subtle);
+      cursor: pointer;
+      font-size: 12px;
+      transition: all 0.12s ease;
+      position: relative;
+    }
+    .tui-tab:hover {
+      background: var(--bg-hover);
+      color: var(--fg-primary);
+    }
+    .tui-tab.active {
+      background: var(--bg-surface);
+      color: var(--fg-primary);
+      font-weight: 600;
+      border-top-color: var(--accent-cyan);
+      border-left-color: var(--border-normal);
+      border-right-color: var(--border-normal);
+    }
+    .tab-index-badge {
+      font-size: 10px;
+      background: var(--bg-elevated);
+      color: var(--fg-muted);
+      padding: 1px 4px;
+      border-radius: 2px;
+    }
+    .tui-tab.active .tab-index-badge {
+      background: var(--accent-cyan-dim);
+      color: var(--accent-cyan);
+    }
+
+    .tab-close {
+      color: var(--fg-dim);
+      font-size: 12px;
+      margin-left: 4px;
+      border-radius: 2px;
+      padding: 0 3px;
+    }
+    .tab-close:hover {
+      color: var(--status-error);
+      background: var(--bg-hover);
+    }
+
+    .tab-add-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 28px;
+      color: var(--fg-muted);
+      cursor: pointer;
+      font-size: 15px;
+      transition: color 0.15s ease;
+    }
+    .tab-add-btn:hover {
+      color: var(--accent-cyan);
+    }
+
+    /* ==========================================================================
+       Multi-Pane Grid Workspace
+       ========================================================================== */
+    .tui-workspace {
+      flex: 1;
+      display: flex;
+      overflow: hidden;
+      position: relative;
+      background: var(--bg-terminal);
+    }
+
+    .workspace-split-container {
+      flex: 1;
+      display: flex;
+      overflow: hidden;
+      position: relative;
+    }
+
+    /* Pane Container Styling */
+    .tui-pane {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-normal);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      position: relative;
+      transition: border-color 0.15s ease, box-shadow 0.15s ease;
+    }
+    .tui-pane.focused {
+      border-color: var(--border-focus);
+      box-shadow: inset 0 0 0 1px var(--border-focus);
+    }
+    .tui-pane.zoomed {
+      position: absolute !important;
+      inset: 0 !important;
+      z-index: 50 !important;
+      width: 100% !important;
+      height: 100% !important;
+    }
+
+    /* Pane Header / Titlebar */
+    .pane-header {
+      background: var(--bg-panel);
+      border-bottom: 1px solid var(--border-subtle);
+      height: 28px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 10px;
+      flex-shrink: 0;
+      font-size: 11px;
+    }
+    .tui-pane.focused .pane-header {
+      background: oklch(17% 0.03 260);
+      border-bottom-color: var(--border-normal);
+    }
+
+    .pane-title-group {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .pane-role-badge {
+      font-weight: 700;
+      color: var(--fg-primary);
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .pane-node-badge {
+      color: var(--fg-muted);
+      font-size: 10px;
+      background: var(--bg-elevated);
+      padding: 1px 5px;
+      border-radius: 2px;
+    }
+    .pane-tool-activity {
+      color: var(--accent-cyan);
+      font-size: 10px;
+      max-width: 220px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .pane-actions {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .pane-action-icon {
+      width: 20px;
+      height: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--fg-muted);
+      border-radius: 2px;
+      cursor: pointer;
+      font-size: 11px;
+    }
+    .pane-action-icon:hover {
+      background: var(--bg-hover);
+      color: var(--fg-primary);
+    }
+
+    /* Pane Body / Virtual Terminal */
+    .pane-body {
+      flex: 1;
+      padding: 10px 12px;
+      overflow-y: auto;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      line-height: 1.5;
+      background: var(--bg-panel);
+      position: relative;
+    }
+    .pane-body::-webkit-scrollbar {
+      width: 6px;
+    }
+    .pane-body::-webkit-scrollbar-thumb {
+      background: var(--border-normal);
+      border-radius: 3px;
+    }
+
+    /* Terminal Lines & Tokens */
+    .term-line {
+      display: flex;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+    .term-dim { color: var(--fg-muted); }
+    .term-cyan { color: var(--accent-cyan); }
+    .term-green { color: var(--status-working); }
+    .term-amber { color: var(--status-blocked); }
+    .term-magenta { color: var(--accent-violet); }
+    .term-red { color: var(--status-error); }
+    .term-bold { font-weight: 700; }
+    
+    .cursor-block {
+      display: inline-block;
+      width: 7px;
+      height: 14px;
+      background: var(--accent-cyan);
+      vertical-align: middle;
+      animation: blink 1s step-end infinite;
+    }
+    @keyframes blink {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0; }
+    }
+
+    /* Resizable Drag Splitters */
+    .split-divider-h {
+      width: 6px;
+      background: var(--bg-terminal);
+      cursor: col-resize;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      z-index: 5;
+    }
+    .split-divider-h::after {
+      content: "";
+      width: 1px;
+      height: 100%;
+      background: var(--border-subtle);
+      transition: background 0.15s ease, width 0.15s ease;
+    }
+    .split-divider-h:hover::after, .split-divider-h.active::after {
+      background: var(--accent-cyan);
+      width: 2px;
+    }
+
+    .split-divider-v {
+      height: 6px;
+      background: var(--bg-terminal);
+      cursor: row-resize;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      z-index: 5;
+    }
+    .split-divider-v::after {
+      content: "";
+      height: 1px;
+      width: 100%;
+      background: var(--border-subtle);
+      transition: background 0.15s ease, height 0.15s ease;
+    }
+    .split-divider-v:hover::after, .split-divider-v.active::after {
+      background: var(--accent-cyan);
+      height: 2px;
+    }
+
+    /* ==========================================================================
+       Human-in-the-Loop (HITL) Interactive Approval Card / Drawer
+       ========================================================================== */
+    .approval-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--status-blocked);
+      border-radius: var(--radius-md);
+      margin: 8px 0;
+      overflow: hidden;
+      box-shadow: 0 4px 20px oklch(0% 0 0 / 0.4);
+    }
+
+    .approval-header {
+      background: var(--status-blocked-dim);
+      padding: 8px 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid oklch(78% 0.19 72 / 0.3);
+    }
+    .approval-title {
+      font-weight: 700;
+      color: var(--status-blocked);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+    }
+    .risk-badge {
+      font-size: 10px;
+      font-weight: 700;
+      padding: 1px 6px;
+      border-radius: 3px;
+      background: var(--status-error-dim);
+      color: var(--status-error);
+      border: 1px solid oklch(65% 0.24 28 / 0.5);
+    }
+
+    .approval-content {
+      padding: 10px 12px;
+    }
+    .approval-desc {
+      color: var(--fg-secondary);
+      font-size: 12px;
+      margin-bottom: 8px;
+    }
+
+    /* Diff View */
+    .diff-container {
+      background: var(--bg-terminal);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-sm);
+      overflow-x: auto;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      margin-bottom: 10px;
+    }
+    .diff-line {
+      display: flex;
+      padding: 1px 8px;
+    }
+    .diff-line.add {
+      background: var(--syn-diff-add-bg);
+      color: var(--syn-add);
+    }
+    .diff-line.del {
+      background: var(--syn-diff-del-bg);
+      color: var(--syn-del);
+    }
+    .diff-gutter {
+      width: 20px;
+      color: var(--fg-dim);
+      user-select: none;
+    }
+
+    /* Approval Action Buttons */
+    .approval-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding-top: 4px;
+    }
+    .btn-approve {
+      background: var(--status-working);
+      color: oklch(10% 0.02 142);
+      border: none;
+      font-family: var(--font-mono);
+      font-weight: 700;
+      font-size: 11px;
+      padding: 6px 12px;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      transition: filter 0.15s ease;
+    }
+    .btn-approve:hover {
+      filter: brightness(1.15);
+    }
+    .btn-deny {
+      background: var(--status-error-dim);
+      color: var(--status-error);
+      border: 1px solid var(--status-error);
+      font-family: var(--font-mono);
+      font-weight: 700;
+      font-size: 11px;
+      padding: 5px 12px;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .btn-deny:hover {
+      background: oklch(65% 0.24 28 / 0.35);
+    }
+    .btn-revise {
+      background: var(--bg-panel);
+      color: var(--fg-secondary);
+      border: 1px solid var(--border-normal);
+      font-family: var(--font-mono);
+      font-size: 11px;
+      padding: 5px 10px;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+    }
+    .btn-revise:hover {
+      background: var(--bg-hover);
+      color: var(--fg-primary);
+    }
+
+    /* ==========================================================================
+       Collapsible Right Inspector / Sidebar
+       ========================================================================== */
+    .tui-sidebar {
+      width: 290px;
+      background: var(--bg-surface);
+      border-left: 1px solid var(--border-normal);
+      display: flex;
+      flex-direction: column;
+      flex-shrink: 0;
+      transition: width 0.2s cubic-bezier(0.16, 1, 0.3, 1), transform 0.2s ease;
+      overflow: hidden;
+      z-index: 10;
+    }
+    .tui-sidebar.collapsed {
+      width: 0;
+      border-left: none;
+    }
+
+    .sidebar-header {
+      height: 32px;
+      background: var(--bg-panel);
+      border-bottom: 1px solid var(--border-subtle);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 10px;
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--fg-secondary);
+    }
+
+    .sidebar-content {
+      flex: 1;
+      overflow-y: auto;
+      padding: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .section-label {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      color: var(--fg-muted);
+      margin-bottom: 6px;
+      font-weight: 700;
+    }
+
+    /* Node List Item */
+    .node-item {
+      background: var(--bg-panel);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-sm);
+      padding: 7px 9px;
+      margin-bottom: 5px;
+      font-size: 11px;
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+    .node-item-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .node-name {
+      font-weight: 600;
+      color: var(--fg-primary);
+    }
+    .node-ip {
+      color: var(--fg-dim);
+      font-size: 10px;
+    }
+    .node-agents {
+      font-size: 10px;
+      color: var(--accent-cyan);
+    }
+
+    /* Task DAG Mini Map */
+    .dag-box {
+      background: var(--bg-panel);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-sm);
+      padding: 8px;
+      font-size: 11px;
+    }
+    .dag-node {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin: 4px 0;
+    }
+    .dag-connector {
+      width: 14px;
+      text-align: center;
+      color: var(--fg-dim);
+    }
+
+    /* ==========================================================================
+       Bottom Status Bar & Contextual Cheatsheet
+       ========================================================================== */
+    .tui-footer {
+      background: var(--bg-surface);
+      border-top: 1px solid var(--border-normal);
+      height: 28px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 10px;
+      flex-shrink: 0;
+      font-size: 11px;
+      z-index: 20;
+    }
+
+    .footer-left {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .mode-indicator {
+      font-size: 10px;
+      font-weight: 700;
+      padding: 2px 7px;
+      border-radius: 3px;
+      letter-spacing: 0.5px;
+    }
+    .mode-indicator.passthrough {
+      background: var(--status-working-dim);
+      color: var(--status-working);
+      border: 1px solid oklch(80% 0.21 142 / 0.4);
+    }
+    .mode-indicator.leader {
+      background: var(--accent-cyan-dim);
+      color: var(--accent-cyan);
+      border: 1px solid oklch(78% 0.16 205 / 0.4);
+    }
+    .mode-indicator.copy {
+      background: var(--accent-violet-dim);
+      color: var(--accent-violet);
+      border: 1px solid oklch(72% 0.20 295 / 0.4);
+    }
+
+    .cheatsheet {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: var(--fg-secondary);
+      font-size: 11px;
+    }
+    .cheat-item {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      cursor: pointer;
+    }
+    .cheat-item:hover {
+      color: var(--accent-cyan);
+    }
+    .cheat-item kbd {
+      background: var(--bg-panel);
+      border: 1px solid var(--border-normal);
+      padding: 1px 4px;
+      border-radius: 2px;
+      font-size: 10px;
+      color: var(--fg-primary);
+    }
+
+    .footer-right {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      color: var(--fg-muted);
+      font-size: 10px;
+    }
+
+    /* ==========================================================================
+       Command Palette Modal (Ctrl+K / Cmd+K)
+       ========================================================================== */
+    .palette-backdrop {
+      position: fixed;
+      inset: 0;
+      background: oklch(0% 0 0 / 0.65);
+      backdrop-filter: blur(4px);
+      display: none;
+      align-items: flex-start;
+      justify-content: center;
+      padding-top: 12vh;
+      z-index: 100;
+    }
+    .palette-backdrop.open {
+      display: flex;
+    }
+
+    .palette-window {
+      width: 580px;
+      background: var(--bg-surface);
+      border: 1px solid var(--border-bright);
+      border-radius: var(--radius-lg);
+      box-shadow: 0 16px 40px oklch(0% 0 0 / 0.7);
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      animation: palette-slide 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    @keyframes palette-slide {
+      from { transform: translateY(-12px); opacity: 0; }
+      to { transform: translateY(0); opacity: 1; }
+    }
+
+    .palette-input-wrap {
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border-normal);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .palette-input-wrap svg {
+      color: var(--accent-cyan);
+    }
+    .palette-input {
+      flex: 1;
+      background: transparent;
+      border: none;
+      outline: none;
+      color: var(--fg-primary);
+      font-family: var(--font-mono);
+      font-size: 14px;
+    }
+
+    .palette-list {
+      max-height: 320px;
+      overflow-y: auto;
+      padding: 8px;
+    }
+    .palette-item {
+      padding: 8px 12px;
+      border-radius: var(--radius-sm);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      color: var(--fg-secondary);
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .palette-item:hover, .palette-item.active {
+      background: var(--bg-hover);
+      color: var(--fg-primary);
+    }
+    .palette-item-left {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .palette-item kbd {
+      background: var(--bg-panel);
+      border: 1px solid var(--border-subtle);
+      padding: 2px 5px;
+      border-radius: 3px;
+      font-size: 10px;
+      color: var(--fg-muted);
+    }
+
+    /* ==========================================================================
+       Keybinding Setup & Remapper Modal
+       ========================================================================== */
+    .setup-modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: oklch(0% 0 0 / 0.65);
+      backdrop-filter: blur(4px);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 110;
+    }
+    .setup-modal-backdrop.open {
+      display: flex;
+    }
+
+    .setup-modal {
+      width: 720px;
+      max-height: 85vh;
+      background: var(--bg-surface);
+      border: 1px solid var(--border-bright);
+      border-radius: var(--radius-lg);
+      box-shadow: 0 20px 50px oklch(0% 0 0 / 0.8);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .setup-modal-header {
+      padding: 14px 18px;
+      background: var(--bg-panel);
+      border-bottom: 1px solid var(--border-normal);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .setup-modal-title {
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--fg-primary);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .setup-modal-body {
+      padding: 18px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .profile-switcher {
+      display: flex;
+      gap: 10px;
+      background: var(--bg-panel);
+      padding: 4px;
+      border-radius: var(--radius-md);
+      border: 1px solid var(--border-subtle);
+    }
+    .profile-btn {
+      flex: 1;
+      padding: 8px;
+      text-align: center;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      font-size: 12px;
+      color: var(--fg-secondary);
+      transition: all 0.15s ease;
+    }
+    .profile-btn.active {
+      background: var(--accent-cyan-dim);
+      color: var(--accent-cyan);
+      font-weight: 700;
+      border: 1px solid var(--accent-cyan);
+    }
+
+    .key-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+    .key-table th {
+      text-align: left;
+      padding: 6px 10px;
+      color: var(--fg-muted);
+      border-bottom: 1px solid var(--border-normal);
+      font-size: 11px;
+    }
+    .key-table td {
+      padding: 8px 10px;
+      border-bottom: 1px solid var(--border-subtle);
+      color: var(--fg-secondary);
+    }
+    .key-table tr:hover td {
+      background: var(--bg-hover);
+      color: var(--fg-primary);
+    }
+
+    /* Toast Notification Container */
+    .toast-container {
+      position: fixed;
+      bottom: 40px;
+      right: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      z-index: 200;
+      pointer-events: none;
+    }
+    .toast {
+      pointer-events: auto;
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-bright);
+      color: var(--fg-primary);
+      padding: 10px 14px;
+      border-radius: var(--radius-md);
+      font-size: 12px;
+      box-shadow: 0 8px 24px oklch(0% 0 0 / 0.5);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      animation: toast-in 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    @keyframes toast-in {
+      from { transform: translateX(20px); opacity: 0; }
+      to { transform: translateX(0); opacity: 1; }
+    }
+  </style>
+</head>
+<body>
+
+<div class="tui-app" id="tuiApp">
+  <!-- Top Master Control Header -->
+  <header class="tui-header">
+    <div class="tui-header-left">
+      <div class="logo-badge">
+        <div class="logo-icon"></div>
+        <span>AIBridge</span>
+      </div>
+
+      <div class="breadcrumb">
+        <span>project:</span>
+        <span class="breadcrumb-current">AIBridge-v2</span>
+        <span class="breadcrumb-sep">/</span>
+        <span>run:</span>
+        <span class="breadcrumb-current">#108-multi-pane</span>
+      </div>
+
+      <!-- Tailscale Mesh Badge -->
+      <div class="mesh-badge" id="meshBadge" title="Tailscale Mesh Connected (3 Peers)">
+        <div class="pulse-dot"></div>
+        <span>tailscale: 100.64.42.18 (3 nodes)</span>
+      </div>
+    </div>
+
+    <div class="tui-header-right">
+      <!-- Agent Summary Pills -->
+      <div class="agent-summary-pills">
+        <div class="status-pill working">
+          <span>●</span> 1 Working
+        </div>
+        <div class="status-pill blocked" id="headerBlockedPill">
+          <span>▲</span> 1 Blocked (HITL)
+        </div>
+        <div class="status-pill done">
+          <span>✔</span> 1 Done
+        </div>
+      </div>
+
+      <!-- Quick Command Buttons -->
+      <button class="btn-chip" id="openPaletteBtn" title="Universal Command Palette">
+        <span>Search</span>
+        <kbd>Ctrl+K</kbd>
+      </button>
+
+      <button class="btn-chip" id="openSetupBtn" title="Keyboard & UI Configuration">
+        <span>Keymap</span>
+        <kbd>?</kbd>
+      </button>
+
+      <button class="btn-chip" id="toggleSidebarBtn" title="Toggle Side Inspector">
+        <span>Inspector</span>
+        <kbd>Alt+B</kbd>
+      </button>
+    </div>
+  </header>
+
+  <!-- Workspace Tabs -->
+  <nav class="tui-tab-bar">
+    <div class="tui-tab active" data-tab="1">
+      <span class="tab-index-badge">Alt+1</span>
+      <span>⚡ Dev & Orchestration</span>
+      <span class="tab-close">×</span>
+    </div>
+    <div class="tui-tab" data-tab="2">
+      <span class="tab-index-badge">Alt+2</span>
+      <span>🛡️ Security & Redaction</span>
+      <span class="tab-close">×</span>
+    </div>
+    <div class="tui-tab" data-tab="3">
+      <span class="tab-index-badge">Alt+3</span>
+      <span>🌐 Ingress Router (Rust)</span>
+      <span class="tab-close">×</span>
+    </div>
+    <div class="tab-add-btn" title="New Workspace Tab (Alt+N)">+</div>
+  </nav>
+
+  <!-- Multi-Pane Flexible Tiling Workspace -->
+  <main class="tui-workspace">
+    <div class="workspace-split-container" id="splitContainer">
+      
+      <!-- PANE 1: Left Pane (52%) - Claude Code (Working) -->
+      <section class="tui-pane focused" id="pane1" style="flex: 52;">
+        <div class="pane-header">
+          <div class="pane-title-group">
+            <span class="pane-role-badge">
+              <span style="color: var(--status-working);">●</span>
+              claude-code:implementer
+            </span>
+            <span class="pane-node-badge">macbook-local</span>
+            <span class="pane-tool-activity">tool: pty_stream_splitter.rs [running vitest]</span>
+          </div>
+          <div class="pane-actions">
+            <div class="pane-action-icon zoom-btn" title="Zoom / Maximize (Alt+Z)">⛶</div>
+            <div class="pane-action-icon split-v-btn" title="Split Vertical (Alt+V)">▥</div>
+            <div class="pane-action-icon split-h-btn" title="Split Horizontal (Alt+S)">▤</div>
+            <div class="pane-action-icon close-pane-btn" title="Close Pane (Alt+W)">×</div>
+          </div>
+        </div>
+
+        <div class="pane-body" id="pane1Body">
+          <div class="term-line term-dim">2026-10-07T01:14:02.108Z [controller] Lease acquired on local node macbook-m3</div>
+          <div class="term-line term-dim">2026-10-07T01:14:02.112Z [dispatcher] Task #142 assigned to claude-code:implementer</div>
+          <div class="term-line term-cyan">╭─ Claude Code v1.4.2 [PTY Active - Raw Mode 80x24] ───────────────────────╮</div>
+          <div class="term-line term-dim">│ Analyzing AST diff for crates/aibr-tui/src/input/engine.rs...              │</div>
+          <div class="term-line">│ <span class="term-green">✔ Verified</span> zero memory leaks on PTY byte chunking                             │</div>
+          <div class="term-line">│ <span class="term-green">✔ Redaction check</span>: 0 sensitive tokens leaked into stdout                   │</div>
+          <div class="term-line term-dim">╰──────────────────────────────────────────────────────────────────────────╯</div>
+          <div class="term-line"><span class="term-magenta">$</span> bun test tests/unit/tui/keyboard-engine.test.ts</div>
+          <div class="term-line term-dim">Running 12 unit tests in isolation...</div>
+          <div class="term-line">  <span class="term-green">✓</span> <span class="term-dim">tests/unit/tui/keyboard-engine.test.ts</span> &gt; should handle Alt+H/J/K/L navigation (<span class="term-cyan">1.2ms</span>)</div>
+          <div class="term-line">  <span class="term-green">✓</span> <span class="term-dim">tests/unit/tui/keyboard-engine.test.ts</span> &gt; should resolve split seams without cursor drift (<span class="term-cyan">2.1ms</span>)</div>
+          <div class="term-line">  <span class="term-green">✓</span> <span class="term-dim">tests/unit/tui/keyboard-engine.test.ts</span> &gt; should intercept HITL approval before forwarding PTY (<span class="term-cyan">0.8ms</span>)</div>
+          <div class="term-line">  <span class="term-green">✓</span> <span class="term-dim">tests/unit/tui/keyboard-engine.test.ts</span> &gt; should support mouse drag on divider (<span class="term-cyan">1.9ms</span>)</div>
+          <div class="term-line"><span class="term-green term-bold">Pass: 12 passed, 0 failed</span> <span class="term-dim">(64.2ms)</span></div>
+          <div class="term-line"><span class="term-cyan">claude@aibr-mesh</span>:<span class="term-magenta">~/AIBrigde</span>$ <span class="cursor-block"></span></div>
+        </div>
+      </section>
+
+      <!-- Horizontal Draggable Split Divider -->
+      <div class="split-divider-h" id="splitDivider1"></div>
+
+      <!-- Right Column (48%) Split Vertically -->
+      <div class="workspace-split-container" style="flex: 48; flex-direction: column;">
+        
+        <!-- PANE 2: Top Right - OpenCode Security Auditor (Blocked on HITL) -->
+        <section class="tui-pane" id="pane2" style="flex: 60;">
+          <div class="pane-header">
+            <div class="pane-title-group">
+              <span class="pane-role-badge">
+                <span style="color: var(--status-blocked);">▲</span>
+                opencode:security-auditor
+              </span>
+              <span class="pane-node-badge">dev-vps [100.64.42.50]</span>
+              <span class="pane-tool-activity" style="color: var(--status-blocked);">WAITING HUMAN APPROVAL</span>
+            </div>
+            <div class="pane-actions">
+              <div class="pane-action-icon zoom-btn" title="Zoom / Maximize (Alt+Z)">⛶</div>
+              <div class="pane-action-icon close-pane-btn" title="Close Pane (Alt+W)">×</div>
+            </div>
+          </div>
+
+          <div class="pane-body" id="pane2Body">
+            <div class="term-line term-dim">2026-10-07T01:15:10.220Z [mesh] Tunnel established with node dev-vps</div>
+            <div class="term-line term-amber">2026-10-07T01:15:32.410Z [policy] Action paused by Hard Safety Floor (Invariants 2 & 5)</div>
+            
+            <!-- Interactive HITL Approval Card -->
+            <div class="approval-card" id="approvalCard">
+              <div class="approval-header">
+                <div class="approval-title">
+                  <span>🚨 Plan Review Request #84</span>
+                  <span class="risk-badge">HIGH RISK: FILE REWRITE</span>
+                </div>
+                <div style="font-size: 10px; color: var(--fg-dim);">Timeout: 04:35</div>
+              </div>
+              <div class="approval-content">
+                <div class="approval-desc">
+                  OpenCode requests permission to modify sensitive authentication handler <code>src/security/auth-provider.ts</code> and execute <code>bun run build</code>:
+                </div>
+
+                <!-- Live Unified Diff -->
+                <div class="diff-container">
+                  <div class="diff-line del"><span class="diff-gutter">-</span>const token = req.headers["authorization"]?.replace("Bearer ", "");</div>
+                  <div class="diff-line del"><span class="diff-gutter">-</span>if (token === expectedSecret) return authorized();</div>
+                  <div class="diff-line add"><span class="diff-gutter">+</span>const authHeader = req.headers["authorization"];</div>
+                  <div class="diff-line add"><span class="diff-gutter">+</span>if (!constantTimeTokenCompare(authHeader, expectedSecret)) {</div>
+                  <div class="diff-line add"><span class="diff-gutter">+</span>  return rejectUnauthorized(req, "Invalid token or signature");</div>
+                  <div class="diff-line add"><span class="diff-gutter">+</span>}</div>
+                </div>
+
+                <!-- Approval Actions -->
+                <div class="approval-actions">
+                  <button class="btn-approve" id="approveOnceBtn">
+                    <span>✔ Approve Once</span>
+                    <kbd style="background: rgba(0,0,0,0.25); padding: 1px 4px; border-radius: 2px;">y</kbd>
+                  </button>
+                  <button class="btn-deny" id="denyBtn">
+                    <span>✖ Deny</span>
+                    <kbd style="background: rgba(0,0,0,0.25); padding: 1px 4px; border-radius: 2px;">d</kbd>
+                  </button>
+                  <button class="btn-revise" id="reviseBtn">
+                    <span>✎ Revise Prompt</span>
+                    <kbd style="background: var(--bg-surface); padding: 1px 4px; border-radius: 2px;">e</kbd>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div class="term-line term-dim">Awaiting operator keystroke [y / d / e] or Alt+A to focus...</div>
+          </div>
+        </section>
+
+        <!-- Vertical Draggable Split Divider -->
+        <div class="split-divider-v" id="splitDivider2"></div>
+
+        <!-- PANE 3: Bottom Right - Codex (Done) -->
+        <section class="tui-pane" id="pane3" style="flex: 40;">
+          <div class="pane-header">
+            <div class="pane-title-group">
+              <span class="pane-role-badge">
+                <span style="color: var(--status-done);">✔</span>
+                codex:qa-verifier
+              </span>
+              <span class="pane-node-badge">gpu-cluster [100.64.42.99]</span>
+              <span class="pane-tool-activity" style="color: var(--status-done);">COMPLETED (Exit 0)</span>
+            </div>
+            <div class="pane-actions">
+              <div class="pane-action-icon zoom-btn" title="Zoom / Maximize (Alt+Z)">⛶</div>
+              <div class="pane-action-icon close-pane-btn" title="Close Pane (Alt+W)">×</div>
+            </div>
+          </div>
+
+          <div class="pane-body" id="pane3Body">
+            <div class="term-line term-dim">2026-10-07T01:13:00.012Z Running cargo test --workspace in isolated cgroup...</div>
+            <div class="term-line term-green">test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out</div>
+            <div class="term-line term-dim">Finished in 0.42s. Artifacts persisted to .aibridge/runs/108/artifacts/</div>
+            <div class="term-line term-done" style="color: var(--status-done);">[Task Completed] Standing by for next dispatch.</div>
+          </div>
+        </section>
+
+      </div>
+    </div>
+
+    <!-- Collapsible Right Inspector Sidebar -->
+    <aside class="tui-sidebar" id="sidebar">
+      <div class="sidebar-header">
+        <span>MESH & RUN INSPECTOR</span>
+        <span class="pane-action-icon" id="closeSidebarBtn">×</span>
+      </div>
+
+      <div class="sidebar-content">
+        <!-- Node Topology -->
+        <div>
+          <div class="section-label">Enrolled Tailscale Nodes</div>
+          <div class="node-item">
+            <div class="node-item-top">
+              <span class="node-name">macbook-local (Host)</span>
+              <span style="color: var(--status-working);">Active</span>
+            </div>
+            <span class="node-ip">127.0.0.1 / PTY local</span>
+            <span class="node-agents">claude-code (implementer)</span>
+          </div>
+
+          <div class="node-item">
+            <div class="node-item-top">
+              <span class="node-name">dev-vps (Germany)</span>
+              <span style="color: var(--status-blocked);">Blocked</span>
+            </div>
+            <span class="node-ip">100.64.42.50 (24ms ping)</span>
+            <span class="node-agents">opencode (security-auditor)</span>
+          </div>
+
+          <div class="node-item">
+            <div class="node-item-top">
+              <span class="node-name">gpu-cluster (US-East)</span>
+              <span style="color: var(--status-done);">Idle</span>
+            </div>
+            <span class="node-ip">100.64.42.99 (68ms ping)</span>
+            <span class="node-agents">codex (qa-verifier)</span>
+          </div>
+        </div>
+
+        <!-- Task Dependency DAG -->
+        <div>
+          <div class="section-label">Run #108 Task DAG</div>
+          <div class="dag-box">
+            <div class="dag-node">
+              <span style="color: var(--status-done);">✔</span>
+              <span>1. Ingress Contracts Gen</span>
+            </div>
+            <div class="dag-connector">↓</div>
+            <div class="dag-node">
+              <span style="color: var(--status-working);">●</span>
+              <span>2. Multi-Pane TUI Engine</span>
+            </div>
+            <div class="dag-connector">↓</div>
+            <div class="dag-node">
+              <span style="color: var(--status-blocked);">▲</span>
+              <span>3. HITL Security Review</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Project Shared Memory & Telemetry -->
+        <div>
+          <div class="section-label">Realtime Telemetry</div>
+          <div class="node-item">
+            <div class="node-item-top">
+              <span class="term-dim">Session Cost:</span>
+              <span style="font-weight: 700; color: var(--accent-cyan);">$0.18</span>
+            </div>
+            <div class="node-item-top">
+              <span class="term-dim">Tokens Used:</span>
+              <span>24,810 tk</span>
+            </div>
+            <div class="node-item-top">
+              <span class="term-dim">Redactions:</span>
+              <span>14 secrets scrubbed</span>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </aside>
+
+  </main>
+
+  <!-- Bottom Status Bar & Contextual Cheatsheet -->
+  <footer class="tui-footer">
+    <div class="footer-left">
+      <div class="mode-indicator passthrough" id="modeIndicator">PASSTHROUGH</div>
+      
+      <div class="cheatsheet" id="cheatsheetBar">
+        <div class="cheat-item" id="cheatNav" title="Navigate Panes">
+          <kbd>Alt+H/J/K/L</kbd> <span>Pane</span>
+        </div>
+        <div class="cheat-item" id="cheatSplit" title="Split Panes">
+          <kbd>Alt+V/S</kbd> <span>Split</span>
+        </div>
+        <div class="cheat-item" id="cheatZoom" title="Toggle Zoom">
+          <kbd>Alt+Z</kbd> <span>Zoom</span>
+        </div>
+        <div class="cheat-item" id="cheatApprove" title="Approve Blocked Action">
+          <kbd>Alt+A</kbd> <span>Approve</span>
+        </div>
+        <div class="cheat-item" id="cheatPalette" title="Open Command Palette">
+          <kbd>Ctrl+K</kbd> <span>Menu</span>
+        </div>
+        <div class="cheat-item" id="cheatHelp" title="Show All Keybindings">
+          <kbd>?</kbd> <span>Help</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="footer-right">
+      <span>ipc: unix://.aibridge/ipc.sock</span>
+      <span>•</span>
+      <span style="color: var(--status-working);">redactor: active (14 rules)</span>
+      <span>•</span>
+      <span>detach: <kbd style="background: var(--bg-panel); padding: 1px 4px; border-radius: 2px;">Ctrl+B q</kbd></span>
+    </div>
+  </footer>
+</div>
+
+<!-- ==========================================================================
+     Command Palette Modal (Ctrl+K)
+     ========================================================================== -->
+<div class="palette-backdrop" id="paletteModal">
+  <div class="palette-window">
+    <div class="palette-input-wrap">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="11" cy="11" r="8"></circle>
+        <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+      </svg>
+      <input type="text" class="palette-input" id="paletteInput" placeholder="Type a command or search action... (or Esc to close)" autofocus>
+    </div>
+    <div class="palette-list" id="paletteList">
+      <div class="palette-item active" data-action="approve">
+        <div class="palette-item-left">
+          <span style="color: var(--status-blocked);">🚨</span>
+          <span>Review and Approve Pending Plan (HITL)</span>
+        </div>
+        <kbd>Alt+A</kbd>
+      </div>
+      <div class="palette-item" data-action="split-v">
+        <div class="palette-item-left">
+          <span>▥</span>
+          <span>Split Focused Pane Vertically</span>
+        </div>
+        <kbd>Alt+V</kbd>
+      </div>
+      <div class="palette-item" data-action="split-h">
+        <div class="palette-item-left">
+          <span>▤</span>
+          <span>Split Focused Pane Horizontally</span>
+        </div>
+        <kbd>Alt+S</kbd>
+      </div>
+      <div class="palette-item" data-action="zoom">
+        <div class="palette-item-left">
+          <span>⛶</span>
+          <span>Toggle Zoom / Maximize Pane</span>
+        </div>
+        <kbd>Alt+Z</kbd>
+      </div>
+      <div class="palette-item" data-action="sidebar">
+        <div class="palette-item-left">
+          <span>📋</span>
+          <span>Toggle Mesh & Task Inspector Sidebar</span>
+        </div>
+        <kbd>Alt+B</kbd>
+      </div>
+      <div class="palette-item" data-action="keymap">
+        <div class="palette-item-left">
+          <span>⚙</span>
+          <span>Keybinding Configuration & Profile Switcher</span>
+        </div>
+        <kbd>?</kbd>
+      </div>
+      <div class="palette-item" data-action="detach">
+        <div class="palette-item-left">
+          <span>🚪</span>
+          <span>Detach Client (Leave background jobs running)</span>
+        </div>
+        <kbd>Ctrl+B q</kbd>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ==========================================================================
+     Keybinding Setup & Re-mapper Modal (?)
+     ========================================================================== -->
+<div class="setup-modal-backdrop" id="setupModal">
+  <div class="setup-modal">
+    <div class="setup-modal-header">
+      <div class="setup-modal-title">
+        <span>⚡ AIBridge TUI Keybinding Setup & UX Profile</span>
+      </div>
+      <div class="pane-action-icon" id="closeSetupModalBtn">×</div>
+    </div>
+    
+    <div class="setup-modal-body">
+      <!-- Profile Chooser -->
+      <div>
+        <div class="section-label">Select Keybinding Paradigm</div>
+        <div class="profile-switcher">
+          <div class="profile-btn active" id="profileModernBtn">
+            🚀 Modern Ergonomic (Leaderless / Alt-Chords)
+          </div>
+          <div class="profile-btn" id="profileTmuxBtn">
+            📟 Tmux & Screen Classic (Ctrl+B Prefix)
+          </div>
+          <div class="profile-btn" id="profileVimBtn">
+            🌿 Vim-Centric Navigation
+          </div>
+        </div>
+      </div>
+
+      <!-- Keybinding Comparison Table -->
+      <div>
+        <div class="section-label">Active Keymap Specification</div>
+        <table class="key-table">
+          <thead>
+            <tr>
+              <th>Action Category</th>
+              <th>Modern Ergonomic (Recommended)</th>
+              <th>Tmux Classic</th>
+              <th>Purpose & UX Rationale</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Navigate Panes</strong></td>
+              <td><kbd>Alt+H/J/K/L</kbd> or <kbd>Alt+Arrows</kbd></td>
+              <td><kbd>Ctrl+B</kbd> → <kbd>h/j/k/l</kbd></td>
+              <td>Zero prefix delay; instant pointer/focus switch without stalling PTY input</td>
+            </tr>
+            <tr>
+              <td><strong>Split Pane Vertically</strong></td>
+              <td><kbd>Alt+V</kbd></td>
+              <td><kbd>Ctrl+B</kbd> → <kbd>%</kbd> or <kbd>v</kbd></td>
+              <td>Splits the active pane 50/50 with instant cursor transfer</td>
+            </tr>
+            <tr>
+              <td><strong>Split Pane Horizontally</strong></td>
+              <td><kbd>Alt+S</kbd> or <kbd>Alt+-</kbd></td>
+              <td><kbd>Ctrl+B</kbd> → <kbd>"</kbd> or <kbd>-</kbd></td>
+              <td>Convenient horizontal division for logs and quick runs</td>
+            </tr>
+            <tr>
+              <td><strong>Zoom / Fullscreen</strong></td>
+              <td><kbd>Alt+Z</kbd> or double-click header</td>
+              <td><kbd>Ctrl+B</kbd> → <kbd>z</kbd></td>
+              <td>Maximize focused terminal to 100% viewport; preserves layout state</td>
+            </tr>
+            <tr>
+              <td><strong>Close Pane</strong></td>
+              <td><kbd>Alt+W</kbd></td>
+              <td><kbd>Ctrl+B</kbd> → <kbd>x</kbd></td>
+              <td>Gracefully terminate pane session or detach from background daemon</td>
+            </tr>
+            <tr>
+              <td><strong>Workspace Switching</strong></td>
+              <td><kbd>Alt+1..9</kbd></td>
+              <td><kbd>Ctrl+B</kbd> → <kbd>1..9</kbd></td>
+              <td>Jump across multi-machine tabs instantly with numbered badge visual cues</td>
+            </tr>
+            <tr>
+              <td><strong>HITL Approval Action</strong></td>
+              <td><kbd>Alt+A</kbd> then <kbd>y/d/e</kbd></td>
+              <td><kbd>Ctrl+B</kbd> → <kbd>a</kbd></td>
+              <td>Focuses blocked agent review card directly; 1-key approve/deny</td>
+            </tr>
+            <tr>
+              <td><strong>Command Palette</strong></td>
+              <td><kbd>Ctrl+K</kbd> or <kbd>Cmd+K</kbd></td>
+              <td><kbd>Ctrl+B</kbd> → <kbd>:</kbd></td>
+              <td>Fuzzy search across all workspaces, jobs, agents, and settings</td>
+            </tr>
+            <tr>
+              <td><strong>Copy & Scrollback Mode</strong></td>
+              <td><kbd>Alt+[</kbd> or <kbd>PageUp</kbd></td>
+              <td><kbd>Ctrl+B</kbd> → <kbd>[</kbd></td>
+              <td>Pauses terminal feed; vi navigation (h/j/k/l), / search, and y copy</td>
+            </tr>
+            <tr>
+              <td><strong>Detach Safe Exit</strong></td>
+              <td><kbd>Ctrl+B q</kbd> or <kbd>Alt+Q</kbd></td>
+              <td><kbd>Ctrl+B</kbd> → <kbd>d</kbd></td>
+              <td>Leaves background jobs, PTYs, and mesh leases running untouched</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Mouse-Native Invariants -->
+      <div style="background: var(--bg-panel); padding: 12px; border-radius: var(--radius-sm); border: 1px solid var(--border-subtle);">
+        <div style="font-weight: 700; color: var(--accent-cyan); margin-bottom: 4px;">🖱️ Mouse & Pointer Support Included:</div>
+        <div style="color: var(--fg-secondary); font-size: 11px; line-height: 1.6;">
+          • Click any pane to focus immediately.<br>
+          • Drag any split seam divider (horizontal or vertical) to resize proportions dynamically.<br>
+          • Double-click any pane titlebar to zoom/restore.<br>
+          • Scroll wheel scrolls pane terminal buffer smoothly.
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Floating Toast Container -->
+<div class="toast-container" id="toastContainer"></div>
+
+<!-- ==========================================================================
+     Interactive TUI Logic & Event Handlers
+     ========================================================================== -->
+<script>
+  (function () {
+    // --- State ---
+    let currentMode = "PASSTHROUGH"; // PASSTHROUGH | LEADER | COPY
+    let focusedPaneId = "pane1";
+    let activeProfile = "modern"; // modern | tmux | vim
+    let sidebarOpen = true;
+
+    // --- DOM Elements ---
+    const tuiApp = document.getElementById("tuiApp");
+    const modeIndicator = document.getElementById("modeIndicator");
+    const sidebar = document.getElementById("sidebar");
+    const paletteModal = document.getElementById("paletteModal");
+    const paletteInput = document.getElementById("paletteInput");
+    const paletteList = document.getElementById("paletteList");
+    const setupModal = document.getElementById("setupModal");
+    const toastContainer = document.getElementById("toastContainer");
+
+    // --- Toast Notification Helper ---
+    function showToast(message, icon = "ℹ️") {
+      const toast = document.createElement("div");
+      toast.className = "toast";
+      toast.innerHTML = `<span>${icon}</span><span>${message}</span>`;
+      toastContainer.appendChild(toast);
+      setTimeout(() => {
+        toast.style.opacity = "0";
+        toast.style.transform = "translateY(10px)";
+        toast.style.transition = "all 0.2s ease";
+        setTimeout(() => toast.remove(), 200);
+      }, 3000);
+    }
+
+    // --- Focus Management ---
+    function focusPane(paneId) {
+      document.querySelectorAll(".tui-pane").forEach(p => p.classList.remove("focused"));
+      const target = document.getElementById(paneId);
+      if (target) {
+        target.classList.add("focused");
+        focusedPaneId = paneId;
+      }
+    }
+
+    // Bind click to focus for all panes
+    document.querySelectorAll(".tui-pane").forEach(pane => {
+      pane.addEventListener("click", () => focusPane(pane.id));
+    });
+
+    // --- Zoom / Maximize Toggle ---
+    function toggleZoom(paneId) {
+      const pane = document.getElementById(paneId);
+      if (!pane) return;
+      const wasZoomed = pane.classList.contains("zoomed");
+      document.querySelectorAll(".tui-pane").forEach(p => p.classList.remove("zoomed"));
+      if (!wasZoomed) {
+        pane.classList.add("zoomed");
+        showToast(`Zoomed ${paneId.toUpperCase()} (Press Alt+Z or Esc to restore)`, "⛶");
+      } else {
+        showToast(`Restored multi-pane layout`, "⛶");
+      }
+    }
+
+    document.querySelectorAll(".zoom-btn").forEach(btn => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const pane = btn.closest(".tui-pane");
+        if (pane) toggleZoom(pane.id);
+      });
+    });
+
+    // Double-click pane header to zoom
+    document.querySelectorAll(".pane-header").forEach(header => {
+      header.addEventListener("dblclick", () => {
+        const pane = header.closest(".tui-pane");
+        if (pane) toggleZoom(pane.id);
+      });
+    });
+
+    // --- Sidebar Toggle ---
+    function toggleSidebar() {
+      sidebarOpen = !sidebarOpen;
+      sidebar.classList.toggle("collapsed", !sidebarOpen);
+      showToast(sidebarOpen ? "Inspector Opened" : "Inspector Collapsed", "📋");
+    }
+
+    document.getElementById("toggleSidebarBtn").addEventListener("click", toggleSidebar);
+    document.getElementById("closeSidebarBtn").addEventListener("click", toggleSidebar);
+
+    // --- Command Palette ---
+    function openPalette() {
+      paletteModal.classList.add("open");
+      paletteInput.value = "";
+      paletteInput.focus();
+      filterPalette("");
+    }
+
+    function closePalette() {
+      paletteModal.classList.remove("open");
+    }
+
+    document.getElementById("openPaletteBtn").addEventListener("click", openPalette);
+    document.getElementById("cheatPalette").addEventListener("click", openPalette);
+
+    paletteInput.addEventListener("input", (e) => {
+      filterPalette(e.target.value.toLowerCase());
+    });
+
+    function filterPalette(query) {
+      const items = paletteList.querySelectorAll(".palette-item");
+      let firstVisible = null;
+      items.forEach(item => {
+        const text = item.textContent.toLowerCase();
+        if (text.includes(query)) {
+          item.style.display = "flex";
+          if (!firstVisible) firstVisible = item;
+        } else {
+          item.style.display = "none";
+        }
+        item.classList.remove("active");
+      });
+      if (firstVisible) firstVisible.classList.add("active");
+    }
+
+    // Palette item execution
+    paletteList.addEventListener("click", (e) => {
+      const item = e.target.closest(".palette-item");
+      if (!item) return;
+      executeAction(item.dataset.action);
+      closePalette();
+    });
+
+    function executeAction(action) {
+      switch (action) {
+        case "approve":
+          focusPane("pane2");
+          showToast("Focused HITL Approval Card", "🚨");
+          break;
+        case "split-v":
+          showToast("Vertical split applied to current pane", "▥");
+          break;
+        case "split-h":
+          showToast("Horizontal split applied to current pane", "▤");
+          break;
+        case "zoom":
+          toggleZoom(focusedPaneId);
+          break;
+        case "sidebar":
+          toggleSidebar();
+          break;
+        case "keymap":
+          openSetupModal();
+          break;
+        case "detach":
+          showToast("Session detached cleanly. Background daemon retains PTYs.", "🚪");
+          break;
+      }
+    }
+
+    // --- Setup / Keymap Modal ---
+    function openSetupModal() {
+      setupModal.classList.add("open");
+    }
+    function closeSetupModal() {
+      setupModal.classList.remove("open");
+    }
+
+    document.getElementById("openSetupBtn").addEventListener("click", openSetupModal);
+    document.getElementById("cheatHelp").addEventListener("click", openSetupModal);
+    document.getElementById("closeSetupModalBtn").addEventListener("click", closeSetupModal);
+
+    // Profile buttons
+    const profileBtns = [
+      document.getElementById("profileModernBtn"),
+      document.getElementById("profileTmuxBtn"),
+      document.getElementById("profileVimBtn")
+    ];
+    profileBtns.forEach(btn => {
+      btn.addEventListener("click", () => {
+        profileBtns.forEach(b => b.classList.remove("active"));
+        btn.classList.add("active");
+        showToast(`Switched profile to: ${btn.textContent.trim()}`, "⚡");
+      });
+    });
+
+    // --- HITL Approval Actions ---
+    const approvalCard = document.getElementById("approvalCard");
+    const headerBlockedPill = document.getElementById("headerBlockedPill");
+
+    function handleApprove() {
+      if (!approvalCard) return;
+      approvalCard.innerHTML = `
+        <div style="padding: 12px; background: var(--status-working-dim); color: var(--status-working); font-weight: 700; border-radius: var(--radius-sm); border: 1px solid var(--status-working);">
+          ✔ Plan #84 APPROVED ONCE by Operator. Resuming OpenCode agent on dev-vps...
+        </div>
+      `;
+      headerBlockedPill.style.display = "none";
+      showToast("Plan Approved! Worker dispatched to remote VPS", "✔");
+    }
+
+    function handleDeny() {
+      if (!approvalCard) return;
+      approvalCard.innerHTML = `
+        <div style="padding: 12px; background: var(--status-error-dim); color: var(--status-error); font-weight: 700; border-radius: var(--radius-sm); border: 1px solid var(--status-error);">
+          ✖ Plan #84 DENIED. Agent rolled back safely.
+        </div>
+      `;
+      headerBlockedPill.style.display = "none";
+      showToast("Plan Denied. Action cancelled.", "✖");
+    }
+
+    document.getElementById("approveOnceBtn")?.addEventListener("click", handleApprove);
+    document.getElementById("denyBtn")?.addEventListener("click", handleDeny);
+    document.getElementById("reviseBtn")?.addEventListener("click", () => {
+      showToast("Revision mode: enter new instructions in terminal", "✎");
+    });
+    document.getElementById("cheatApprove").addEventListener("click", () => {
+      focusPane("pane2");
+      handleApprove();
+    });
+
+    // --- Workspace Tabs ---
+    document.querySelectorAll(".tui-tab").forEach(tab => {
+      tab.addEventListener("click", () => {
+        document.querySelectorAll(".tui-tab").forEach(t => t.classList.remove("active"));
+        tab.classList.add("active");
+        showToast(`Switched to workspace: ${tab.querySelector("span:nth-child(2)").textContent}`, "📂");
+      });
+    });
+
+    // --- Interactive Keybinding Engine (Keyboard Listener) ---
+    window.addEventListener("keydown", (e) => {
+      // If modal is open, handle Esc & Navigation
+      if (paletteModal.classList.contains("open")) {
+        if (e.key === "Escape") {
+          closePalette();
+          e.preventDefault();
+        } else if (e.key === "Enter") {
+          const activeItem = paletteList.querySelector(".palette-item.active");
+          if (activeItem) {
+            executeAction(activeItem.dataset.action);
+            closePalette();
+            e.preventDefault();
+          }
+        }
+        return;
+      }
+
+      if (setupModal.classList.contains("open")) {
+        if (e.key === "Escape") {
+          closeSetupModal();
+          e.preventDefault();
+        }
+        return;
+      }
+
+      // 1. Universal Command Palette: Ctrl+K or Cmd+K
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        openPalette();
+        return;
+      }
+
+      // 2. Help / Setup Modal: '?'
+      if (e.key === "?" && !e.ctrlKey && !e.altKey) {
+        e.preventDefault();
+        openSetupModal();
+        return;
+      }
+
+      // 3. Alt-Chords (Modern Ergonomic Setup)
+      if (e.altKey) {
+        switch (e.key.toLowerCase()) {
+          case "h":
+          case "arrowleft":
+            focusPane("pane1");
+            e.preventDefault();
+            break;
+          case "l":
+          case "arrowright":
+            focusPane("pane2");
+            e.preventDefault();
+            break;
+          case "j":
+          case "arrowdown":
+            focusPane("pane3");
+            e.preventDefault();
+            break;
+          case "k":
+          case "arrowup":
+            focusPane("pane2");
+            e.preventDefault();
+            break;
+          case "v":
+            executeAction("split-v");
+            e.preventDefault();
+            break;
+          case "s":
+            executeAction("split-h");
+            e.preventDefault();
+            break;
+          case "z":
+            toggleZoom(focusedPaneId);
+            e.preventDefault();
+            break;
+          case "b":
+            toggleSidebar();
+            e.preventDefault();
+            break;
+          case "a":
+            focusPane("pane2");
+            showToast("Focused HITL approval. Press 'y' to approve, 'd' to deny.", "🚨");
+            e.preventDefault();
+            break;
+          case "1":
+          case "2":
+          case "3":
+            const targetTab = document.querySelector(`.tui-tab[data-tab="${e.key}"]`);
+            if (targetTab) targetTab.click();
+            e.preventDefault();
+            break;
+        }
+      }
+
+      // 4. Quick HITL single-letter actions when approval is active and focused
+      if (focusedPaneId === "pane2" && !e.ctrlKey && !e.altKey && !e.metaKey) {
+        if (e.key === "y" || e.key === "Y") {
+          handleApprove();
+          e.preventDefault();
+        } else if (e.key === "d" || e.key === "D") {
+          handleDeny();
+          e.preventDefault();
+        }
+      }
+
+      // 5. Esc to unzoom or clear focus
+      if (e.key === "Escape") {
+        const zoomed = document.querySelector(".tui-pane.zoomed");
+        if (zoomed) {
+          toggleZoom(zoomed.id);
+          e.preventDefault();
+        }
+      }
+    });
+
+    // --- Interactive Drag Resizing of Seams ---
+    const divider1 = document.getElementById("splitDivider1");
+    let isDragging1 = false;
+
+    divider1.addEventListener("mousedown", (e) => {
+      isDragging1 = true;
+      divider1.classList.add("active");
+      document.body.style.cursor = "col-resize";
+    });
+
+    window.addEventListener("mousemove", (e) => {
+      if (!isDragging1) return;
+      const containerRect = document.getElementById("splitContainer").getBoundingClientRect();
+      const offset = e.clientX - containerRect.left;
+      const ratio = Math.max(20, Math.min(80, (offset / containerRect.width) * 100));
+      document.getElementById("pane1").style.flex = ratio;
+      document.getElementById("pane1").nextElementSibling.nextElementSibling.style.flex = (100 - ratio);
+    });
+
+    window.addEventListener("mouseup", () => {
+      if (isDragging1) {
+        isDragging1 = false;
+        divider1.classList.remove("active");
+        document.body.style.cursor = "default";
+        showToast("Layout split ratio updated", "📐");
+      }
+    });
+
+    // Initial greeting
+    setTimeout(() => {
+      showToast("Welcome to AIBridge TUI. Press '?' for keybindings or Ctrl+K for palette.", "🚀");
+    }, 600);
+
+  })();
+</script>
+</body>
+</html>

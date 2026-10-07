@@ -18,6 +18,7 @@
 pub mod app;
 
 pub use app::{
-    BlockedReason, ClientError, DaemonWorld, InputMode, Job, Pane, PaneKind, Presentation,
-    RunOutcome, Tailscale, TailscaleStatus, UiState, Workspace, MINIMUM_COLUMNS, MINIMUM_ROWS,
+    BlockedReason, ClientError, DaemonWorld, InputMode, Job, KeybindingProfile, Pane, PaneKind,
+    Presentation, RunOutcome, Tailscale, TailscaleStatus, UiState, Workspace, MINIMUM_COLUMNS,
+    MINIMUM_ROWS,
 };

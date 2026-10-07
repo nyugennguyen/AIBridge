@@ -1,0 +1,115 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <defs>
+    <!-- Background Gradient -->
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0e1017"/>
+      <stop offset="50%" stop-color="#0a0b10"/>
+      <stop offset="100%" stop-color="#06070a"/>
+    </linearGradient>
+
+    <!-- Electric Cyan to Violet Cyber Gradient -->
+    <linearGradient id="cyanVioletGrad" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#00f0ff"/>
+      <stop offset="45%" stop-color="#38bdf8"/>
+      <stop offset="80%" stop-color="#818cf8"/>
+      <stop offset="100%" stop-color="#c084fc"/>
+    </linearGradient>
+
+    <!-- Bridge Arch Gradient -->
+    <linearGradient id="archGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00f0ff"/>
+      <stop offset="100%" stop-color="#a855f7"/>
+    </linearGradient>
+
+    <!-- Terminal Prompt Glow -->
+    <linearGradient id="chevronGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#10b981"/>
+      <stop offset="100%" stop-color="#00f0ff"/>
+    </linearGradient>
+
+    <!-- Subtle Glow Filter -->
+    <filter id="cyanGlow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="10" result="blur"/>
+      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+    </filter>
+
+    <filter id="softGlow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="24" result="blur"/>
+      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+    </filter>
+  </defs>
+
+  <!-- Container Base with Rounded Rect -->
+  <rect width="512" height="512" rx="112" fill="url(#bgGrad)"/>
+  <rect width="510" height="510" x="1" y="1" rx="111" fill="none" stroke="#222738" stroke-width="2"/>
+
+  <!-- Subdued Mesh Grid Texture in Background -->
+  <g opacity="0.12" stroke="#38bdf8" stroke-width="1.5">
+    <path d="M64 128 h384 M64 256 h384 M64 384 h384"/>
+    <path d="M128 64 v384 M256 64 v384 M384 64 v384"/>
+    <circle cx="128" cy="128" r="3" fill="#00f0ff"/>
+    <circle cx="384" cy="128" r="3" fill="#00f0ff"/>
+    <circle cx="256" cy="256" r="3" fill="#c084fc"/>
+    <circle cx="128" cy="384" r="3" fill="#00f0ff"/>
+    <circle cx="384" cy="384" r="3" fill="#00f0ff"/>
+  </g>
+
+  <!-- Ambient Glow Blob Behind Bridge -->
+  <circle cx="256" cy="240" r="130" fill="#00f0ff" opacity="0.08" filter="url(#softGlow)"/>
+  <circle cx="340" cy="200" r="100" fill="#a855f7" opacity="0.08" filter="url(#softGlow)"/>
+
+  <!-- AIBridge Architectural Vector Symbol -->
+  <g transform="translate(0, 8)">
+    <!-- Base Foundation Spans (Network Mesh Deck) -->
+    <path d="M 104 368 L 408 368" stroke="#1e2436" stroke-width="12" stroke-linecap="round"/>
+    <path d="M 128 368 L 384 368" stroke="url(#cyanVioletGrad)" stroke-width="4" stroke-linecap="round" opacity="0.7"/>
+
+    <!-- Left Pylon (Local Node / Machine A) -->
+    <path d="M 148 368 L 176 156 L 196 156 L 208 368" fill="none" stroke="url(#cyanVioletGrad)" stroke-width="14" stroke-linejoin="round" stroke-linecap="round"/>
+    
+    <!-- Right Pylon (Remote Worker / Machine B) -->
+    <path d="M 304 368 L 316 156 L 336 156 L 364 368" fill="none" stroke="url(#cyanVioletGrad)" stroke-width="14" stroke-linejoin="round" stroke-linecap="round"/>
+
+    <!-- Main Bridge Suspension Arc (forming the dynamic 'A' and 'B' crossover) -->
+    <path d="M 104 350 Q 186 168 256 220 Q 326 272 408 170" 
+          fill="none" 
+          stroke="url(#archGrad)" 
+          stroke-width="18" 
+          stroke-linecap="round"
+          filter="url(#cyanGlow)"/>
+
+    <!-- Counter Cable / Secure Tunnel Beam -->
+    <path d="M 104 170 Q 186 272 256 220 Q 326 168 408 350" 
+          fill="none" 
+          stroke="url(#cyanVioletGrad)" 
+          stroke-width="6" 
+          stroke-linecap="round" 
+          stroke-dasharray="8 10"
+          opacity="0.6"/>
+
+    <!-- Central Terminal Prompt Glyph (Chevron + Cursor) inside the Bridge Vault -->
+    <g transform="translate(256, 284)">
+      <!-- Terminal Chevron '>' -->
+      <path d="M -36 -28 L -6 0 L -36 28" 
+            fill="none" 
+            stroke="url(#chevronGrad)" 
+            stroke-width="10" 
+            stroke-linecap="round" 
+            stroke-linejoin="round"
+            filter="url(#cyanGlow)"/>
+      
+      <!-- Terminal Cursor Block '_' -->
+      <line x1="6" y1="26" x2="36" y2="26" 
+            stroke="#00f0ff" 
+            stroke-width="10" 
+            stroke-linecap="round"/>
+    </g>
+
+    <!-- Mesh Peer Connection Nodes (Glowing Points) -->
+    <circle cx="104" cy="350" r="9" fill="#00f0ff" stroke="#0a0b10" stroke-width="3"/>
+    <circle cx="408" cy="170" r="9" fill="#c084fc" stroke="#0a0b10" stroke-width="3"/>
+    <circle cx="186" cy="156" r="8" fill="#38bdf8" stroke="#0a0b10" stroke-width="3"/>
+    <circle cx="326" cy="156" r="8" fill="#a855f7" stroke="#0a0b10" stroke-width="3"/>
+    <circle cx="256" cy="220" r="10" fill="#10b981" stroke="#0a0b10" stroke-width="3" filter="url(#cyanGlow)"/>
+  </g>
+</svg>

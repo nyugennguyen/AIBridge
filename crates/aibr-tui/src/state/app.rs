@@ -55,6 +55,40 @@ pub enum InputMode {
     Navigate,
 }
 
+/// The active keybinding profile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum KeybindingProfile {
+    /// Profile A: Zero-prefix Alt-chords for instant navigation and split management.
+    #[default]
+    ModernErgonomic,
+    /// Profile B: Tmux prefix (`Ctrl+B`) with classic two-keystroke commands.
+    TmuxClassic,
+    /// Vi-centric motions and split management.
+    VimCentric,
+}
+
+impl KeybindingProfile {
+    /// Human-readable label for UI badges and menus.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::ModernErgonomic => "Modern Ergonomic",
+            Self::TmuxClassic => "Tmux Classic",
+            Self::VimCentric => "Vim-Centric",
+        }
+    }
+
+    /// Short code for headers.
+    #[must_use]
+    pub fn short_name(self) -> &'static str {
+        match self {
+            Self::ModernErgonomic => "Modern",
+            Self::TmuxClassic => "Tmux",
+            Self::VimCentric => "Vim",
+        }
+    }
+}
+
 /// Below this the layout cannot be drawn without overwriting its own borders.
 ///
 /// 60x18 matches `MINIMUM_TUI_COLUMNS`/`MINIMUM_TUI_ROWS` in `src/tui/types.ts`,
@@ -323,6 +357,8 @@ pub struct Presentation {
     pub size: (u16, u16),
     /// Whether the terminal is too small to draw the layout.
     pub too_small: bool,
+    /// Active keybinding profile.
+    pub keybinding_profile: KeybindingProfile,
 }
 
 impl Default for Presentation {
@@ -338,6 +374,7 @@ impl Default for Presentation {
             zoomed: None,
             size: (MINIMUM_COLUMNS, MINIMUM_ROWS),
             too_small: false,
+            keybinding_profile: KeybindingProfile::ModernErgonomic,
         }
     }
 }

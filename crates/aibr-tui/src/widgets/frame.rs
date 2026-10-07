@@ -100,7 +100,21 @@ pub fn render_frame(
     }
 
     if let Some(modal) = input.modal {
-        draw_approval_modal(modal, full, buffer);
+        let is_pane_drawn =
+            match &state.presentation.zoomed {
+                Some(zoomed) => {
+                    let p = state.world.panes.get(zoomed);
+                    p.is_some_and(|p| {
+                        p.job_id.as_deref() == Some(&modal.job.id) || zoomed == &modal.job.id
+                    })
+                }
+                None => state.world.panes.iter().any(|(pid, p)| {
+                    p.job_id.as_deref() == Some(&modal.job.id) || pid == &modal.job.id
+                }),
+            };
+        if !is_pane_drawn {
+            draw_approval_modal(modal, full, buffer);
+        }
     }
 
     (chrome, rects, rows)
@@ -122,25 +136,57 @@ fn draw_pane(
             // A pane with no emulator yet (between the snapshot and its first chunk)
             // draws nothing rather than a placeholder: an empty pane and a
             // "starting" pane look identical, and inventing text would be a lie.
-            let Some(parser) = input.parsers.get(pane_id) else {
-                return;
-            };
-            // Cloned rather than borrowed: `TerminalPane` holds the selection by
-            // value, and a borrow would make the widget's lifetime depend on the
-            // input frame's -- which would mean every caller has to keep the
-            // `FrameInput` alive for the whole render.
-            let selection = input
-                .selection
-                .filter(|selection| selection.pane_id == pane_id)
-                .cloned();
-            let mut view = TerminalPane::new(parser.grid());
-            view.cursor = parser
-                .cursor()
-                .visible
-                .then_some((parser.cursor().column, parser.cursor().row));
-            view.selection = selection;
-            view.top_row = input.scroll.get(pane_id).copied().unwrap_or(0);
-            draw_terminal_pane(&view, area, buffer);
+            if let Some(parser) = input.parsers.get(pane_id) {
+                // Cloned rather than borrowed: `TerminalPane` holds the selection by
+                // value, and a borrow would make the widget's lifetime depend on the
+                // input frame's -- which would mean every caller has to keep the
+                // `FrameInput` alive for the whole render.
+                let selection = input
+                    .selection
+                    .filter(|selection| selection.pane_id == pane_id)
+                    .cloned();
+                let mut view = TerminalPane::new(parser.grid());
+                view.cursor = parser
+                    .cursor()
+                    .visible
+                    .then_some((parser.cursor().column, parser.cursor().row));
+                view.selection = selection;
+                view.top_row = input.scroll.get(pane_id).copied().unwrap_or(0);
+                draw_terminal_pane(&view, area, buffer);
+            }
+
+            // When rendering a pane whose job is JobState::Blocked (or matching modal.job.id),
+            // render the embedded approval card inside the pane's viewport.
+            let blocked_job = pane
+                .job_id
+                .as_ref()
+                .and_then(|jid| state.world.jobs.get(jid))
+                .filter(|j| j.state == aibr_ipc::contracts::JobState::Blocked)
+                .or_else(|| {
+                    state
+                        .world
+                        .jobs
+                        .get(pane_id)
+                        .filter(|j| j.state == aibr_ipc::contracts::JobState::Blocked)
+                })
+                .or_else(|| {
+                    input.modal.and_then(|m| {
+                        if pane.job_id.as_deref() == Some(&m.job.id) || pane_id == m.job.id {
+                            Some(&m.job)
+                        } else {
+                            None
+                        }
+                    })
+                });
+
+            if let Some(job) = blocked_job {
+                let card_state = if let Some(m) = input.modal.filter(|m| m.job.id == job.id) {
+                    (*m).clone()
+                } else {
+                    crate::widgets::modal::ApprovalModalState::new(job.clone())
+                };
+                crate::widgets::modal::draw_embedded_approval_card(&card_state, area, buffer);
+            }
         }
         // The diff and audit panes are drawn by the shell through their own widgets;
         // a pane whose widget has not been wired draws as an empty frame rather
@@ -207,5 +253,20 @@ fn draw_too_small(state: &UiState, full: Rect, buffer: &mut Buffer) {
     for grapheme in message.chars() {
         buffer[(x, full.y)].set_symbol(&grapheme.to_string());
         x += 1;
+    }
+}
+
+/// Draw floating overlays (command palette and keymap modal) into `buffer` if active.
+pub fn draw_overlays(
+    command_palette: Option<&crate::input::menu::CommandPaletteState>,
+    keymap_modal: Option<&crate::input::menu::KeymapModalState>,
+    area: Rect,
+    buffer: &mut Buffer,
+) {
+    if let Some(palette) = command_palette {
+        crate::widgets::modal::draw_command_palette(palette, area, buffer);
+    }
+    if let Some(keymap) = keymap_modal {
+        crate::widgets::modal::draw_keymap_modal(keymap, area, buffer);
     }
 }

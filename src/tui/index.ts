@@ -14,7 +14,11 @@ export {
   type TuiSnapshot,
   type TuiUiState,
   type TuiWorkflow,
+  type TuiTailscaleNodeInfo,
+  type TuiTaskDagNode,
+  type TuiTelemetrySummary,
 } from "./types.js"
 export { buildTuiView } from "./view-model.js"
+export { buildInspectorLines, buildTelemetrySummary, inspectorLines } from "./view-model.js"
 export * from "./terminal/index.js"
 export { runLocalTui } from "./bootstrap.js"

@@ -1,4 +1,5 @@
 import type { ProcessRunner, Prompter } from "../host/types.js"
+import { CLI_VERSION } from "../version.js"
 
 export const PACKAGE_NAME = "@nyugennguyen/aibridge"
 
@@ -68,7 +69,7 @@ export async function runUpdate(
   options?: UpdateOptions,
   deps?: UpdateDeps,
 ): Promise<UpdateResult> {
-  const currentVersion = deps?.currentVersion ?? "2.1.0"
+  const currentVersion = deps?.currentVersion ?? CLI_VERSION
   const fetchVersion = deps?.fetchLatestVersion ?? defaultFetchLatestVersion
 
   // ── 1. Fetch latest version from registry ──────────────────────────

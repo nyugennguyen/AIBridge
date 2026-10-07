@@ -2,6 +2,9 @@
 
 ## [2.1.0] - 2026-10-07
 
+> Released as tag `v2.1.0` on `aibr-v2`. The GitHub release was **not** created, so this
+> version is not yet published to npm — creating the release is what triggers `publish.yml`.
+
 ### TUI control plane upgrade & onboarding wizard
 
 Implements the second phase of ADR 0010. Full record in
@@ -41,6 +44,10 @@ Implements the second phase of ADR 0010. Full record in
   `ExecStart`. Units are now written `0600`.
 - `cargo fmt --all --check` and `cargo clippy --workspace --all-targets -- -D warnings` are
   clean across the workspace.
+- **The version no longer drifts.** The splash banner hardcoded `aibr v2.0`, so this release
+  advertised itself as 2.0 on startup, and the string was written out by hand in four places.
+  It now lives in `src/version.ts` as `CLI_VERSION`, read by the banner, `--version`,
+  `aibr update`, and the diagnostics bundle.
 
 ### Known limitations
 

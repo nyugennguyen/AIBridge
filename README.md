@@ -1,13 +1,27 @@
-# AIBridge v2 (AiBR-V2)
+<p align="center">
+  <img src="Docs/assets/logos/aibridge-mark.svg" alt="AIBridge logo" width="88" height="88">
+</p>
+
+<h1 align="center">AIBridge</h1>
+
+<p align="center"><strong>Tailscale mesh control plane for AI agents.</strong></p>
+
+<p align="center">
+  <img src="Docs/assets/logos/aibridge-lockup.svg" alt="AIBridge" width="560">
+</p>
+
+<p align="center">
+  <a href="Docs/assets/logos/logo-design-system.html"><code>╭─▲─╮ ◈ AIBridge</code></a>
+</p>
 
 [![CI](https://github.com/nyugennguyen/AIBridge/actions/workflows/ci.yml/badge.svg)](https://github.com/nyugennguyen/AIBridge/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Bun Version](https://img.shields.io/badge/Bun-%3E%3D1.3.0-black.svg)](https://bun.sh)
 [![Rust Version](https://img.shields.io/badge/Rust-1.94-orange.svg)](https://www.rust-lang.org)
 
-**AiBR-V2** is a resilient, polyglot orchestrator and agent mesh connecting OpenCode and local execution daemons securely across machines over private Tailscale networks.
+**AIBridge** is a resilient, polyglot orchestrator and agent mesh connecting OpenCode and local execution daemons securely across machines over private Tailscale networks.
 
-AiBR-V2 replaces traditional monolithic bridge architectures with a **two-tier polyglot architecture**: a native Rust ingress router (`aibr-router`) for low-overhead, fail-closed admission and durable queuing, paired with a TypeScript/Bun worker daemon (`aibr worker`) for semantic task execution, rule evaluation, and distributed orchestration.
+AIBridge replaces traditional monolithic bridge architectures with a **two-tier polyglot architecture**: a native Rust ingress router (`aibr-router`) for low-overhead, fail-closed admission and durable queuing, paired with a TypeScript/Bun worker daemon (`aibr worker`) for semantic task execution, rule evaluation, and distributed orchestration.
 
 The first supported topology is two machines:
 
@@ -138,19 +152,11 @@ export PATH="$(bun pm bin -g):$PATH"
 
 ## Setup
 
-### Create and share the bearer token
+### Run the setup wizard
 
-AIBridge uses one shared bearer token to authenticate requests between the two hosts. Generate it once on a trusted machine:
+AIBridge uses one shared bearer token to authenticate requests between hosts. The wizard can generate it for you in Step 2; you only need to copy the value across to your peer machine.
 
-```bash
-openssl rand -hex 32
-```
-
-Save the value in an approved secret channel, such as a password manager or encrypted message. Enter that exact same value when `aibr setup` prompts for the bearer token on **both machines**. Both machines must use the same token.
-
-Do not put it in `config.json`, shell history, or source control. It is not stored in `config.json`. The bearer token is stored as `~/.local/share/aibridge/<profile>/secrets/bearer_token` by default (or beneath your configured XDG data directory).
-
-Run the interactive setup wizard on each machine:
+Run it on each machine:
 
 ```bash
 aibr setup --profile <name>
@@ -168,14 +174,44 @@ And on your testing VPS:
 aibr setup --profile test-vps
 ```
 
-The wizard will:
+### The 5-step wizard
 
-1. **Check prerequisites** — verify tmux, opencode, and Tailscale are installed. If anything is missing, it shows the exact install command and asks for your confirmation before running it.
-2. **Verify Tailscale** — confirm Tailscale is logged in and extract your machine's Tailscale IPv4 address and MagicDNS hostname.
-3. **Collect configuration** — prompt for agent ID, project paths, peer addresses, bearer token, and OpenCode password. Secrets are masked during input.
-4. **Validate and save** — write a Zod-validated JSON config and secrets file to your XDG directories with owner-only permissions.
+The full interactive mockup is in [`Docs/tui/aibridge-setup-wizard.html`](Docs/tui/aibridge-setup-wizard.html), and the brand tokens are in [`Docs/assets/logos/logo-design-system.html`](Docs/assets/logos/logo-design-system.html).
 
-Setup does **not** start any services. When it completes, it tells you the next command to run.
+The wizard walks five steps. You can jump straight to any step you have already completed by typing its number (`1`–`5`).
+
+| Step | What it does |
+| --- | --- |
+| **1. Network** | Verifies Tailscale is running, extracts this machine's Tailscale IPv4 and MagicDNS hostname, and checks that ports `4095` (router), `4096` (OpenCode), and `8787` (bridge) are free. |
+| **2. Security** | Generates a CSPRNG bearer token, or accepts one you paste. Press `r` to regenerate. Confirms the security floor: constant-time token comparison, a 2 MB body cap, and automatic secret redaction. |
+| **3. Allowlists** | Choose the project roots agents may touch. Containment is enforced **fail-closed**: a path that is not under an allowed root is refused, not clamped. |
+| **4. AI Runtimes** | Probes the OpenCode loopback endpoint and resolves the `claude` and `codex` CLIs on `$PATH`. Sets peer agent ID and URL. |
+| **5. Install & Test** | Writes a supervisor unit (launchd on macOS, systemd on Linux) and runs a preflight audit. |
+
+**Controls.** `Tab` / `Shift+Tab` move between fields, `Space` toggles the focused checkbox, `Enter` submits and advances, `Esc` or `b` goes back, `r` regenerates the token in Step 2, and the mouse works throughout — step tabs, checkboxes, and buttons are all clickable.
+
+If you would rather not generate a token, or you want a specific one shared across hosts, answer `n` at Step 2 and paste the same value on both machines:
+
+```bash
+openssl rand -hex 32
+```
+
+Save it in an approved secret channel, such as a password manager. Both machines must use the same token.
+
+Do not put it in shell history or source control. The token is not stored in `config.json` — it is kept separately at `~/.local/share/aibridge/<profile>/secrets/bearer_token` with `0600` permissions, beneath your configured XDG data directory.
+
+### What setup does and does not do
+
+Setup writes the supervisor unit but **does not start it**. The unit is `KeepAlive`, so activating one whose config does not match the router's store turns a setup mistake into a restart loop. When setup finishes it asks whether to start the daemon now, and reports which of four states you are actually in:
+
+- daemon started
+- unit written but not started (prints the command to start it yourself)
+- unit could not be written (error shown)
+- no supervisor unit on this platform
+
+This matters because a unit that was never started and a unit that is running look identical from the outside.
+
+**Setup does not provision the ingress queue.** The `ingress_outbox` table belongs to the Rust router and is created by an explicit operator step, `aibr-router --init-store`. The wizard deliberately does not create it: an implicitly-created store is a queue that has lost every row it admitted, because the router refuses to serve against it and the worker drains an empty one.
 
 ### XDG Profile Locations
 
@@ -264,20 +300,44 @@ aibr <command> [options]
 
 | Command | Description | Profile Required |
 |---|---|:---:|
-| `aibr setup` | Interactive profile setup wizard (XDG directories, permissions). | Optional |
+| `aibr setup` | Interactive 5-step onboarding wizard (network, security, allowlists, runtimes, supervisor unit). | Optional |
 | `aibr start` | Launches opencode and bridge inside detached tmux windows. | **Yes** |
 | `aibr worker` | Starts the Tier 2 ingress drain worker (no listener). | **Yes** |
 | `aibr serve` | Runs the bridge HTTP server directly (engine or shadow mode). | **Yes** |
 | `aibr status` | Checks process health, queue depth, and probe connectivity. | **Yes** |
-| `aibr tui` | Opens the full-screen interactive agent orchestrator TUI. | **Yes** |
+| `aibr tui` | Opens the full-screen interactive agent orchestrator TUI (Rust `ratatui` client over the local IPC bus). | **Yes** |
 | `aibr bundle` | Generates a redacted diagnostic support bundle. | **Yes** |
 
 ### Global Options
 - `--profile, -p <name>`: Profile name (required for start/serve/worker/status/tui).
 - `--preview`: Preview support bundle without exporting raw JSON.
 - `--shadow-mode`: Runs engine in shadow mode, mirroring traffic to the router.
+- `--ipc-publish`: Serve the local IPC bus for the TUI (`worker` only).
 - `--help, -h`: Displays help output.
 - `--version, -v`: Displays version.
+
+### TUI keybindings
+
+`aibr tui` has two keybinding profiles. **Profile A (Modern)** is the default and needs no prefix key:
+
+| Action | Binding |
+|---|---|
+| Focus pane | `Alt+H` / `Alt+J` / `Alt+K` / `Alt+L`, or `Alt+Arrows` |
+| Split vertical / horizontal | `Alt+V` / `Alt+S` |
+| Zoom / maximize pane | `Alt+Z` |
+| Close focused pane | `Alt+W` |
+| Switch workspace tab | `Alt+1` … `Alt+9` |
+| Jump to pending HITL card | `Alt+A` |
+| Toggle inspector sidebar | `Alt+B` |
+| Command palette (fuzzy) | `Ctrl+K` |
+| Keymap & profile switcher | `?` or `F1` |
+| Detach (exit 0) | `Alt+Q` |
+
+**Profile B (Tmux Classic)** arms a `Ctrl+B` prefix with a 2000 ms window, preserving `,` `%` `z` `c` `n` `p` `q`. The window is deliberately longer than tmux's 1000 ms because this client is commonly used over SSH, where one delayed packet loses the second key of a two-key sequence.
+
+Detaching leaves the daemon and all agent PTYs running. Re-running `aibr tui` re-attaches and re-hydrates from the same daemon.
+
+> **Two things the TUI does not yet do.** `approve_plan` / `reject_plan` reach the daemon and are answered `accepted: false`, because the engine's plan-review path sits behind the job manager — the HITL card renders and the frame is sent, but no approval takes effect yet. And the PTY host is not wired to the listener, so pane commands from a real client are answered `not_allowed`. No real `opencode` has run through the bus end to end.
 
 ---
 
@@ -469,13 +529,15 @@ This verifies:
 
 Update the version number across the repository:
 - `package.json`: `"version": "x.y.z"`
-- `src/cli.ts`: default version constants
+- `src/version.ts`: `CLI_VERSION` — the single source of truth every version report in the CLI reads (splash banner, `--version`, `aibr update`, diagnostics bundle)
 - `CHANGELOG.md`: document new features, fixes, and changes under `## [x.y.z]`
+
+`publish.yml` refuses a release tag that does not match `package.json`, which catches the mismatch in the direction that matters. The reverse drift is not caught automatically, which is why the version lives in one place rather than being written out at each use site.
 
 ### 3. Merge or Push to `main`
 
 ```bash
-git add package.json src/cli.ts CHANGELOG.md
+git add package.json src/version.ts CHANGELOG.md
 git commit -m "chore(release): prepare vx.y.z"
 git push origin main
 ```

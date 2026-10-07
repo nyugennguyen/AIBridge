@@ -12,6 +12,7 @@ import { join } from "node:path"
 import { execFileSync } from "node:child_process"
 import { checkDatabaseIntegrity } from "../storage/integrity.js"
 import { redactLogAttributes } from "../observability/redaction.js"
+import { CLI_VERSION } from "../version.js"
 import {
   supportBundleSchema,
   type GenerateBundleOptions,
@@ -57,7 +58,7 @@ export function generateSupportBundle(
   }
 
   const versions = {
-    npmPackageVersion: "2.1.0",
+    npmPackageVersion: CLI_VERSION,
     routerVersion,
     contractVersion: "v1",
     eventStoreVersion: CURRENT_DATABASE_VERSION,

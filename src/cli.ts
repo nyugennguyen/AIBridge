@@ -17,6 +17,9 @@
 
 import { validateProfileName } from "./host/paths.js"
 import { readSecret } from "./host/profile-store.js"
+import { CLI_VERSION } from "./version.js"
+
+export { CLI_VERSION }
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -221,7 +224,7 @@ export function getCliBanner(hasColor = true): string {
     `${violet}██╔══██║██║██╔══██╗██╔══██╗██║██║  ██║██║   ██║██╔══╝  ${reset}`,
     `${emerald}██║  ██║██║██████╔╝██║  ██║██║██████╔╝╚██████╔╝███████╗${reset}`,
     `${emerald}╚═╝  ╚═╝╚═╝╚═════╝ ╚═╝  ╚═╝╚═╝╚═════╝  ╚═════╝ ╚══════╝${reset}`,
-    `${dim}[ aibr v2.0 ] > Tailscale Mesh Control Plane for AI Agents${reset}`,
+    `${dim}[ aibr ${CLI_VERSION} ] > Tailscale Mesh Control Plane for AI Agents${reset}`,
   ].join("\n")
 }
 
@@ -793,7 +796,7 @@ async function createRealDeps(): Promise<CliDeps> {
         isTTY: Boolean(process.stdin?.isTTY),
       })
       const result = await runUpdate(options, {
-        currentVersion: "2.1.0",
+        currentVersion: CLI_VERSION,
         processRunner,
         prompter,
         isTTY: Boolean(process.stdout?.isTTY),
@@ -829,7 +832,7 @@ async function createRealDeps(): Promise<CliDeps> {
       }
     },
 
-    version: "2.1.0",
+    version: CLI_VERSION,
   }
 }
 

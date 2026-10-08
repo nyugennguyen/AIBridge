@@ -86,10 +86,7 @@ pub fn encode_char(character: char, modifiers: KeyModifiers) -> Option<Vec<u8>> 
         bytes.push(0x1b);
     }
     if modifiers.contains(KeyModifiers::CONTROL) {
-        match control_byte(character) {
-            Some(byte) => bytes.push(byte),
-            None => return None,
-        }
+        bytes.push(control_byte(character)?);
         return Some(bytes);
     }
     let mut encoded = [0u8; 4];

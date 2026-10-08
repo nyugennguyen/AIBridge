@@ -365,15 +365,14 @@ fn sensitive_for(line: &DiffLine) -> Vec<&'static str> {
 
 /// Write text into one row, truncated.
 fn write(buffer: &mut Buffer, area: Rect, text: &str, style: Style) {
-    let mut x = area.x;
-    for grapheme in text.chars() {
+    for (offset, grapheme) in text.chars().enumerate() {
+        let x = area.x.saturating_add(offset as u16);
         if x >= area.x.saturating_add(area.width) {
             return;
         }
         buffer[(x, area.y)]
             .set_symbol(&grapheme.to_string())
             .set_style(style);
-        x += 1;
     }
     let _ = Span::raw("");
 }

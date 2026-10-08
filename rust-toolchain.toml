@@ -1,0 +1,16 @@
+# The Rust toolchain is pinned rather than left to float.
+#
+# CI ran on whatever `ubuntu-latest` shipped, which drifted to clippy 1.99 while
+# a local checkout stayed on 1.94. That produced eight `-D warnings` errors that
+# no local run could reproduce -- `question_mark`, `explicit_counter_loop`,
+# `unnecessary_sort_by`, and `collapsible_match` were all new lints, so the gate
+# was only ever enforceable in CI, where the first person to hit it was the
+# release itself.
+#
+# Pinning means `cargo clippy` locally is the same gate CI runs. The cost is
+# deliberate: bumping this file is how a new lint gets adopted deliberately,
+# instead of arriving in a release and blocking it.
+
+[toolchain]
+channel = "1.99.0"
+components = ["clippy", "rustfmt"]

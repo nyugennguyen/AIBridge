@@ -249,10 +249,9 @@ fn draw_too_small(state: &UiState, full: Rect, buffer: &mut Buffer) {
     if full.width < message.chars().count() as u16 || full.height == 0 {
         return;
     }
-    let mut x = full.x;
-    for grapheme in message.chars() {
+    for (offset, grapheme) in message.chars().enumerate() {
+        let x = full.x.saturating_add(offset as u16);
         buffer[(x, full.y)].set_symbol(&grapheme.to_string());
-        x += 1;
     }
 }
 

@@ -465,8 +465,8 @@ pub fn draw_approval_modal(state: &ApprovalModalState, area: Rect, buffer: &mut 
         } else {
             Style::default().fg(Color::Gray)
         };
-        let mut x = rect.x;
-        for grapheme in action.label().chars() {
+        for (offset, grapheme) in action.label().chars().enumerate() {
+            let x = rect.x.saturating_add(offset as u16);
             if x >= rect.x.saturating_add(rect.width) {
                 break;
             }
@@ -475,7 +475,6 @@ pub fn draw_approval_modal(state: &ApprovalModalState, area: Rect, buffer: &mut 
                     .set_symbol(&grapheme.to_string())
                     .set_style(style);
             }
-            x += 1;
         }
     }
 
@@ -634,15 +633,14 @@ pub fn draw_embedded_approval_card(
                     .add_modifier(Modifier::BOLD),
                 CardAction::RevisePrompt => Style::default().bg(Color::DarkGray).fg(Color::White),
             };
-            let mut char_x = btn_x;
-            for ch in label.chars() {
+            for (offset, ch) in label.chars().enumerate() {
+                let char_x = btn_x.saturating_add(offset as u16);
                 if char_x >= inner.x.saturating_add(inner.width) {
                     break;
                 }
                 buffer[(char_x, action_row_y)]
                     .set_symbol(&ch.to_string())
                     .set_style(style);
-                char_x += 1;
             }
             btn_x = btn_x.saturating_add(label_len + 2);
         }
@@ -1278,10 +1276,8 @@ impl SetupWizardModalState {
                         !self.project_selected[self.focused_field];
                 }
             }
-            5 => {
-                if self.focused_field == 0 {
-                    self.install_service = !self.install_service;
-                }
+            5 if self.focused_field == 0 => {
+                self.install_service = !self.install_service;
             }
             _ => {}
         }
@@ -1399,12 +1395,10 @@ impl SetupWizardModalState {
                     }
                 }
             }
-            5 => {
-                if row == modal_area.y + 7 {
-                    self.install_service = !self.install_service;
-                    self.focused_field = 0;
-                    return true;
-                }
+            5 if row == modal_area.y + 7 => {
+                self.install_service = !self.install_service;
+                self.focused_field = 0;
+                return true;
             }
             _ => {}
         }

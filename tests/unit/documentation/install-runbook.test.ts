@@ -2,9 +2,24 @@ import { readFile } from "node:fs/promises"
 import { describe, expect, it } from "vitest"
 
 const README_PATH = new URL("../../../README.md", import.meta.url)
+const AGENTS_PATH = new URL("../../../AGENTS.md", import.meta.url)
 
 async function readReadme(): Promise<string> {
   return readFile(README_PATH, "utf8")
+}
+
+/**
+ * The maintainer release procedure lives in AGENTS.md, not README.md.
+ *
+ * It was moved there deliberately: it is instructions for an agent or maintainer
+ * releasing the project, not something a user installing AIBridge needs to read.
+ * These tests assert that the release documentation EXISTS, not which file it
+ * happens to sit in, so they read both. Asserting on README alone would fail
+ * for a reorganisation that lost nothing.
+ */
+async function readReleaseDocs(): Promise<string> {
+  const [readme, agents] = await Promise.all([readReadme(), readFile(AGENTS_PATH, "utf8")])
+  return `${readme}\n${agents}`
 }
 
 /**
@@ -215,15 +230,15 @@ describe("install runbook — README content", () => {
   // ── Maintainer release section ──────────────────────────────────────
 
   it("contains a maintainer or release section", async () => {
-    const readme = await readReadme()
+    const docs = await readReleaseDocs()
 
-    expect(readme).toMatch(/release|maintainer|publishing/i)
+    expect(docs).toMatch(/release|maintainer|publishing/i)
   })
 
   it("documents release:check command", async () => {
-    const readme = await readReadme()
+    const docs = await readReleaseDocs()
 
-    expect(readme).toContain("release:check")
+    expect(docs).toContain("release:check")
   })
 
   it("documents released versions in CHANGELOG.md", async () => {

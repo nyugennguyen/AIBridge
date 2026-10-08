@@ -6,7 +6,13 @@ import { createSqliteDriver } from "../../src/orchestration/event-store/sqlite-d
 import { checkDatabaseIntegrity } from "../../src/storage/integrity.js"
 
 describe("M7-C7 / M8.2: 1000-Cycle Kill/Restart Zero-Loss Durability Suite", () => {
-  it("completes 1000 kill/restart write cycles with zero loss and intact WAL recovery", () => {
+  // This test performs 1000 real open/commit/close cycles against a WAL store at
+  // `synchronous=FULL`, so every one of them is an fsync. It is not a slow test by
+  // accident; it is 1000 durable writes. The 5s default is below what that costs on
+  // a loaded CI runner -- it measures 2.5s locally and 8.2s on GitHub, which failed
+  // the build on a timing difference rather than a durability one. A longer ceiling
+  // does not weaken the assertion: it still has to survive 1000 cycles.
+  it("completes 1000 kill/restart write cycles with zero loss and intact WAL recovery", { timeout: 120_000 }, () => {
     const tempDir = mkdtempSync(join(tmpdir(), "aibr-1000-cycle-"))
     const dbPath = join(tempDir, "ingress_outbox.sqlite")
 

@@ -1,10 +1,6 @@
-<p align="center">
-  <img src="Docs/assets/logos/aibridge-mark.svg" alt="AIBridge logo" width="88" height="88">
-</p>
+<h1>AIBridge</h1>
 
-<h1 align="center">AIBridge</h1>
-
-<p align="center"><strong>Tailscale mesh control plane for AI agents.</strong></p>
+<p><strong>Tailscale mesh control plane for AI agents.</strong></p>
 
 <p align="center">
   <img src="Docs/assets/logos/aibridge-lockup.svg" alt="AIBridge" width="560">
@@ -443,35 +439,6 @@ Update both machines together; leaving one host on the old token causes `HTTP 40
 
 ---
 
-## Subsystem Highlights
-
-### 1. Hardened Operational Recovery & Database Repair (M8.1 / M8.2)
-- **Comprehensive Runbooks:** Documented recovery for 16 failure modes (`Docs/runbooks/failure-mode-recovery.md`).
-- **Verified Backups:** Online backups via SQLite WAL truncation (`createDatabaseBackup()`) verify integrity before declaring success.
-- **Atomic Restoration:** Safe database restores (`restoreDatabaseFromBackup()`) stage writes in temporary files and retain automatic pre-restore backups for emergency rollback.
-- **Evidence Retention:** Errored outbox records in `ingress_outbox` and `egress_outbox` are preserved permanently for forensic inspection.
-
-### 2. Structured Observability & Diagnostics (M8.3 / M8.4)
-- **Structured Logging:** Standardized log events (`ingress.admitted`, `outbox.claimed`, `lease.expired`) with correlation tracing fields.
-- **Metrics Telemetry:** Built-in metrics registry tracking admission rates, queue depth, oldest pending age, and projection latencies.
-- **Support Bundle Generator:** Generate sanitized support bundles for issue diagnosis:
-  ```bash
-  aibr bundle --profile <name> --preview
-  ```
-
-### 3. Upgrade and Rollback Framework (M8.6)
-- **Preflight Planning:** Detects required schema migrations and refused downgrade conditions.
-- **Atomic Rollback:** Schema upgrades take a verified pre-migration backup; any interruption or failure automatically restores the pre-upgrade state.
-- **Downgrade Refusal:** Refuses to run older binaries over newer schemas without manual operator intervention.
-
-### 4. Extension SDK & Conformance Kit (M8.7)
-AIBridge features a public extension SDK (`src/sdk/`) allowing third-party developers to create custom agent runtime adapters and terminal backends:
-- **Clean Contracts:** Access to `AgentRuntimeAdapter`, `TerminalBackend`, and `TerminalChannel` without importing internal engine internals.
-- **Conformance Test Runner:** Run `runAdapterConformance(adapter)` or `runTerminalBackendConformance(backend)` to verify contract compliance.
-- **Extension Registry:** Enforces semver major compatibility checks at startup (`ExtensionRegistry`).
-
----
-
 ## Update
 
 ```bash
@@ -503,62 +470,6 @@ rm -rf ~/.local/state/aibridge
 ```
 
 ---
-
-## Release Procedure & Automated CI/CD Publishing
-
-AIBridge uses automated CI/CD to validate and publish releases to npm whenever a new version is released on `main`.
-
-### 1. Pre-Release Verification
-
-Run the full verification gate locally:
-
-```bash
-bun run release:check
-```
-
-This verifies:
-1. Frozen lockfile installation
-2. TypeScript compilation (`dist/`)
-3. Vitest test suite execution
-4. Typecheck (`tsc --noEmit`)
-5. Shellcheck and syntax validation of install scripts
-6. Contract parity and CLI smoke checks
-7. Package tarball dry-run packaging
-
-### 2. Version Bump
-
-Update the version number across the repository:
-- `package.json`: `"version": "x.y.z"`
-- `src/version.ts`: `CLI_VERSION` — the single source of truth every version report in the CLI reads (splash banner, `--version`, `aibr update`, diagnostics bundle)
-- `CHANGELOG.md`: document new features, fixes, and changes under `## [x.y.z]`
-
-`publish.yml` refuses a release tag that does not match `package.json`, which catches the mismatch in the direction that matters. The reverse drift is not caught automatically, which is why the version lives in one place rather than being written out at each use site.
-
-### 3. Merge or Push to `main`
-
-```bash
-git add package.json src/version.ts CHANGELOG.md
-git commit -m "chore(release): prepare vx.y.z"
-git push origin main
-```
-
-### 4. Automated Publishing
-
-Whenever code is pushed to `main`:
-- The **CI** workflow (`.github/workflows/ci.yml`) runs the full `verify` gate (tests, typecheck, build, contract parity).
-- The automated **`publish`** job inspects the repository version against the latest published version on the npm registry (`npm view @nyugennguyen/aibridge version`).
-- If the version has been bumped, it validates the release package and publishes `@nyugennguyen/aibridge` to npm automatically.
-- Authentication supports npm Automation Tokens (`NPM_TOKEN` stored in GitHub repository secrets) and npm OIDC Trusted Publishing with cryptographic provenance.
-
-### 5. Tagging the Release
-
-Create the corresponding git tag and GitHub Release:
-
-```bash
-git tag vx.y.z
-git push origin vx.y.z
-gh release create vx.y.z --title "AIBridge vx.y.z" --notes "Release notes..."
-```
 
 ## License
 

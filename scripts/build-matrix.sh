@@ -8,11 +8,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 # ADR 0010 moved the Cargo workspace root to the repository root, so build output
 # lands in `${ROOT_DIR}/target` rather than `${ROOT_DIR}/router/target`. Building
-# the ROUTER ONLY is deliberate: `cargo build` with no `-p` would also build the
-# TUI, which pulls in ratatui and crossterm and roughly triples the build for a
-# matrix whose subject is the router's static musl binary and its 2.25 MiB size
-# bound (ADR 0008 12).
-CARGO_PACKAGE_ARGS=(-p aibr-router)
+# both the ROUTER and the TUI ensures all prebuilt Rust binaries required by the
+# npm package and supervision units are packaged into the distribution matrix.
+CARGO_PACKAGE_ARGS=(-p aibr-router -p aibr-tui)
 DIST_DIR="${ROOT_DIR}/dist-bin"
 
 mkdir -p "${DIST_DIR}"
@@ -22,7 +20,7 @@ mkdir -p "${DIST_DIR}"
 # stamps into the published tarball, so a matrix artefact named for the package
 # version matches what npm actually receives.
 VERSION=$(grep '"version"' "${ROOT_DIR}/package.json" | head -n1 | cut -d'"' -f4)
-echo "=== Building aibr-router matrix (v${VERSION}) ==="
+echo "=== Building aibr-router and aibr-tui matrix (v${VERSION}) ==="
 
 # Run from the WORKSPACE ROOT, not `router/`: `--manifest-path router/Cargo.toml`
 # would still resolve the workspace correctly, but `cd`-ing into a member makes
@@ -79,18 +77,24 @@ build_target() {
     cargo build "${CARGO_PACKAGE_ARGS[@]}" --target "${target}" --release
   fi
 
-  local src_bin="${ROOT_DIR}/target/${target}/release/aibr-router"
-  local dest_bin="${DIST_DIR}/aibr-router-${target}"
-  # A missing binary is a FAILURE, not a warning. The previous version printed a
-  # warning and returned success, so a target that failed to cross-compile left no
-  # artefact and the step went green -- the later readelf step then failed on a
-  # file that was never built, which reads as a packaging bug and is really this.
-  if [ ! -f "${src_bin}" ]; then
-    echo "Error: ${src_bin} was not produced for target ${target}." >&2
+  local src_router="${ROOT_DIR}/target/${target}/release/aibr-router"
+  local dest_router="${DIST_DIR}/aibr-router-${target}"
+  local src_tui="${ROOT_DIR}/target/${target}/release/aibr-tui"
+  local dest_tui="${DIST_DIR}/aibr-tui-${target}"
+
+  if [ ! -f "${src_router}" ]; then
+    echo "Error: ${src_router} was not produced for target ${target}." >&2
     return 1
   fi
-  cp "${src_bin}" "${dest_bin}"
-  echo "Copied to ${dest_bin}"
+  cp "${src_router}" "${dest_router}"
+  echo "Copied to ${dest_router}"
+
+  if [ ! -f "${src_tui}" ]; then
+    echo "Error: ${src_tui} was not produced for target ${target}." >&2
+    return 1
+  fi
+  cp "${src_tui}" "${dest_tui}"
+  echo "Copied to ${dest_tui}"
 }
 
 # If specific targets passed via arguments, build only those; otherwise all supported
@@ -116,24 +120,35 @@ else
 fi
 
 # Create universal binary on Darwin if both darwin targets exist
-DARWIN_X86="${DIST_DIR}/aibr-router-x86_64-apple-darwin"
-DARWIN_ARM="${DIST_DIR}/aibr-router-aarch64-apple-darwin"
-DARWIN_UNIVERSAL="${DIST_DIR}/aibr-router-universal-apple-darwin"
+DARWIN_ROUTER_X86="${DIST_DIR}/aibr-router-x86_64-apple-darwin"
+DARWIN_ROUTER_ARM="${DIST_DIR}/aibr-router-aarch64-apple-darwin"
+DARWIN_ROUTER_UNIVERSAL="${DIST_DIR}/aibr-router-universal-apple-darwin"
 
-if [ -f "${DARWIN_X86}" ] && [ -f "${DARWIN_ARM}" ]; then
+DARWIN_TUI_X86="${DIST_DIR}/aibr-tui-x86_64-apple-darwin"
+DARWIN_TUI_ARM="${DIST_DIR}/aibr-tui-aarch64-apple-darwin"
+DARWIN_TUI_UNIVERSAL="${DIST_DIR}/aibr-tui-universal-apple-darwin"
+
+if [ -f "${DARWIN_ROUTER_X86}" ] && [ -f "${DARWIN_ROUTER_ARM}" ]; then
   if command -v lipo >/dev/null 2>&1; then
-    echo "--- Creating universal Darwin binary with lipo ---"
-    lipo -create -output "${DARWIN_UNIVERSAL}" "${DARWIN_X86}" "${DARWIN_ARM}"
-    echo "Created ${DARWIN_UNIVERSAL}"
+    echo "--- Creating universal Darwin router binary with lipo ---"
+    lipo -create -output "${DARWIN_ROUTER_UNIVERSAL}" "${DARWIN_ROUTER_X86}" "${DARWIN_ROUTER_ARM}"
+    echo "Created ${DARWIN_ROUTER_UNIVERSAL}"
   fi
 fi
 
+if [ -f "${DARWIN_TUI_X86}" ] && [ -f "${DARWIN_TUI_ARM}" ]; then
+  if command -v lipo >/dev/null 2>&1; then
+    echo "--- Creating universal Darwin TUI binary with lipo ---"
+    lipo -create -output "${DARWIN_TUI_UNIVERSAL}" "${DARWIN_TUI_X86}" "${DARWIN_TUI_ARM}"
+    echo "Created ${DARWIN_TUI_UNIVERSAL}"
+  fi
+fi
 # Checksum generation
 cd "${DIST_DIR}"
 if command -v sha256sum >/dev/null 2>&1; then
-  sha256sum aibr-router-* > SHA256SUMS 2>/dev/null || true
+  sha256sum aibr-router-* aibr-tui-* > SHA256SUMS 2>/dev/null || true
 elif command -v shasum >/dev/null 2>&1; then
-  shasum -a 256 aibr-router-* > SHA256SUMS 2>/dev/null || true
+  shasum -a 256 aibr-router-* aibr-tui-* > SHA256SUMS 2>/dev/null || true
 fi
 
 echo "=== Build matrix completed in ${DIST_DIR} ==="

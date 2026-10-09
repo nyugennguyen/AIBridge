@@ -4,6 +4,8 @@ import { promisify } from "node:util"
 import { resolve } from "node:path"
 import { beforeAll, describe, expect, it } from "vitest"
 
+import { findRouterBinary, findTuiBinary } from "../../src/host/binaries.js"
+
 const execAsync = promisify(exec)
 
 const ROOT = resolve(import.meta.dirname, "..", "..")
@@ -235,5 +237,43 @@ describe("package smoke — manifest contract", () => {
 
     expect(manifest.scripts?.["release:check"]).toBeDefined()
     expect(typeof manifest.scripts["release:check"]).toBe("string")
+  })
+
+  it("manifest declares optionalDependencies for all prebuilt platform packages", async () => {
+    const manifest = JSON.parse(await readFile(resolve(ROOT, "package.json"), "utf8"))
+    const optDeps = manifest.optionalDependencies ?? {}
+
+    const expectedPackages = [
+      "@nyugennguyen/aibridge-darwin-arm64",
+      "@nyugennguyen/aibridge-darwin-x64",
+      "@nyugennguyen/aibridge-linux-arm64-gnu",
+      "@nyugennguyen/aibridge-linux-arm64-musl",
+      "@nyugennguyen/aibridge-linux-x64-gnu",
+      "@nyugennguyen/aibridge-linux-x64-musl",
+    ]
+
+    for (const pkg of expectedPackages) {
+      expect(optDeps[pkg]).toBeDefined()
+      expect(optDeps[pkg]).toBe(manifest.version)
+      expect(optDeps[pkg]).not.toMatch(/^\^|^\~|^>=|^>/)
+    }
+  })
+})
+
+describe("package smoke — native binaries discovery", () => {
+  it("findTuiBinary resolves to a built executable Rust binary", () => {
+    const tuiPath = findTuiBinary()
+
+    expect(tuiPath).not.toBeNull()
+    expect(typeof tuiPath).toBe("string")
+    expect(tuiPath).toMatch(/aibr-tui$/)
+  })
+
+  it("findRouterBinary resolves to a built executable Rust binary", () => {
+    const routerPath = findRouterBinary()
+
+    expect(routerPath).not.toBeNull()
+    expect(typeof routerPath).toBe("string")
+    expect(routerPath).toMatch(/aibr-router$/)
   })
 })

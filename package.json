@@ -1,6 +1,6 @@
 {
   "name": "@nyugennguyen/aibridge",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "description": "Private Tailscale bridge for OpenCode agents",
   "license": "MIT",
   "type": "module",
@@ -31,8 +31,17 @@
     "test:watch": "vitest",
     "test:installer": "shellcheck scripts/install.sh && bash -n scripts/install.sh && vitest run tests/unit/installer",
     "release:check": "bun install --frozen-lockfile && bun run build && bun test && bun run typecheck && shellcheck scripts/install.sh && bash -n scripts/install.sh && bun dist/cli.js --help && bun pm pack --dry-run",
-    "generate:parity-vector": "tsx scripts/generate-parity-vector.ts"
+    "generate:parity-vector": "tsx scripts/generate-parity-vector.ts",
+    "package:binaries": "tsx scripts/package-binaries.ts"
   },
+   "optionalDependencies": {
+    "@nyugennguyen/aibridge-darwin-arm64": "2.1.1",
+    "@nyugennguyen/aibridge-darwin-x64": "2.1.1",
+    "@nyugennguyen/aibridge-linux-arm64-gnu": "2.1.1",
+    "@nyugennguyen/aibridge-linux-arm64-musl": "2.1.1",
+    "@nyugennguyen/aibridge-linux-x64-gnu": "2.1.1",
+    "@nyugennguyen/aibridge-linux-x64-musl": "2.1.1"
+   },
   "dependencies": {
     "@fastify/websocket": "11.3.1",
     "@opencode-ai/sdk": "1.17.7",

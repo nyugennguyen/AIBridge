@@ -45,4 +45,11 @@ jobs:
       - name: Publish to npm
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish
+        run: |
+          for pkg_dir in packages/*; do
+            if [ -d "$pkg_dir" ] && [ -f "$pkg_dir/package.json" ]; then
+              echo "Publishing platform package in $pkg_dir..."
+              (cd "$pkg_dir" && npm publish --access public) || true
+            fi
+          done
+          npm publish

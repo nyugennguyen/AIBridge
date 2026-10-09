@@ -17,3 +17,6 @@ dist/
 # The root Cargo workspace's build output. Anchored with a leading slash because
 # it now lives at the repository root rather than under `router/`.
 /target/
+# Native distribution binaries and staged platform packages
+/dist-bin/
+/packages/

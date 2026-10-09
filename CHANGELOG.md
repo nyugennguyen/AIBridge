@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.1.1] - 2026-10-09
+
+### Fixed
+
+- **Native TUI and Router binary availability in npm package**: Resolved issue where global npm/bun installations only shipped JavaScript (`dist/`) without compiled Rust binaries, causing `aibr tui` to always fall back to the legacy OpenTUI shell.
+- **Per-platform optional dependencies**: Added `@nyugennguyen/aibridge-<platform>` optional dependencies for prebuilt `aibr-tui` and `aibr-router` binaries (`darwin-arm64`, `darwin-x64`, `linux-x64-gnu`, `linux-x64-musl`, `linux-arm64-gnu`, `linux-arm64-musl`).
+- **Native binary discovery engine** (`src/host/binaries.ts`): Implemented unified resolution prioritizing `AIBRIDGE_TUI_BIN`/`AIBRIDGE_ROUTER_BIN` overrides, optional platform packages, bundled binaries, local Cargo builds, and system PATH.
+- **Build matrix & packaging automation**: Updated `scripts/build-matrix.sh` to compile and package both `aibr-router` and `aibr-tui`, including universal Darwin binaries, and added `scripts/package-binaries.ts` (`bun run package:binaries`) for automated npm platform package staging.
+
 ## [2.1.0] - 2026-10-07
 
 > Released as tag `v2.1.0` on `aibr-v2`. The GitHub release was **not** created, so this

@@ -141,6 +141,12 @@ find_router_bin() {
     command -v aibr-router
     return 0
   fi
+  local bin_dir
+  bin_dir="$(bun pm bin -g 2>/dev/null || echo "$HOME/.bun/bin")"
+  if [ -x "${bin_dir}/aibr-router" ]; then
+    echo "${bin_dir}/aibr-router"
+    return 0
+  fi
   return 1
 }
 

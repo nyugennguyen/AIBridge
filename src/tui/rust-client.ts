@@ -19,30 +19,11 @@
  * see that difference.
  */
 import { spawn } from "node:child_process"
-import { existsSync } from "node:fs"
-import { dirname, join, resolve } from "node:path"
-import { fileURLToPath } from "node:url"
 
 import type { CliExitCode } from "../cli.js"
+import { findTuiBinary } from "../host/binaries.js"
 
-/** Where the binary may live, in preference order. */
-const CANDIDATE_PATHS = (): readonly string[] => {
-  const here = dirname(fileURLToPath(import.meta.url))
-  // `dist/` after a build, `src/` under tsx.
-  const roots = [resolve(here, ".."), resolve(here, "..", "..")]
-  return roots.flatMap((root) => [
-    join(root, "target", "release", "aibr-tui"),
-    join(root, "target", "debug", "aibr-tui"),
-  ])
-}
-
-/** The path of the Rust client, or `null` when it has not been built. */
-export function findTuiBinary(): string | null {
-  for (const candidate of CANDIDATE_PATHS()) {
-    if (existsSync(candidate)) return candidate
-  }
-  return null
-}
+export { findTuiBinary }
 
 /**
  * Run the Rust client to completion.

@@ -9,6 +9,7 @@ import {
 } from "../../../src/diagnostics/index.js"
 import { createSqliteDriver } from "../../../src/orchestration/event-store/sqlite-driver.js"
 import type { StructuredLogEntry } from "../../../src/observability/types.js"
+import { CLI_VERSION } from "../../../src/version.js"
 
 const SECRET_CANARY = "CANARY_TOKEN_TOP_SECRET_98765"
 
@@ -94,7 +95,7 @@ describe("Diagnostics Support Bundle (M8.4, M7-C3)", () => {
       // 5. Preview generation
       const preview = previewSupportBundle(bundle)
       expect(preview).toContain("AIBridge Support Bundle (dev-main)")
-      expect(preview).toContain("Versions: npm 2.1.0 | Router: 0.1.0")
+      expect(preview).toContain(`Versions: npm ${CLI_VERSION} | Router: 0.1.0`)
       expect(preview).not.toContain(SECRET_CANARY)
     } finally {
       rmSync(tempDir, { recursive: true, force: true })

@@ -121,6 +121,13 @@ jobs:
           if [ "$CURRENT_VERSION" != "$LATEST_PUBLISHED" ]; then
             echo "Version $CURRENT_VERSION is newer than published ($LATEST_PUBLISHED). Running release validation..."
             bun run release:check
+            echo "Publishing platform packages if present..."
+            for pkg_dir in packages/*; do
+              if [ -d "$pkg_dir" ] && [ -f "$pkg_dir/package.json" ]; then
+                echo "Publishing platform package in $pkg_dir..."
+                (cd "$pkg_dir" && npm publish --access public) || true
+              fi
+            done
             echo "Publishing $PKG_NAME@$CURRENT_VERSION to npm..."
             if [ -n "${NODE_AUTH_TOKEN:-}" ]; then
               npm publish --access public

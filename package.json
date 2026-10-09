@@ -8,7 +8,7 @@
     "bun": ">=1.3.0"
   },
   "bin": {
-    "aibr": "./dist/cli.js"
+    "aibr": "dist/cli.js"
   },
   "files": [
     "dist",
@@ -23,7 +23,7 @@
     "dev": "tsx src/index.ts",
     "generate:contracts": "tsx scripts/generate-contracts.ts && cargo run --quiet -p aibr-contract-gen --release",
     "start": "bun dist/index.js",
-    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json && chmod +x dist/cli.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "test:unit": "vitest run tests/unit",
@@ -34,14 +34,14 @@
     "generate:parity-vector": "tsx scripts/generate-parity-vector.ts",
     "package:binaries": "tsx scripts/package-binaries.ts"
   },
-   "optionalDependencies": {
+  "optionalDependencies": {
     "@nyugennguyen/aibridge-darwin-arm64": "2.1.1",
     "@nyugennguyen/aibridge-darwin-x64": "2.1.1",
     "@nyugennguyen/aibridge-linux-arm64-gnu": "2.1.1",
     "@nyugennguyen/aibridge-linux-arm64-musl": "2.1.1",
     "@nyugennguyen/aibridge-linux-x64-gnu": "2.1.1",
     "@nyugennguyen/aibridge-linux-x64-musl": "2.1.1"
-   },
+  },
   "dependencies": {
     "@fastify/websocket": "11.3.1",
     "@opencode-ai/sdk": "1.17.7",

@@ -25,13 +25,19 @@ pkg_root="$(dirname "$bin_dir")"
 
 detect_libc() {
   if [ -n "${AIBRIDGE_LIBC:-}" ]; then
-    printf '%s' "$AIBRIDGE_LIBC"
+    case "$AIBRIDGE_LIBC" in
+      glibc) printf 'gnu' ;;
+      *) printf '%s' "$AIBRIDGE_LIBC" ;;
+    esac
     return
   fi
   if [ -f /etc/alpine-release ] || ls /lib/ld-musl-* >/dev/null 2>&1; then
     printf 'musl'
   else
-    printf 'glibc'
+    # The published package is named `-linux-<arch>-gnu`, not `-glibc`; npm keys
+    # optionalDependencies off the package name, so the directory on disk uses
+    # the shorter spelling.
+    printf 'gnu'
   fi
 }
 
@@ -51,7 +57,14 @@ case "$(uname -s)-$(uname -m)" in
     ;;
 esac
 
-for root in "$pkg_root/node_modules" "$pkg_root/../.." ; do
+# Search roots, in order:
+#   $pkg_root/node_modules  - a nested install
+#   $pkg_root/..           - the scoped dir in a global install, where npm puts
+#                            `@nyugennguyen/aibridge-<platform>` beside
+#                            `@nyugennguyen/aibridge`
+#   $pkg_root/../..        - the hoisted `node_modules` itself, for unscoped
+#                            lookups and npm's hoisting of the platform package
+for root in "$pkg_root/node_modules" "$pkg_root/.." "$pkg_root/../.." ; do
   for candidate in \
     "$root/@nyugennguyen/aibridge-$platform/bin/aibr-tui" \
     "$root/aibridge-$platform/bin/aibr-tui"; do

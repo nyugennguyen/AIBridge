@@ -136,7 +136,7 @@ describe("Native binary discovery & platform packages", () => {
       const missingBin = join(tempDir, "nonexistent")
 
       const result = resolveNativeBinary("aibr-tui", {
-        env: { AIBRIDGE_TUI_BIN: missingBin },
+        env: { AIBRIDGE_TUI_BIN: missingBin, PATH: "" },
         roots: [tempDir],
         platform: "unsupported",
       })

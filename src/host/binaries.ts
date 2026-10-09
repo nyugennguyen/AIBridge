@@ -123,8 +123,8 @@ function isExecutable(filePath: string): boolean {
 /**
  * Search system PATH for a binary.
  */
-function findInPath(name: string): string | null {
-  const pathEnv = process.env.PATH ?? ""
+export function findInPath(name: string, customPath?: string): string | null {
+  const pathEnv = customPath !== undefined ? customPath : (process.env.PATH ?? "")
   if (!pathEnv) return null
 
   const dirs = pathEnv.split(delimiter)
@@ -248,7 +248,7 @@ export function resolveNativeBinary(
   }
 
   // 6. Global npm/bun package bin directory or system PATH
-  const fromPath = findInPath(name)
+  const fromPath = findInPath(name, env.PATH)
   if (fromPath !== null) {
     return fromPath
   }

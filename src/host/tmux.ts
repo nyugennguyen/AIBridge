@@ -50,6 +50,11 @@ function buildOpencodeEnv(
     result.OPENCODE_SERVER_PASSWORD = password
   }
 
+  const opencodeBin = env.OPENCODE_BIN
+  if (opencodeBin !== undefined) {
+    result.OPENCODE_BIN = opencodeBin
+  }
+
   return result
 }
 

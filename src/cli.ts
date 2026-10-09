@@ -18,6 +18,7 @@
 import { validateProfileName } from "./host/paths.js"
 import { readSecret } from "./host/profile-store.js"
 import { CLI_VERSION } from "./version.js"
+import { findInPath } from "./host/binaries.js"
 
 export { CLI_VERSION }
 
@@ -818,8 +819,9 @@ async function createRealDeps(): Promise<CliDeps> {
         }
       }
       const opencodePort = process.env.OPENCODE_PORT ?? "4096"
+      const opencodeBin = process.env.OPENCODE_BIN ?? (findInPath("opencode2") ? "opencode2" : "opencode")
       const result = await processRunner.exec(
-        ["opencode", "serve", "--port", opencodePort, "--hostname", "127.0.0.1"],
+        [opencodeBin, "serve", "--port", opencodePort, "--hostname", "127.0.0.1"],
         {
           env: {
             ...process.env as Record<string, string>,
@@ -828,7 +830,7 @@ async function createRealDeps(): Promise<CliDeps> {
         },
       )
       if (result.exitCode !== 0) {
-        throw new Error(result.stderr || "opencode serve failed")
+        throw new Error(result.stderr || `${opencodeBin} serve failed`)
       }
     },
 

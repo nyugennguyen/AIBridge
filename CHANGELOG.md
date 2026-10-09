@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.1.12] - 2026-10-10
+
+### Fixed
+
+- **A slow model's first token is no longer reported as an empty turn**: the answer window was 5s and the idle settle window 3s, so a model that spent longer than that between the prompt and its first token -- while reporting `idle` throughout -- was recorded as having produced nothing. Observed live with `opencode/big-pickle`: job created 17:45:58.700, aibr settled 17:46:07.560, first assistant message 17:46:32.124, and the answer that followed was discarded. The answer window is now 60s and lives beside the settle window with a floor that keeps the two from collapsing together.
+
 ## [2.1.11] - 2026-10-09
 
 ### Fixed

@@ -28,6 +28,7 @@ import { SdkOpencodeClientAdapter } from "../opencode/client.js"
 import type { OpencodeClient } from "../opencode/types.js"
 import { StaticPermissionPolicy } from "../opencode/permissions.js"
 import { waitForIdle } from "../opencode/monitor.js"
+import { ANSWER_GRACE_MS } from "./answer-window.js"
 import { CallbackReporter } from "../callback/reporter.js"
 import { EgressOutboxStore } from "../callback/egress-outbox.js"
 import { FileTaskGraphSyncer } from "../tasks/syncer.js"
@@ -64,20 +65,12 @@ export interface Runtime {
 }
 
 /**
- * How long to keep re-asking "did the turn answer?" after the session goes idle.
+ * Re-ask "did the turn answer?" for this long after the session settles.
  *
- * Idle is the absence of a signal, not the end of the turn. A freshly created
- * session has no entry in opencode's status map, so it reads `idle` immediately
- * -- before the prompt has been delivered, let alone answered. Observed live:
- * aibr marked a job terminal at 16:37:45.514 while opencode stored its first
- * assistant message at 16:37:46.291, and the turn then produced four messages.
- *
- * A single check therefore reports a healthy turn as empty. The question is
- * cheap and idempotent, so it is re-asked across this window: long enough to
- * cover prompt delivery and first-token latency on a loaded machine, short
- * enough that a genuinely dead turn is still reported as `failed` promptly.
+ * See `./answer-window.ts`: the value has to be comfortably larger than the idle
+ * settle window, because a slow model spends the whole gap before its first token
+ * reporting `idle` and would otherwise be reported as having produced nothing.
  */
-const ANSWER_GRACE_MS = 5_000
 const ANSWER_POLL_MS = 250
 
 /**

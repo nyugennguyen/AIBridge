@@ -1,6 +1,6 @@
 {
   "name": "@nyugennguyen/aibridge",
-  "version": "2.1.5",
+  "version": "2.1.7",
   "description": "Private Tailscale bridge for OpenCode agents",
   "license": "MIT",
   "type": "module",
@@ -18,6 +18,14 @@
     "README.md",
     "LICENSE"
   ],
+  "optionalDependencies": {
+    "@nyugennguyen/aibridge-darwin-arm64": "2.1.7",
+    "@nyugennguyen/aibridge-darwin-x64": "2.1.7",
+    "@nyugennguyen/aibridge-linux-arm64-gnu": "2.1.7",
+    "@nyugennguyen/aibridge-linux-arm64-musl": "2.1.7",
+    "@nyugennguyen/aibridge-linux-x64-gnu": "2.1.7",
+    "@nyugennguyen/aibridge-linux-x64-musl": "2.1.7"
+  },
   "publishConfig": {
     "access": "public"
   },

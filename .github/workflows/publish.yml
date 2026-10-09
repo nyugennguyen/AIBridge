@@ -42,6 +42,36 @@ jobs:
       - name: Validate release package
         run: bun run release:check
 
+      # The `bin/aibr-tui` and `bin/aibr-router` entries in the published tarball
+      # are launcher shims. The binaries they exec ship as the per-platform
+      # optionalDependencies declared in package.json, so those packages have to
+      # exist BEFORE the main package is published or every install resolves to
+      # a shim with nothing behind it. This step was missing, which is how
+      # darwin-arm64 binaries committed to git reached Linux installs.
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl,x86_64-unknown-linux-gnu,aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Build native binary matrix
+        run: bash scripts/build-matrix.sh
+
+      - name: Package platform packages
+        run: bun run package:binaries
+
+      - name: Verify every declared optionalDependency has a package
+        run: |
+          failed=0
+          for dep in $(jq -r '.optionalDependencies | keys[]' package.json); do
+            unscoped="${dep#@nyugennguyen/}"
+            if [ ! -f "packages/${unscoped}/bin/aibr-tui" ] || [ ! -f "packages/${unscoped}/bin/aibr-router" ]; then
+              echo "MISSING binaries for declared optionalDependency: ${dep}"
+              failed=1
+            fi
+          done
+          [ "$failed" -eq 0 ] || { echo "Refusing to publish: declared deps without binaries"; exit 1; }
+          echo "All declared optionalDependencies have binaries."
+
       - name: Publish to npm
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -49,7 +79,10 @@ jobs:
           for pkg_dir in packages/*; do
             if [ -d "$pkg_dir" ] && [ -f "$pkg_dir/package.json" ]; then
               echo "Publishing platform package in $pkg_dir..."
-              (cd "$pkg_dir" && npm publish --access public) || true
+              # Not `|| true`: a platform package that fails to publish leaves the
+              # corresponding optionalDependency unresolvable, which is the exact
+              # bug this workflow step is here to prevent.
+              (cd "$pkg_dir" && npm publish --access public)
             fi
           done
           npm publish --access public

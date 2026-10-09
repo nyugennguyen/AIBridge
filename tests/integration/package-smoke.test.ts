@@ -1,10 +1,15 @@
 import { exec } from "node:child_process"
+import { readFileSync } from "node:fs"
 import { readFile } from "node:fs/promises"
 import { promisify } from "node:util"
 import { resolve } from "node:path"
 import { beforeAll, describe, expect, it } from "vitest"
 
-import { findRouterBinary, findTuiBinary } from "../../src/host/binaries.js"
+import {
+  SUPPORTED_PLATFORM_PACKAGES,
+  findRouterBinary,
+  findTuiBinary,
+} from "../../src/host/binaries.js"
 
 const execAsync = promisify(exec)
 
@@ -165,6 +170,44 @@ describe("package smoke — pack manifest", () => {
 
     expect(files).toContain("bin/aibr-tui")
     expect(files).toContain("bin/aibr-router")
+  })
+
+  // The regression this guards: the tarball shipped `bin/aibr-tui` as a native
+  // build committed to git. Because one tarball is downloaded by every platform,
+  // Linux installs received the darwin-arm64 binary and `aibr tui` died with
+  // ENOEXEC. Asserting the file EXISTS is what let that pass CI -- the file was
+  // there, it was just the wrong architecture. `bin/` must therefore hold only
+  // the launcher shims, and the real binaries must come from the per-platform
+  // optionalDependencies.
+  it("ships no native machine-code binary in bin/", async () => {
+    const { stdout, stderr } = await run("bun pm pack --dry-run")
+    const files = parsePackFiles(stdout, stderr)
+
+    for (const file of files.filter((f) => f.startsWith("bin/"))) {
+      const bytes = readFileSync(resolve(ROOT, file))
+      // A shebang means it is a script. Anything without one in `bin/` would be
+      // a compiled artefact, which is exactly what must not be committed here.
+      expect(
+        bytes[0] === 0x23 && bytes[1] === 0x21,
+        `${file} is a compiled binary, not a launcher shim. Native binaries must ` +
+          `ship as per-platform optionalDependencies (see scripts/package-binaries.ts), ` +
+          `because a single committed build reaches every platform.`,
+      ).toBe(true)
+    }
+  })
+
+  it("declares an optionalDependencies entry for every supported platform", () => {
+    const manifest = JSON.parse(readFileSync(resolve(ROOT, "package.json"), "utf8"))
+    const optional = manifest.optionalDependencies ?? {}
+
+    for (const pkg of SUPPORTED_PLATFORM_PACKAGES) {
+      expect(
+        optional[pkg],
+        `${pkg} is missing from optionalDependencies; installs on that platform ` +
+          `would resolve the launcher shim with no binary behind it.`,
+      ).toBeDefined()
+      expect(optional[pkg]).toBe(manifest.version)
+    }
   })
 })
 

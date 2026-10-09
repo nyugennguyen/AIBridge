@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.1.7] - 2026-10-09
+
+### Fixed
+
+- **Native binaries shipped for every platform, not just the committer's**: `bin/aibr-tui` and `bin/aibr-router` were native builds committed to git, so the single published tarball handed the darwin-arm64 binary to every installer. Linux and x64 users got `ENOEXEC` on `aibr tui`. Both are now launcher shims, and the real binaries ship as the per-platform `optionalDependencies` that `scripts/package-binaries.ts` already generated but nothing declared or published.
+- **`publish.yml` builds and publishes the platform packages**: the workflow iterated `packages/*` without ever creating it -- no `cargo build`, no `package:binaries` -- so the loop was always empty and every platform package would 404. It now builds the matrix, packages the platforms, refuses to publish if a declared `optionalDependency` has no binary, and no longer swallows publish failures with `|| true`.
+
+### Added
+
+- **Packaging regression tests**: `package-smoke.test.ts` asserted `bin/aibr-tui` exists but never checked what it contained, which is how a wrong-architecture binary passed CI. It now asserts every `bin/` entry is a shebang script and that each supported platform has a declared `optionalDependency`.
+
 ## [2.1.5] - 2026-10-09
 
 ### Fixed

@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.12] - 2026-10-10
+
+### Changed
+
+- **Version reset to `0.2.12` as the project returns to development state.** The `2.1.x` line is superseded by this pre-1.0 series; `0.2.12` is the twelfth patch of the second beta. This is a *lower* number than the last published `2.1.x`: npm accepts it, and the CI publish gate compares versions by string inequality rather than semver, so the next push to `main` publishes normally. Consumers pinned to `2.x` will not be moved across the boundary automatically and should migrate deliberately.
+
 ## [2.1.13] - 2026-10-10
 
 ### Fixed

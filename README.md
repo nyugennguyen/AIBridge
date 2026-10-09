@@ -128,6 +128,24 @@ bun install -g @nyugennguyen/aibridge
 aibr --version
 ```
 
+### Installing the pre-1.0 beta
+
+The `0.2.x` development line is published under the **`beta`** dist-tag, not
+`latest`. `latest` remains on `2.1.6`, so a plain `bun install -g` keeps giving
+you the 2.x line:
+
+```bash
+bun install -g @nyugennguyen/aibridge@beta
+aibr --version   # 0.2.12
+```
+
+This is the command to use when testing against the two-machine setup (dev-main
+and test-vps). To pin one exact beta build instead of tracking the tag:
+
+```bash
+bun install -g @nyugennguyen/aibridge@0.2.12
+```
+
 Verify the `aibr` command is on your PATH:
 
 ```bash

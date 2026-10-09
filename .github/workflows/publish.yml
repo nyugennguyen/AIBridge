@@ -75,14 +75,20 @@ jobs:
       - name: Publish to npm
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          # The pre-1.0 line publishes under `beta`; `latest` stays on 2.1.x.
+          DIST_TAG: beta
         run: |
           for pkg_dir in packages/*; do
             if [ -d "$pkg_dir" ] && [ -f "$pkg_dir/package.json" ]; then
               echo "Publishing platform package in $pkg_dir..."
               # Not `|| true`: a platform package that fails to publish leaves the
               # corresponding optionalDependency unresolvable, which is the exact
-              # bug this workflow step is here to prevent.
-              (cd "$pkg_dir" && npm publish --access public)
+              # bug this workflow step is here to prevent. Same tag as the main
+              # package -- optionalDependencies pins resolve by exact version, so
+              # these must exist at this version for the main package to install.
+              (cd "$pkg_dir" && npm publish --access public --tag "$DIST_TAG")
             fi
           done
-          npm publish --access public
+          npm publish --access public --tag "$DIST_TAG"
+          echo "Successfully published $(jq -r .name package.json)@$(jq -r .version package.json) under '$DIST_TAG'."
+          echo "Install for testing with: npm install -g $(jq -r .name package.json)@$DIST_TAG"

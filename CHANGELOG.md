@@ -2,6 +2,14 @@
 
 ## [0.2.12] - 2026-10-10
 
+### Added
+
+- **`beta` dist-tag for the pre-1.0 line**: `0.2.x` publishes under `beta`, so `latest` stays on `2.1.6` and existing installs are not silently moved backwards across the major-version boundary. Install for testing on the two-machine setup with `bun install -g @nyugennguyen/aibridge@beta`. Both publish workflows tag the platform packages with the same tag, since `optionalDependencies` pins resolve by exact version and must exist at that version.
+
+### Fixed
+
+- **The CI publish gate no longer re-publishes on every push**: it compared the repo version against `npm view <pkg> version`, which resolves the `latest` tag. With the repo at `0.2.12` and `latest` at `2.1.6` those never matched, so every push to `main` would have attempted a republish and failed with `EPUBLISHCONFLICT`. It now compares against the tag being published to.
+
 ### Changed
 
 - **Version reset to `0.2.12` as the project returns to development state.** The `2.1.x` line is superseded by this pre-1.0 series; `0.2.12` is the twelfth patch of the second beta. This is a *lower* number than the last published `2.1.x`: npm accepts it, and the CI publish gate compares versions by string inequality rather than semver, so the next push to `main` publishes normally. Consumers pinned to `2.x` will not be moved across the boundary automatically and should migrate deliberately.

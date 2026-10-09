@@ -109,32 +109,43 @@ jobs:
       - name: Check and publish package if version bumped
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          # The pre-1.0 line is published under `beta`; `latest` stays on 2.1.x.
+          DIST_TAG: beta
         run: |
           CURRENT_VERSION=$(jq -r .version package.json)
           PKG_NAME=$(jq -r .name package.json)
-          LATEST_PUBLISHED=$(npm view "$PKG_NAME" version 2>/dev/null || echo "none")
+          # Compare against the BETA tag, not `latest`. The repo version (0.2.12)
+          # is lower than the published `latest` (2.1.6), so comparing against
+          # `latest` would never match and every push to main would attempt a
+          # republish -- which npm rejects with EPUBLISHCONFLICT, failing the job.
+          BETA_PUBLISHED=$(npm view "$PKG_NAME@$DIST_TAG" version 2>/dev/null || echo "none")
 
           echo "Package: $PKG_NAME"
           echo "Current repository version: $CURRENT_VERSION"
-          echo "Latest published npm version: $LATEST_PUBLISHED"
+          echo "Published under '$DIST_TAG': $BETA_PUBLISHED"
 
-          if [ "$CURRENT_VERSION" != "$LATEST_PUBLISHED" ]; then
-            echo "Version $CURRENT_VERSION is newer than published ($LATEST_PUBLISHED). Running release validation..."
+          if [ "$CURRENT_VERSION" != "$BETA_PUBLISHED" ]; then
+            echo "Version $CURRENT_VERSION is not yet published under '$DIST_TAG' ($BETA_PUBLISHED). Running release validation..."
             bun run release:check
             echo "Publishing platform packages if present..."
             for pkg_dir in packages/*; do
               if [ -d "$pkg_dir" ] && [ -f "$pkg_dir/package.json" ]; then
                 echo "Publishing platform package in $pkg_dir..."
-                (cd "$pkg_dir" && npm publish --access public) || true
+                # Same tag as the main package: the platform packages must resolve
+                # from the same install, and `optionalDependencies` pins resolve by
+                # exact version rather than by tag.
+                (cd "$pkg_dir" && npm publish --access public --tag "$DIST_TAG")
               fi
             done
-            echo "Publishing $PKG_NAME@$CURRENT_VERSION to npm..."
+            echo "Publishing $PKG_NAME@$CURRENT_VERSION to npm under '$DIST_TAG'..."
             if [ -n "${NODE_AUTH_TOKEN:-}" ]; then
-              npm publish --access public
+              npm publish --access public --tag "$DIST_TAG"
             else
-              npm publish --access public --provenance || npm publish --access public
+              npm publish --access public --tag "$DIST_TAG" --provenance \
+                || npm publish --access public --tag "$DIST_TAG"
             fi
-            echo "Successfully published $PKG_NAME@$CURRENT_VERSION to npm."
+            echo "Successfully published $PKG_NAME@$CURRENT_VERSION under '$DIST_TAG'."
+            echo "Install for testing with: npm install -g $PKG_NAME@$DIST_TAG"
           else
-            echo "Version $CURRENT_VERSION is already published to npm. No publish needed."
+            echo "Version $CURRENT_VERSION is already published under '$DIST_TAG'. No publish needed."
           fi

@@ -15,7 +15,12 @@ describe("npm publish workflow", () => {
       hasContentsReadPermission: /contents:\s*read/.test(workflow),
       checksOutReleaseTag: /ref:\s*\$\{\{\s*github\.event\.release\.tag_name\s*\}\}/.test(workflow),
       validatesReleaseTag: workflow.includes('github.event.release.tag_name != format(\'v{0}\', fromJSON(steps.package.outputs.manifest).version)'),
-      publishesToNpm: /npm publish(\s+--access\s+public)?\s*$/.test(workflow),
+      // The pre-1.0 line ships under `beta` so `latest` stays on 2.1.x. A bare
+      // `npm publish` here would move `latest` backwards to a lower version.
+      publishesToNpm: /npm publish\s+--access public --tag "\$DIST_TAG"/.test(workflow),
+      publishesPlatformPackagesUnderSameTag: /npm publish --access public --tag "\$DIST_TAG"/.test(workflow),
+      declaresBetaDistTag: /DIST_TAG:\s*beta/.test(workflow),
+      printsInstallCommand: workflow.includes('@$DIST_TAG'),
     }
 
     // Then
@@ -26,6 +31,9 @@ describe("npm publish workflow", () => {
       checksOutReleaseTag: true,
       validatesReleaseTag: true,
       publishesToNpm: true,
+      publishesPlatformPackagesUnderSameTag: true,
+      declaresBetaDistTag: true,
+      printsInstallCommand: true,
     })
   })
 })

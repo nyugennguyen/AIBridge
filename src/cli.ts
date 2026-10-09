@@ -18,6 +18,7 @@
 import { existsSync } from "node:fs"
 import { validateProfileName } from "./host/paths.js"
 import { readSecret } from "./host/profile-store.js"
+import type { IpcBusHandle } from "./ipc/bridge.js"
 import { CLI_VERSION } from "./version.js"
 import { findInPath } from "./host/binaries.js"
 
@@ -658,19 +659,39 @@ async function createRealDeps(): Promise<CliDeps> {
           // unreadable or missing
         }
       }
+      const bearerToken = await readSecret(`${paths.secretsDir}/bearer_token`)
       const bridge = await startBridge({
         configPath,
         stateDir: paths.stateDir,
-        bearerToken: await readSecret(`${paths.secretsDir}/bearer_token`),
+        bearerToken,
         environment: {
           ...process.env as Record<string, string>,
           ...(ocPassword ? { OPENCODE_SERVER_PASSWORD: ocPassword } : {}),
         },
         shadowMode: serveOptions?.shadowMode,
       })
+
+      let bus: IpcBusHandle | undefined
+      try {
+        const { QueueBridge, startIpcBus } = await import("./ipc/bridge.js")
+        const queueBridge = new QueueBridge()
+        bus = await startIpcBus({
+          config: bridge.config,
+          jobManager: bridge.jobManager,
+          bridge: queueBridge,
+          outboxPendingCount: () => 0,
+          customSecrets: [bearerToken],
+        })
+      } catch {
+        // IPC bus is optional; bridge continues if socket cannot be bound
+      }
+
       await bridge.app.listen({ host: bridge.config.bridge.host, port: bridge.config.bridge.port })
       await new Promise<void>((resolve) => {
         const onSignal = (): void => {
+          if (bus !== undefined) {
+            void bus.stop().catch(() => {})
+          }
           void bridge.app.close().then(() => resolve(), () => resolve())
         }
         process.once("SIGINT", onSignal)
@@ -700,8 +721,7 @@ async function createRealDeps(): Promise<CliDeps> {
         // that decides whether a socket exists at all.
         ingressObserver: publishIpc ? bridge : undefined,
       })
-
-      let bus: Awaited<ReturnType<typeof startIpcBus>> | undefined
+      let bus: IpcBusHandle | undefined
       if (publishIpc) {
         bus = await startIpcBus({
           config: worker.config,

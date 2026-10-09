@@ -1,6 +1,7 @@
 import { createOpencodeClient } from "@opencode-ai/sdk/v2"
 import type { OpencodeClient as SdkOpencodeClient } from "@opencode-ai/sdk/v2"
 import type { CreateSessionResult, OpencodeClient, OpencodeEvent, OpencodePromptPolicy, PermissionDecision, SessionStatus } from "./types.js"
+import { countAnsweringAssistantMessages } from "./answer.js"
 
 export interface SdkOpencodeClientOptions {
   baseUrl: string
@@ -67,12 +68,7 @@ export class SdkOpencodeClientAdapter implements OpencodeClient {
 
   async countAssistantMessages(sessionId: string): Promise<number> {
     const response = await this.client.session.messages({ sessionID: sessionId }, { throwOnError: true })
-    const data = response.data as unknown
-    if (!Array.isArray(data)) return 0
-    return data.filter((message) => {
-      const info = (message as { info?: { role?: string } }).info
-      return info?.role === "assistant"
-    }).length
+    return countAnsweringAssistantMessages(response.data)
   }
 
   async replyPermission(_sessionId: string, permissionId: string, response: PermissionDecision): Promise<void> {

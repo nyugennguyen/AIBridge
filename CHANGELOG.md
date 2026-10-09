@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.1.9] - 2026-10-09
+
+### Fixed
+
+- **An assistant message with no parts is no longer counted as an answer**: the empty-turn guard added in 2.1.8 counted assistant messages, but opencode stores one with `parts=[]` when a turn dies mid-flight -- observed live against `AI_APICallError: Invalid API Key` -- so a dead turn still reported `completed`. Only a message carrying a non-empty text part counts now.
+
 ## [2.1.8] - 2026-10-09
 
 ### Fixed

@@ -66,11 +66,16 @@ async function writeConfig(): Promise<string> {
 }
 
 /**
- * A client whose session goes idle immediately, standing in for a turn that died
+ * A client whose turn runs and then finishes, standing in for a turn that died
  * before storing anything.
+ *
+ * It reports `busy` once the prompt is delivered and `idle` after, because
+ * `waitForIdle` now requires the session to have been busy before it will accept
+ * an idle reading as the end of the turn.
  */
 class IdleWithNoAnswerClient implements OpencodeClient {
   readonly assistantMessages: number
+  private running = false
 
   constructor(assistantMessages: number) {
     this.assistantMessages = assistantMessages
@@ -83,14 +88,16 @@ class IdleWithNoAnswerClient implements OpencodeClient {
     return Promise.resolve({ id: "ses_test" })
   }
   sendPromptAsync(): Promise<void> {
+    this.running = true
     return Promise.resolve()
   }
   subscribeEvents(): Promise<AsyncIterable<never>> {
     return Promise.resolve((async function* () {})())
   }
   getSessionStatus(): Promise<SessionStatus> {
-    // The failure mode: opencode forgot the session, so this reads `idle`.
-    return Promise.resolve("idle")
+    // The failure mode: the turn ran and opencode forgot the session, so this
+    // reads `idle` with nothing stored.
+    return Promise.resolve(this.running ? "idle" : "busy")
   }
   countAssistantMessages(): Promise<number> {
     return Promise.resolve(this.assistantMessages)
@@ -109,9 +116,9 @@ async function runJob(client: OpencodeClient): Promise<JobRecord> {
     stateDir: join(dir, "state"),
     bearerToken: "secret",
     environment: {},
-    // Short window so the suite does not wait out the production grace period;
-    // the production default is asserted separately.
+    // Short windows so the suite does not wait out the production defaults.
     answerGraceMs: 300,
+    idleSettleMs: 50,
     deps: { opencodeClient: client },
   })
 
@@ -171,6 +178,7 @@ describe("runtime — a turn with no assistant message", () => {
  */
 class SlowToAnswerClient implements OpencodeClient {
   answered = false
+  running = false
   private readonly answerDelayMs: number
 
   constructor(answerDelayMs: number) {
@@ -184,6 +192,7 @@ class SlowToAnswerClient implements OpencodeClient {
     return Promise.resolve({ id: "ses_slow" })
   }
   async sendPromptAsync(): Promise<void> {
+    this.running = true
     // The answer lands after the session has already reported idle, which is the
     // ordering that produced the false failure.
     setTimeout(() => {
@@ -194,7 +203,7 @@ class SlowToAnswerClient implements OpencodeClient {
     return Promise.resolve((async function* () {})())
   }
   getSessionStatus(): Promise<SessionStatus> {
-    return Promise.resolve("idle")
+    return Promise.resolve(this.running ? "idle" : "busy")
   }
   countAssistantMessages(): Promise<number> {
     return Promise.resolve(this.answered ? 1 : 0)

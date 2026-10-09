@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.1.11] - 2026-10-09
+
+### Fixed
+
+- **`waitForIdle` no longer settles on a mid-turn pause**: it returned the first time the session read `idle`, but opencode reports a session idle between steps -- before the first token, and again between tool calls. A two-file read produced four assistant messages over 74s, and `waitForIdle` returned at t+5s in the gap before the first tool call while the turn ran on to answer at t+62s; the job was marked terminal with the answer still unwritten. The turn now ends only after the session has held `idle` continuously for a settle window, on both the polling and the event-stream path.
+
 ## [2.1.10] - 2026-10-09
 
 ### Fixed

@@ -41,6 +41,8 @@ export interface RuntimeOptions {
    * wait out the production window; production leaves it unset.
    */
   readonly answerGraceMs?: number
+  /** Override how long a session must stay idle before the turn counts as over. */
+  readonly idleSettleMs?: number
   readonly deps?: {
     readonly opencodeClient?: OpencodeClient
     readonly monitorSession?: (job: JobRecord) => Promise<void>
@@ -179,6 +181,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
           pollIntervalMs: 1000,
           permissionPolicy: new StaticPermissionPolicy(config.permissions),
           planMetadata: job.trigger.metadata,
+          settleMs: options.idleSettleMs,
         })
         // Idle is not success, but neither is it proof the turn is over. See
         // `waitForAnswer`: a new session reads `idle` before the prompt lands,

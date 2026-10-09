@@ -1,6 +1,6 @@
 {
   "name": "@nyugennguyen/aibridge",
-  "version": "2.1.2",
+  "version": "2.1.3",
   "description": "Private Tailscale bridge for OpenCode agents",
   "license": "MIT",
   "type": "module",
@@ -8,10 +8,13 @@
     "bun": ">=1.3.0"
   },
   "bin": {
-    "aibr": "./dist/cli.js"
+    "aibr": "./dist/cli.js",
+    "aibr-tui": "./bin/aibr-tui",
+    "aibr-router": "./bin/aibr-router"
   },
   "files": [
     "dist",
+    "bin",
     "README.md",
     "LICENSE"
   ],
@@ -33,14 +36,6 @@
     "release:check": "bun install --frozen-lockfile && bun run build && bun test && bun run typecheck && shellcheck scripts/install.sh && bash -n scripts/install.sh && bun dist/cli.js --help && bun pm pack --dry-run",
     "generate:parity-vector": "tsx scripts/generate-parity-vector.ts",
     "package:binaries": "tsx scripts/package-binaries.ts"
-  },
-  "optionalDependencies": {
-    "@nyugennguyen/aibridge-darwin-arm64": "2.1.2",
-    "@nyugennguyen/aibridge-darwin-x64": "2.1.2",
-    "@nyugennguyen/aibridge-linux-arm64-gnu": "2.1.2",
-    "@nyugennguyen/aibridge-linux-arm64-musl": "2.1.2",
-    "@nyugennguyen/aibridge-linux-x64-gnu": "2.1.2",
-    "@nyugennguyen/aibridge-linux-x64-musl": "2.1.2"
   },
   "dependencies": {
     "@fastify/websocket": "11.3.1",

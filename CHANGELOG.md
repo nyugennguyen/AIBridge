@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.1.3] - 2026-10-09
+
+### Fixed
+
+- **Bundled native binaries**: Shipped compiled `aibr-tui` and `aibr-router` binaries directly inside the npm package under `bin/`, registered them in package `bin` executables, and removed external `optionalDependencies` to prevent 404 installation warnings.
+
 ## [2.1.2] - 2026-10-09
 
 ### Fixed

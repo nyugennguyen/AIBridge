@@ -20,14 +20,6 @@
         "vitest": "4.1.9",
         "yaml": "2.8.1",
       },
-      "optionalDependencies": {
-        "@nyugennguyen/aibridge-darwin-arm64": "2.1.2",
-        "@nyugennguyen/aibridge-darwin-x64": "2.1.2",
-        "@nyugennguyen/aibridge-linux-arm64-gnu": "2.1.2",
-        "@nyugennguyen/aibridge-linux-arm64-musl": "2.1.2",
-        "@nyugennguyen/aibridge-linux-x64-gnu": "2.1.2",
-        "@nyugennguyen/aibridge-linux-x64-musl": "2.1.2",
-      },
     },
   },
   "packages": {

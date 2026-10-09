@@ -7,7 +7,7 @@ const manifestSchema = z.object({
   private: z.boolean().optional(),
   license: z.string().optional(),
   engines: z.object({ bun: z.string() }).optional(),
-  bin: z.object({ aibr: z.string() }).optional(),
+  bin: z.record(z.string(), z.string()).optional(),
   files: z.array(z.string()).optional(),
 })
 
@@ -33,7 +33,7 @@ describe("package manifest", () => {
       license: "MIT",
       bun: ">=1.3.0",
       bin: "./dist/cli.js",
-      files: ["dist", "README.md", "LICENSE"],
+      files: ["dist", "bin", "README.md", "LICENSE"],
     })
   })
 })

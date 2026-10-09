@@ -142,7 +142,7 @@ describe("package smoke — pack manifest", () => {
     expect(files).not.toContain("bun.lock")
   })
 
-  it("only includes dist/, README.md, LICENSE, and package.json", async () => {
+  it("only includes dist/, bin/, README.md, LICENSE, and package.json", async () => {
     const { stdout, stderr } = await run("bun pm pack --dry-run")
     const files = parsePackFiles(stdout, stderr)
 
@@ -151,11 +151,20 @@ describe("package smoke — pack manifest", () => {
         file === "package.json" ||
         file === "README.md" ||
         file === "LICENSE" ||
-        file.startsWith("dist/")
+        file.startsWith("dist/") ||
+        file.startsWith("bin/")
       if (!allowed) {
         throw new Error(`Unexpected file in pack: ${file}`)
       }
     }
+  })
+
+  it("includes prebuilt binaries in bin/ in the pack tarball", async () => {
+    const { stdout, stderr } = await run("bun pm pack --dry-run")
+    const files = parsePackFiles(stdout, stderr)
+
+    expect(files).toContain("bin/aibr-tui")
+    expect(files).toContain("bin/aibr-router")
   })
 })
 
@@ -217,10 +226,12 @@ describe("package smoke — manifest contract", () => {
     expect(manifest.license).toBe("MIT")
   })
 
-  it("manifest declares aibr bin target", async () => {
+  it("manifest declares aibr bin targets", async () => {
     const manifest = JSON.parse(await readFile(resolve(ROOT, "package.json"), "utf8"))
 
     expect(manifest.bin?.aibr).toBe("./dist/cli.js")
+    expect(manifest.bin?.["aibr-tui"]).toBe("./bin/aibr-tui")
+    expect(manifest.bin?.["aibr-router"]).toBe("./bin/aibr-router")
   })
 
   it("manifest declares exact dependency versions (no ranges)", async () => {
@@ -239,25 +250,6 @@ describe("package smoke — manifest contract", () => {
     expect(typeof manifest.scripts["release:check"]).toBe("string")
   })
 
-  it("manifest declares optionalDependencies for all prebuilt platform packages", async () => {
-    const manifest = JSON.parse(await readFile(resolve(ROOT, "package.json"), "utf8"))
-    const optDeps = manifest.optionalDependencies ?? {}
-
-    const expectedPackages = [
-      "@nyugennguyen/aibridge-darwin-arm64",
-      "@nyugennguyen/aibridge-darwin-x64",
-      "@nyugennguyen/aibridge-linux-arm64-gnu",
-      "@nyugennguyen/aibridge-linux-arm64-musl",
-      "@nyugennguyen/aibridge-linux-x64-gnu",
-      "@nyugennguyen/aibridge-linux-x64-musl",
-    ]
-
-    for (const pkg of expectedPackages) {
-      expect(optDeps[pkg]).toBeDefined()
-      expect(optDeps[pkg]).toBe(manifest.version)
-      expect(optDeps[pkg]).not.toMatch(/^\^|^\~|^>=|^>/)
-    }
-  })
 })
 
 describe("package smoke — native binaries discovery", () => {

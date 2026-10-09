@@ -52,4 +52,4 @@ jobs:
               (cd "$pkg_dir" && npm publish --access public) || true
             fi
           done
-          npm publish
+          npm publish --access public

@@ -15,7 +15,7 @@ describe("npm publish workflow", () => {
       hasContentsReadPermission: /contents:\s*read/.test(workflow),
       checksOutReleaseTag: /ref:\s*\$\{\{\s*github\.event\.release\.tag_name\s*\}\}/.test(workflow),
       validatesReleaseTag: workflow.includes('github.event.release.tag_name != format(\'v{0}\', fromJSON(steps.package.outputs.manifest).version)'),
-      publishesToNpm: /npm publish\s*$/.test(workflow),
+      publishesToNpm: /npm publish(\s+--access\s+public)?\s*$/.test(workflow),
     }
 
     // Then

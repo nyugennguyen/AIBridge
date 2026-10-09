@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.1.13] - 2026-10-10
+
+### Fixed
+
+- **A long tool call is no longer mistaken for a finished turn**: the idle settle window was 3s, chosen before there was a measurement to choose it from. `opencode/big-pickle` leaves a 47-second gap between two messages of a single turn while a tool call runs, and that gap was read as the end of the turn -- the job settled at 17:51:01.245 with the answer arriving at 17:51:18.627. The window is now 60s, sized against the longest gap observed from a real agent, and the answer window moves to 90s so the two stay distinct.
+
 ## [2.1.12] - 2026-10-10
 
 ### Fixed

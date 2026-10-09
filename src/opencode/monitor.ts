@@ -12,16 +12,28 @@ export interface WaitForIdleOptions {
    *
    * opencode reports a session idle between steps -- before the first token, and
    * again between tool calls -- so the first `idle` is a pause, not an ending.
-   * Observed live on a two-file read: four assistant messages over 74s, with
-   * `waitForIdle` returning at t+5s in the gap before the first tool call while
-   * the turn ran on to produce its answer at t+62s. Requiring the idle state to
-   * persist closes that gap. Tests override this to keep runtime short.
+   *
+   * The window has to clear the longest gap a real agent actually leaves, and
+   * that is not small. Measured on 2026-10-10 while debugging
+   * `opencode/big-pickle`: a two-file read produced messages at 17:50:31 and
+   * 17:51:18 with nothing in between. A 3s window read that 47-second tool call
+   * as the end of the turn and discarded the answer that followed.
+   *
+   * Settling early is not a small error -- it loses the result of work that
+   * actually succeeded -- while settling late only delays the report. Tests
+   * override this to keep runtime short.
    */
   settleMs?: number
 }
 
-/** Default settle window, in ms. */
-export const DEFAULT_IDLE_SETTLE_MS = 3_000
+/**
+ * Default settle window, in ms.
+ *
+ * Sized against the longest observed inter-message gap with headroom, not
+ * against a round-trip time: a tool call that shells out can legitimately take
+ * this long with the session idle the whole while.
+ */
+export const DEFAULT_IDLE_SETTLE_MS = 60_000
 
 export async function waitForIdle(client: OpencodeClient, sessionId: string, options: WaitForIdleOptions): Promise<void> {
   const deadline = Date.now() + options.timeoutMs

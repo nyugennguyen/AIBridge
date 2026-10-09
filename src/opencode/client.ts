@@ -65,6 +65,16 @@ export class SdkOpencodeClientAdapter implements OpencodeClient {
     return data.status?.type ?? "idle"
   }
 
+  async countAssistantMessages(sessionId: string): Promise<number> {
+    const response = await this.client.session.messages({ sessionID: sessionId }, { throwOnError: true })
+    const data = response.data as unknown
+    if (!Array.isArray(data)) return 0
+    return data.filter((message) => {
+      const info = (message as { info?: { role?: string } }).info
+      return info?.role === "assistant"
+    }).length
+  }
+
   async replyPermission(_sessionId: string, permissionId: string, response: PermissionDecision): Promise<void> {
     await this.client.permission.reply({ requestID: permissionId, reply: response }, { throwOnError: true })
   }

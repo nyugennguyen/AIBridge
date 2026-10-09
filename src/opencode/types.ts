@@ -43,6 +43,15 @@ export interface OpencodeClient {
   sendPromptAsync(sessionId: string, prompt: string, directory: string, policy?: OpencodePromptPolicy): Promise<void>
   subscribeEvents(directory: string): Promise<AsyncIterable<OpencodeEvent>>
   getSessionStatus(sessionId: string): Promise<SessionStatus>
+  /**
+   * How many assistant messages the session has stored.
+   *
+   * Not the same question as `getSessionStatus`. That reports whether the session
+   * stopped working, and an unknown session reads as `idle`; this reports whether
+   * the turn actually said anything. Only the second can distinguish a finished
+   * turn from a turn that died before storing output.
+   */
+  countAssistantMessages(sessionId: string): Promise<number>
   replyPermission(sessionId: string, permissionId: string, response: PermissionDecision): Promise<void>
   abortSession(sessionId: string): Promise<void>
 }

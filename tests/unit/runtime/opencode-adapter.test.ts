@@ -24,6 +24,7 @@ class FakeClient implements OpencodeClient {
     return (async function* () { yield* events })()
   }
   async getSessionStatus() { return this.status }
+  async countAssistantMessages() { return 1 }
   async replyPermission(sessionId: string, permissionId: string, response: PermissionDecision) { this.replies.push({ sessionId, permissionId, response }) }
   async abortSession() { this.aborts += 1 }
 }

@@ -138,6 +138,18 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
           permissionPolicy: new StaticPermissionPolicy(config.permissions),
           planMetadata: job.trigger.metadata,
         })
+        // Idle is not success. `getSessionStatus` maps an unknown session to
+        // `idle`, so a turn that died before storing anything -- a provider error,
+        // a plugin crashing the loop -- looks exactly like a finished one. Proving
+        // the turn produced an assistant message is the only thing that
+        // distinguishes them, and without it a job reports `completed` with an
+        // empty answer and a `delivered` callback.
+        if ((await opencodeClient.countAssistantMessages(job.opencodeSessionId)) === 0) {
+          throw new Error(
+            `OpenCode session ${job.opencodeSessionId} went idle without producing an assistant message. ` +
+              `The turn failed before any output was stored; check the opencode log for this session.`,
+          )
+        }
         terminalJob = await jobManager.markCompleted(job.id)
         await taskGraphSyncer.syncJobToTask(job.trigger.task_id ?? `#${job.id}`, "done")
       } catch (error) {

@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.1.8] - 2026-10-09
+
+### Fixed
+
+- **A turn that produced nothing is no longer reported as `completed`**: `getSessionStatus` maps an unknown session to `idle`, so a turn that died before storing any output -- a provider error, a plugin crashing the event loop -- looked identical to a finished one. Jobs reported `completed` with an empty assistant message and a `delivered` callback, and a caller had no way to tell the two apart. The runtime now proves an assistant message was stored before completing, and fails with a message naming the session otherwise.
+- **`aibr _opencode` honours `opencode.server_port`**: the hidden launcher read only `OPENCODE_PORT` and otherwise hardcoded 4096, while `aibr start` read the port from the profile. A profile on any other port silently started opencode on 4096 and failed with a bare `opencode2 serve failed` naming neither the port nor the conflict. Both paths now resolve the port through one function, and the spawn error names the port and profile.
+
 ## [2.1.7] - 2026-10-09
 
 ### Fixed

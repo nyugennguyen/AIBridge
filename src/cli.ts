@@ -18,6 +18,8 @@
 import { existsSync } from "node:fs"
 import { validateProfileName } from "./host/paths.js"
 import { readSecret } from "./host/profile-store.js"
+import { loadConfig } from "./config/loader.js"
+import { resolveOpencodePort } from "./host/opencode-port.js"
 import type { IpcBusHandle } from "./ipc/bridge.js"
 import { CLI_VERSION } from "./version.js"
 import { findInPath } from "./host/binaries.js"
@@ -854,7 +856,17 @@ async function createRealDeps(): Promise<CliDeps> {
           // unreadable or missing
         }
       }
-      const opencodePort = process.env.OPENCODE_PORT ?? "4096"
+      // Read the port from the same profile the supervisor read, so the server
+      // comes up where the bridge expects it. This used to consult only
+      // OPENCODE_PORT and otherwise hardcode 4096, silently ignoring
+      // `opencode.server_port`.
+      let opencodePort: string
+      try {
+        const profileConfig = await loadConfig(`${paths.configDir}/config.json`)
+        opencodePort = resolveOpencodePort(profileConfig, process.env)
+      } catch {
+        opencodePort = resolveOpencodePort(undefined, process.env)
+      }
       const opencodeBin = process.env.OPENCODE_BIN ?? (findInPath("opencode2") ? "opencode2" : "opencode")
       const result = await processRunner.exec(
         [opencodeBin, "serve", "--port", opencodePort, "--hostname", "127.0.0.1"],
@@ -866,7 +878,11 @@ async function createRealDeps(): Promise<CliDeps> {
         },
       )
       if (result.exitCode !== 0) {
-        throw new Error(result.stderr || `${opencodeBin} serve failed`)
+        throw new Error(
+          result.stderr ||
+            `${opencodeBin} serve failed on port ${opencodePort} (profile ${profile}); ` +
+              `check that nothing else already holds that port`,
+        )
       }
     },
 

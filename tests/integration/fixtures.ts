@@ -51,6 +51,12 @@ export function testConfig(): BridgeConfig {
 export class FakeOpencodeClient implements OpencodeClient {
   createdSessions = 0
   sentPrompts = 0
+  /**
+   * Assistant messages a turn is assumed to have produced. Defaults to 1 so an
+   * existing test asserting `completed` keeps asserting what it means; set to 0
+   * to reproduce a turn that died before storing output.
+   */
+  assistantMessages = 1
 
   async health(): Promise<boolean> {
     return true
@@ -71,6 +77,10 @@ export class FakeOpencodeClient implements OpencodeClient {
 
   async getSessionStatus(): Promise<SessionStatus> {
     return "idle"
+  }
+
+  async countAssistantMessages(): Promise<number> {
+    return this.assistantMessages
   }
 
   async replyPermission(_sessionId: string, _permissionId: string, _response: PermissionDecision): Promise<void> {}

@@ -36,6 +36,11 @@ export interface RuntimeOptions {
   readonly stateDir: string
   readonly bearerToken: string
   readonly environment: Record<string, string>
+  /**
+   * Override the idle grace window. Tests set this low so they do not have to
+   * wait out the production window; production leaves it unset.
+   */
+  readonly answerGraceMs?: number
   readonly deps?: {
     readonly opencodeClient?: OpencodeClient
     readonly monitorSession?: (job: JobRecord) => Promise<void>
@@ -54,6 +59,43 @@ export interface Runtime {
   readonly monitorSession: (job: JobRecord) => Promise<void>
   /** Re-delivers the report of a job already known to be terminal. */
   readonly reportTerminalJob: (job: JobRecord) => Promise<void>
+}
+
+/**
+ * How long to keep re-asking "did the turn answer?" after the session goes idle.
+ *
+ * Idle is the absence of a signal, not the end of the turn. A freshly created
+ * session has no entry in opencode's status map, so it reads `idle` immediately
+ * -- before the prompt has been delivered, let alone answered. Observed live:
+ * aibr marked a job terminal at 16:37:45.514 while opencode stored its first
+ * assistant message at 16:37:46.291, and the turn then produced four messages.
+ *
+ * A single check therefore reports a healthy turn as empty. The question is
+ * cheap and idempotent, so it is re-asked across this window: long enough to
+ * cover prompt delivery and first-token latency on a loaded machine, short
+ * enough that a genuinely dead turn is still reported as `failed` promptly.
+ */
+const ANSWER_GRACE_MS = 5_000
+const ANSWER_POLL_MS = 250
+
+/**
+ * Wait for the session to hold an assistant message, or give up.
+ *
+ * Polls rather than sleeping once, so a turn that answers immediately is not
+ * held for the whole window.
+ */
+async function waitForAnswer(
+  opencodeClient: OpencodeClient,
+  sessionId: string,
+  graceMs: number = ANSWER_GRACE_MS,
+  pollMs: number = ANSWER_POLL_MS,
+): Promise<boolean> {
+  const deadline = Date.now() + graceMs
+  for (;;) {
+    if ((await opencodeClient.countAssistantMessages(sessionId)) > 0) return true
+    if (Date.now() >= deadline) return false
+    await new Promise((resolve) => setTimeout(resolve, pollMs))
+  }
 }
 
 export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
@@ -138,13 +180,10 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
           permissionPolicy: new StaticPermissionPolicy(config.permissions),
           planMetadata: job.trigger.metadata,
         })
-        // Idle is not success. `getSessionStatus` maps an unknown session to
-        // `idle`, so a turn that died before storing anything -- a provider error,
-        // a plugin crashing the loop -- looks exactly like a finished one. Proving
-        // the turn produced an assistant message is the only thing that
-        // distinguishes them, and without it a job reports `completed` with an
-        // empty answer and a `delivered` callback.
-        if ((await opencodeClient.countAssistantMessages(job.opencodeSessionId)) === 0) {
+        // Idle is not success, but neither is it proof the turn is over. See
+        // `waitForAnswer`: a new session reads `idle` before the prompt lands,
+        // so this waits out a short window before concluding the turn was empty.
+        if (!(await waitForAnswer(opencodeClient, job.opencodeSessionId, options.answerGraceMs ?? ANSWER_GRACE_MS))) {
           throw new Error(
             `OpenCode session ${job.opencodeSessionId} went idle without producing an assistant message. ` +
               `The turn failed before any output was stored; check the opencode log for this session.`,

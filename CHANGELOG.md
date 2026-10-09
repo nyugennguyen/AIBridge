@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.1.10] - 2026-10-09
+
+### Fixed
+
+- **A turn that answers just after going idle is no longer reported `failed`**: the empty-turn guard added in 2.1.8 checked once, the instant the session reported idle. A newly created session has no entry in opencode's status map and so reads `idle` before the prompt is even delivered -- observed live with aibr marking a job terminal at 16:37:45.514 while opencode stored its first assistant message at 16:37:46.291. The check now retries across a short window, so a slow first token no longer fails a turn that then completes normally.
+
 ## [2.1.9] - 2026-10-09
 
 ### Fixed

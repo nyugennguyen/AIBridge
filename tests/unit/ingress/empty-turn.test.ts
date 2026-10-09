@@ -109,6 +109,9 @@ async function runJob(client: OpencodeClient): Promise<JobRecord> {
     stateDir: join(dir, "state"),
     bearerToken: "secret",
     environment: {},
+    // Short window so the suite does not wait out the production grace period;
+    // the production default is asserted separately.
+    answerGraceMs: 300,
     deps: { opencodeClient: client },
   })
 
@@ -123,6 +126,9 @@ async function runJob(client: OpencodeClient): Promise<JobRecord> {
   })
   const running = await runtime.jobManager.markRunning(job.id)
   const attached = await runtime.jobManager.attachSession(running.id, "ses_test")
+  // Deliver the prompt the way the real route does, so a client that answers
+  // asynchronously actually starts doing so before the session is monitored.
+  await client.sendPromptAsync(attached.opencodeSessionId!, attached.trigger.prompt, attached.trigger.project_dir)
   await runtime.monitorSession(attached)
   return runtime.jobManager.getJob(job.id)
 }
@@ -146,5 +152,72 @@ describe("runtime — a turn with no assistant message", () => {
     const job = await runJob(new IdleWithNoAnswerClient(1))
 
     expect(job.status).toBe("completed")
+  })
+})
+
+/**
+ * The first version checked for an answer the instant the session went idle, and
+ * that raced the turn's own start.
+ *
+ * Observed live: aibr marked the job terminal at 16:37:45.514 while opencode's
+ * first assistant message was created at 16:37:46.291 -- 777ms later. A newly
+ * created session reads `idle` (the status map has no entry yet), so the guard
+ * saw zero messages on a turn that then ran to completion and produced four
+ * assistant messages. The job was reported `failed` with a full answer sitting
+ * in the session.
+ *
+ * "Idle" is therefore not a signal that the turn is over; it is the absence of
+ * one. The question has to be re-asked over a window before it means anything.
+ */
+class SlowToAnswerClient implements OpencodeClient {
+  answered = false
+  private readonly answerDelayMs: number
+
+  constructor(answerDelayMs: number) {
+    this.answerDelayMs = answerDelayMs
+  }
+
+  health(): Promise<boolean> {
+    return Promise.resolve(true)
+  }
+  createSession(): Promise<{ id: string }> {
+    return Promise.resolve({ id: "ses_slow" })
+  }
+  async sendPromptAsync(): Promise<void> {
+    // The answer lands after the session has already reported idle, which is the
+    // ordering that produced the false failure.
+    setTimeout(() => {
+      this.answered = true
+    }, this.answerDelayMs)
+  }
+  subscribeEvents(): Promise<AsyncIterable<never>> {
+    return Promise.resolve((async function* () {})())
+  }
+  getSessionStatus(): Promise<SessionStatus> {
+    return Promise.resolve("idle")
+  }
+  countAssistantMessages(): Promise<number> {
+    return Promise.resolve(this.answered ? 1 : 0)
+  }
+  replyPermission(): Promise<void> {
+    return Promise.resolve()
+  }
+  abortSession(): Promise<void> {
+    return Promise.resolve()
+  }
+}
+
+describe("runtime — a turn that answers just after going idle", () => {
+  it("does not fail a job whose answer arrives moments later", async () => {
+    // Lands after the first poll, inside the window -- the shape of the race.
+    const job = await runJob(new SlowToAnswerClient(200))
+
+    expect(job.status).toBe("completed")
+  })
+
+  it("still fails a turn that never answers at all", async () => {
+    const job = await runJob(new SlowToAnswerClient(600_000))
+
+    expect(job.status).toBe("failed")
   })
 })

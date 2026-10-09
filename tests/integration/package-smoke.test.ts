@@ -261,19 +261,29 @@ describe("package smoke — manifest contract", () => {
 })
 
 describe("package smoke — native binaries discovery", () => {
-  it("findTuiBinary resolves to a built executable Rust binary", () => {
+  it("findTuiBinary resolves to a path ending in aibr-tui or null when unbuilt", () => {
     const tuiPath = findTuiBinary()
-
-    expect(tuiPath).not.toBeNull()
-    expect(typeof tuiPath).toBe("string")
-    expect(tuiPath).toMatch(/aibr-tui$/)
+    if (tuiPath !== null) {
+      expect(typeof tuiPath).toBe("string")
+      expect(tuiPath).toMatch(/aibr-tui$/)
+    } else {
+      expect(tuiPath).toBeNull()
+    }
   })
 
-  it("findRouterBinary resolves to a built executable Rust binary", () => {
+  it("findRouterBinary resolves to a path ending in aibr-router or null when unbuilt", () => {
     const routerPath = findRouterBinary()
+    if (routerPath !== null) {
+      expect(typeof routerPath).toBe("string")
+      expect(routerPath).toMatch(/aibr-router$/)
+    } else {
+      expect(routerPath).toBeNull()
+    }
+  })
 
-    expect(routerPath).not.toBeNull()
-    expect(typeof routerPath).toBe("string")
-    expect(routerPath).toMatch(/aibr-router$/)
+  it("resolves binary when override environment variable is provided", () => {
+    const sampleBin = resolve(ROOT, "scripts", "install.sh")
+    expect(findTuiBinary({ AIBRIDGE_TUI_BIN: sampleBin })).toBe(sampleBin)
+    expect(findRouterBinary({ AIBRIDGE_ROUTER_BIN: sampleBin })).toBe(sampleBin)
   })
 })

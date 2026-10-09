@@ -1,6 +1,6 @@
 {
   "name": "@nyugennguyen/aibridge",
-  "version": "2.1.1",
+  "version": "2.1.2",
   "description": "Private Tailscale bridge for OpenCode agents",
   "license": "MIT",
   "type": "module",
@@ -35,12 +35,12 @@
     "package:binaries": "tsx scripts/package-binaries.ts"
   },
   "optionalDependencies": {
-    "@nyugennguyen/aibridge-darwin-arm64": "2.1.1",
-    "@nyugennguyen/aibridge-darwin-x64": "2.1.1",
-    "@nyugennguyen/aibridge-linux-arm64-gnu": "2.1.1",
-    "@nyugennguyen/aibridge-linux-arm64-musl": "2.1.1",
-    "@nyugennguyen/aibridge-linux-x64-gnu": "2.1.1",
-    "@nyugennguyen/aibridge-linux-x64-musl": "2.1.1"
+    "@nyugennguyen/aibridge-darwin-arm64": "2.1.2",
+    "@nyugennguyen/aibridge-darwin-x64": "2.1.2",
+    "@nyugennguyen/aibridge-linux-arm64-gnu": "2.1.2",
+    "@nyugennguyen/aibridge-linux-arm64-musl": "2.1.2",
+    "@nyugennguyen/aibridge-linux-x64-gnu": "2.1.2",
+    "@nyugennguyen/aibridge-linux-x64-musl": "2.1.2"
   },
   "dependencies": {
     "@fastify/websocket": "11.3.1",

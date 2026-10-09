@@ -4,6 +4,28 @@ import { readFile } from "node:fs/promises"
 import { describe, expect, it } from "vitest"
 import { parse as parseYaml } from "yaml"
 
+/**
+ * The `toolchain:` input of the dtolnay/rust-toolchain step, read by parsing the
+ * workflow rather than by regex.
+ *
+ * A regex over the raw text matches prose too: an earlier attempt picked up a
+ * backticked `toolchain` from a comment and reported the channel as "`". Only the
+ * parsed YAML can say which occurrence is actually the input.
+ */
+function rustToolchainInput(workflowYaml: string): string | undefined {
+  const doc = parseYaml(workflowYaml) as {
+    jobs?: Record<string, { steps?: { uses?: string; with?: { toolchain?: string } }[] }>
+  }
+  for (const job of Object.values(doc.jobs ?? {})) {
+    for (const step of job.steps ?? []) {
+      if (step.uses?.startsWith("dtolnay/rust-toolchain@")) {
+        return step.with?.toolchain
+      }
+    }
+  }
+  return undefined
+}
+
 const ROUTER_UNIT = "packaging/systemd/aibr-router.service"
 const WORKER_UNIT = "packaging/systemd/aibr-worker.service"
 const ROUTER_PLIST = "packaging/launchd/com.aibridge.router.plist"
@@ -348,13 +370,35 @@ describe("milestone-7 workflow — verification that can fail", () => {
       ([, , ref]) => ref!,
     )
     for (const ref of references) {
-      // `dtolnay/rust-toolchain@stable` is that action's documented usage: it
-      // resolves the toolchain itself and is not a mutable tag in the usual sense.
-      const immutable = /^v\d+(\.\d+)*$/.test(ref) || ref === "stable"
+      // `dtolnay/rust-toolchain@master` is that action's documented usage when the
+      // toolchain is passed as an explicit `toolchain:` input rather than taken
+      // from the @rev -- the action's own README says to use @master in that case.
+      // The channel itself is pinned in `with:` and checked against
+      // rust-toolchain.toml by the test below.
+      const immutable = /^v\d+(\.\d+)*$/.test(ref) || ref === "stable" || ref === "master"
       expect(
         immutable,
-        `uses: ...@${ref} is neither a version tag nor the documented \`stable\` ref`,
+        `uses: ...@${ref} is neither a version tag nor a documented branch`,
       ).toBe(true)
     }
+  })
+
+  it("builds the musl matrix with the same Rust channel the repository pins", async () => {
+    // dtolnay/rust-toolchain selects its toolchain from the @rev or the
+    // `toolchain:` input -- it does NOT read rust-toolchain.toml. So the channel is
+    // written in two places, and this is the test that keeps them from drifting.
+    //
+    // When they disagree the cross-compilation targets are installed for one
+    // channel while Cargo builds with the other, and the musl matrix fails with
+    // "can't find crate for `core`". That message reads like a code error and is
+    // not one, which is what makes it worth a test rather than a note.
+    const declared = rustToolchainInput(await load())
+    expect(declared, "the workflow must name a toolchain explicitly").toBeDefined()
+
+    const toml = await readFile(new URL("../../../rust-toolchain.toml", import.meta.url), "utf8")
+    const pinned = toml.match(/^channel\s*=\s*"([^"]+)"/m)?.[1]
+    expect(pinned, "rust-toolchain.toml must pin a channel").toBeDefined()
+
+    expect(declared).toBe(pinned)
   })
 })

@@ -20,8 +20,18 @@ jobs:
         uses: actions/checkout@v5
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        # `@master` + an explicit `toolchain:` input is the documented pairing for
+        # this action: it picks the toolchain from the input rather than from @rev.
+        #
+        # It cannot read rust-toolchain.toml, so the channel is stated twice and
+        # `tests/unit/packaging/supervision.test.ts` asserts the two agree. The
+        # alternative -- `@stable` -- installs the cross-compilation TARGETS for
+        # whatever stable happens to be while Cargo builds with whatever
+        # rust-toolchain.toml pins, and when those drift the musl matrix fails with
+        # "can't find crate for `core`", which reads as a code error and is not one.
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: 1.99.0
           targets: x86_64-unknown-linux-musl,aarch64-unknown-linux-musl,x86_64-unknown-linux-gnu
 
       - name: Install Zig and cargo-zigbuild

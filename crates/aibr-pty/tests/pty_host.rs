@@ -116,9 +116,16 @@ fn pty_bytes_survive_the_round_trip_unchanged() {
 
     // A truecolor SGR, a box-drawing character, and a high byte: exactly the cases
     // a lossy `latin1` string would corrupt, and the reason the frame is base64.
+    //
+    // The bytes are given in OCTAL (`\342\224\202` is U+2502, `\303\251` is "é")
+    // because POSIX `printf` only requires octal. `dash`, which is `/bin/sh` on
+    // Debian and Ubuntu, does not implement `\x`: it writes the six literal
+    // characters `\xe2\x94\x82`, so the child never emits "café" and this test
+    // burned its whole 10s patience on CI while passing on macOS, where `/bin/sh`
+    // is bash. Octal is portable to every shell this fixture can run under.
     host.spawn(request(
         "pane-bytes",
-        r#"printf '\033[38;2;255;0;128m\xe2\x94\x82 caf\xc3\xa9 \033[0m'"#,
+        r#"printf '\033[38;2;255;0;128m\342\224\202 caf\303\251 \033[0m'"#,
     ))
     .expect("the child spawns");
 

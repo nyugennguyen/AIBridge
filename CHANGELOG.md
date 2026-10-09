@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.1.5] - 2026-10-09
+
+### Fixed
+
+- **Cross-platform binary format validation**: `isExecutable` in `src/host/binaries.ts` now inspects executable magic headers, rejecting incompatible binary formats (e.g. Darwin Mach-O on Linux) to prevent `posix_spawn` / `ENOEXEC` failures.
+- **TUI daemon socket awareness & OpenTUI fallback**: `aibr tui` now checks daemon socket activity before invoking `aibr-tui` and catches any IPC connection failures, gracefully falling back to the built-in OpenTUI shell when the background IPC daemon is not active.
 ## [2.1.4] - 2026-10-09
 
 ### Added

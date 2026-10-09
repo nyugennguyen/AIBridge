@@ -222,6 +222,43 @@ describe("Native binary discovery & platform packages", () => {
 
       expect(result).toBeNull()
     })
+    it("rejects Mach-O binary on Linux environment to prevent ENOEXEC", () => {
+      const bundledDir = join(tempDir, "bin")
+      mkdirSync(bundledDir, { recursive: true })
+      const binaryPath = join(bundledDir, "aibr-tui")
+      // Mach-O 64-bit LE header: 0xCF, 0xFA, 0xED, 0xFE
+      const machOBuffer = Buffer.from([0xcf, 0xfa, 0xed, 0xfe, 0x07, 0x00, 0x00, 0x01])
+      writeFileSync(binaryPath, machOBuffer)
+      chmodSync(binaryPath, 0o755)
+
+      const result = resolveNativeBinary("aibr-tui", {
+        env: { PATH: "" },
+        roots: [tempDir],
+        platform: "linux",
+        arch: "x64",
+      })
+
+      expect(result).toBeNull()
+    })
+
+    it("accepts valid ELF binary on Linux environment", () => {
+      const bundledDir = join(tempDir, "bin")
+      mkdirSync(bundledDir, { recursive: true })
+      const binaryPath = join(bundledDir, "aibr-tui")
+      // ELF 64-bit header: 0x7F, 'E', 'L', 'F'
+      const elfBuffer = Buffer.from([0x7f, 0x45, 0x4c, 0x46, 0x02, 0x01, 0x01, 0x00])
+      writeFileSync(binaryPath, elfBuffer)
+      chmodSync(binaryPath, 0o755)
+
+      const result = resolveNativeBinary("aibr-tui", {
+        env: { PATH: "" },
+        roots: [tempDir],
+        platform: "linux",
+        arch: "x64",
+      })
+
+      expect(result).toBe(binaryPath)
+    })
   })
 
   describe("findTuiBinary and findRouterBinary helpers", () => {

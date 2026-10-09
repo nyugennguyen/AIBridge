@@ -15,6 +15,7 @@
  * - `setup` rejects non-TTY environments.
  */
 
+import { existsSync } from "node:fs"
 import { validateProfileName } from "./host/paths.js"
 import { readSecret } from "./host/profile-store.js"
 import { CLI_VERSION } from "./version.js"
@@ -558,13 +559,28 @@ async function createRealDeps(): Promise<CliDeps> {
     isTTY: Boolean(process.stdout?.isTTY),
     isInputTTY: Boolean(process.stdin?.isTTY),
     runTui: async (profile: string) => {
-      // The Rust client is preferred when it has been built. The OpenTUI shell
-      // remains the fallback so `aibr tui` works from an npm install where no Rust
-      // toolchain was ever present -- see `src/tui/rust-client.ts` for why it is a
-      // subprocess and not an in-process switch.
+      // The Rust client attaches to the IPC daemon. When the daemon socket is
+      // active, the Rust client is preferred. If the daemon is not running or the
+      // client exits with code 1, the OpenTUI shell remains the fallback so `aibr tui`
+      // always launches a working workspace.
       const { findTuiBinary, runRustTui } = await import("./tui/rust-client.js")
-      if (findTuiBinary() !== null) {
-        return runRustTui(profile)
+      const { resolveSocketPath } = await import("./ipc/publisher.js")
+      const binary = findTuiBinary()
+      const socketActive = existsSync(resolveSocketPath())
+      const forceRust = process.env.AIBRIDGE_TUI_CLIENT === "rust"
+
+      if (binary !== null && (socketActive || forceRust)) {
+        try {
+          const exitCode = await runRustTui(profile)
+          if (exitCode === 0) return 0
+          process.stderr.write(
+            `\n[aibr] Rust TUI client exited with code ${exitCode}. Falling back to OpenTUI shell...\n`,
+          )
+        } catch (error) {
+          process.stderr.write(
+            `aibr tui: failed to launch native Rust client (${error instanceof Error ? error.message : String(error)}), falling back to OpenTUI shell...\n`,
+          )
+        }
       }
       const { runLocalTui } = await import("./tui/bootstrap.js")
       return runLocalTui(profile)

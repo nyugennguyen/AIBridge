@@ -8,7 +8,7 @@
  * 4. Local workspace checkouts (`target/{release,debug}/<name>`).
  * 5. System PATH (`which <name>` lookup).
  */
-import { constants, accessSync, existsSync, readdirSync, statSync } from "node:fs"
+import { constants, accessSync, closeSync, existsSync, openSync, readSync, readdirSync, statSync } from "node:fs"
 import { createRequire } from "node:module"
 import { delimiter, dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -107,13 +107,53 @@ export function getCandidatePlatformPackages(
 /**
  * Check if a file exists and is executable.
  */
-function isExecutable(filePath: string): boolean {
+function isExecutable(filePath: string, platform: string = process.platform): boolean {
   try {
     const stat = statSync(filePath)
     if (!stat.isFile()) return false
     // On Windows, any existing file is considered executable; on POSIX check X_OK.
     if (process.platform === "win32") return true
     accessSync(filePath, constants.X_OK)
+
+    // Verify binary format matches the current OS to prevent ENOEXEC
+    // when an incompatible binary (e.g. Darwin Mach-O on Linux) is present.
+    let fd: number | null = null
+    try {
+      fd = openSync(filePath, "r")
+      const buffer = Buffer.alloc(4)
+      const bytesRead = readSync(fd, buffer, 0, 4, 0)
+      if (bytesRead < 4) return false
+
+      // Scripts with #! are executable on any POSIX system
+      if (buffer[0] === 0x23 && buffer[1] === 0x21) return true
+
+      if (platform === "linux") {
+        // Must be ELF (0x7F 'E' 'L' 'F')
+        return buffer[0] === 0x7f && buffer[1] === 0x45 && buffer[2] === 0x4c && buffer[3] === 0x46
+      }
+
+      if (platform === "darwin") {
+        const magic = buffer.readUInt32BE(0)
+        const magicLE = buffer.readUInt32LE(0)
+        return (
+          magic === 0xfeedface ||
+          magic === 0xfeedfacf ||
+          magic === 0xcafebabe ||
+          magicLE === 0xfeedface ||
+          magicLE === 0xfeedfacf ||
+          magicLE === 0xcafebabe
+        )
+      }
+    } finally {
+      if (fd !== null) {
+        try {
+          closeSync(fd)
+        } catch {
+          // Ignore close error
+        }
+      }
+    }
+
     return true
   } catch {
     return false
@@ -168,20 +208,19 @@ export function resolveNativeBinary(
 ): string | null {
   const env = options?.env ?? process.env
 
-  // 1. Explicit environment variable override
-  const envVar = name === "aibr-tui" ? env.AIBRIDGE_TUI_BIN : env.AIBRIDGE_ROUTER_BIN
-  if (envVar !== undefined && envVar !== "") {
-    if (isExecutable(envVar)) {
-      return envVar
-    }
-  }
-
   const platform = options?.platform ?? process.platform
   const arch = options?.arch ?? process.arch
   const isMusl = options?.isMusl ?? detectIsMusl()
   const candidatePackages = getCandidatePlatformPackages(platform, arch, isMusl)
   const roots = options?.roots ?? getModuleRoots()
 
+  // 1. Explicit environment variable override
+  const envVar = name === "aibr-tui" ? env.AIBRIDGE_TUI_BIN : env.AIBRIDGE_ROUTER_BIN
+  if (envVar !== undefined && envVar !== "") {
+    if (isExecutable(envVar, platform)) {
+      return envVar
+    }
+  }
   // 2. Installed optional platform packages via Node module resolution
   try {
     const req = createRequire(import.meta.url)
@@ -189,7 +228,7 @@ export function resolveNativeBinary(
       try {
         const pkgJsonPath = req.resolve(`${pkg}/package.json`)
         const binCandidate = join(dirname(pkgJsonPath), "bin", name)
-        if (isExecutable(binCandidate)) {
+        if (isExecutable(binCandidate, platform)) {
           return binCandidate
         }
       } catch {
@@ -211,7 +250,7 @@ export function resolveNativeBinary(
         join(root, "packages", pkg, "bin", name),
       ]
       for (const candidate of pathsToCheck) {
-        if (isExecutable(candidate)) {
+        if (isExecutable(candidate, platform)) {
           return candidate
         }
       }
@@ -226,7 +265,7 @@ export function resolveNativeBinary(
       join(root, "dist", "bin", name),
     ]
     for (const candidate of bundledCandidates) {
-      if (isExecutable(candidate)) {
+      if (isExecutable(candidate, platform)) {
         return candidate
       }
     }
@@ -241,7 +280,7 @@ export function resolveNativeBinary(
       join(root, "router", "target", "debug", name),
     ]
     for (const candidate of devCandidates) {
-      if (isExecutable(candidate)) {
+      if (isExecutable(candidate, platform)) {
         return candidate
       }
     }

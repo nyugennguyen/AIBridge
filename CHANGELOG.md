@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.1.4] - 2026-10-09
+
+### Added
+
+- **Automatic OpenCode v2 detection**: CLI and profile supervisor now automatically detect and launch `opencode2` when present in `PATH`, with `OPENCODE_BIN` environment variable override support.
+
 ## [2.1.3] - 2026-10-09
 
 ### Fixed

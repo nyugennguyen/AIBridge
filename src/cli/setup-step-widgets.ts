@@ -891,6 +891,16 @@ export interface DiscoveredAgent {
 
 export interface AgentDiscoveryDeps {
   readonly processRunner?: ProcessRunner
+  /**
+   * Injection seam for tests. FORWARD BOTH ARGUMENTS.
+   *
+   * `(url) => fetch(url)` is the natural-looking way to write this and it
+   * silently drops the `init` that carries `AbortSignal.timeout`, at which
+   * point an unreachable peer does not time out — the probe waits on a socket
+   * that will never answer, and `aibr discover` hangs instead of reporting the
+   * peer as down. No production caller supplies this field; it exists so tests
+   * can drive the probe without a network.
+   */
   readonly fetchFn?: typeof fetch
   /** Bridge port to dial on each peer. Defaults to 8787. */
   readonly bridgePort?: number

@@ -16,12 +16,13 @@
  */
 
 import { randomBytes } from "node:crypto"
+import { access } from "node:fs/promises"
 import { homedir } from "node:os"
 import type { PlatformInspector, ProcessRunner, Prompter } from "../host/types.js"
 import { resolveProfilePaths, type ProfilePaths } from "../host/paths.js"
 import { runPreflight, type PreflightResult } from "../host/preflight.js"
 import type { SetupFileOps, SetupOutcome } from "../host/setup.js"
-import { generateCsprngToken } from "./setup-step-widgets.js"
+import { generateCsprngToken, isTailscaleCgnatIp } from "./setup-step-widgets.js"
 import { installDaemonUnit, loadDaemonUnit } from "../host/daemonizer.js"
 
 export interface SetupWizardDeps {
@@ -31,6 +32,38 @@ export interface SetupWizardDeps {
   readonly fileOps: SetupFileOps
   readonly env?: Record<string, string | undefined>
   readonly initialProfile?: string
+  /** Overridable for tests; defaults to a filesystem existence check. */
+  readonly pathExists?: (path: string) => Promise<boolean>
+}
+
+async function defaultPathExists(path: string): Promise<boolean> {
+  try {
+    await access(path)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * How the operator answered the bearer-token question.
+ *
+ * `paste` covers both "n"/"no" and "p": those answers used to mean "don't
+ * generate", and a bare "n" answering "[G]enerate...? [Y/n]" has meant
+ * "I have my own" for as long as this prompt has existed. Keeping that reading is
+ * deliberate -- rebinding "n" to the new no-auth mode would turn an old muscle
+ * memory into an unauthenticated bridge. `none` therefore requires an explicit
+ * "none"/"noauth"/"open".
+ */
+export type BearerTokenChoice = "generate" | "paste" | "none"
+
+export function parseBearerTokenChoice(raw: string): BearerTokenChoice {
+  const answer = raw.trim().toLowerCase()
+  if (answer === "none" || answer === "noauth" || answer === "open") return "none"
+  // "generate" is the default, so "" and "y" both land here.
+  return answer === "n" || answer === "no" || answer === "p" || answer === "paste"
+    ? "paste"
+    : "generate"
 }
 
 /**
@@ -172,12 +205,82 @@ async function runHeadlessWizard(
   }
 
   // ── Step 2: Router Security & Bearer Credentials ───────────────────
-  let bearerToken: string
-  const tokenChoice = await deps.prompter.promptInput(
-    "Generate a new shared bearer token? (recommended for 1st-time setup) [Y/n]:",
+  //
+  // Three answers, not two. "Generate" and "paste" are the released behaviour;
+  // "none" runs the routes unauthenticated and is only offered for a bridge that
+  // is genuinely already protected by the network it is bound to.
+  const tokenChoiceRaw = await deps.prompter.promptInput(
+    "Bearer authentication — [G]enerate a new token (default), " +
+      "[P]aste an existing one, or type 'none' for no authentication:",
   )
+  const tokenChoice = parseBearerTokenChoice(tokenChoiceRaw)
 
-  if (tokenChoice.trim().toLowerCase() === "n" || tokenChoice.trim().toLowerCase() === "no") {
+  let authMode: "bearer-token" | "none" = "bearer-token"
+  let bearerToken: string
+
+  if (tokenChoice === "none") {
+    // Guard 1: without a CGNAT bind there is no network-level protection standing
+    // in for the token, so an unauthenticated bridge would be reachable by anyone
+    // who can route to this host. Refuse to author it rather than warn about it:
+    // a config that is merely warned about is a config that gets committed.
+    const tailscaleIp = preflight.tailscale.ip
+    if (tailscaleIp === null || !isTailscaleCgnatIp(tailscaleIp)) {
+      return {
+        kind: "blocked",
+        reason:
+          `Refusing to configure auth_mode "none": bridge.host would be ` +
+          `${tailscaleIp ?? "unset"}, which is not a Tailscale CGNAT address ` +
+          `(100.64.0.0/10). An unauthenticated /trigger is only defensible behind ` +
+          `the tailnet. Choose a bearer token instead.`,
+        preflight,
+      }
+    }
+
+    // Guard 2: a secret left over from a previous run is silently ignored in this
+    // mode -- writeSecret is write-once and never re-read, so the operator would
+    // believe the node is protected when nothing is checking the token.
+    const pathExists = deps.pathExists ?? defaultPathExists
+    const secretPaths = resolveProfilePaths(profileName, env)
+    if (await pathExists(`${secretPaths.secretsDir}/bearer_token`)) {
+      return {
+        kind: "blocked",
+        reason:
+          `Refusing to configure auth_mode "none": a bearer_token secret already ` +
+          `exists at ${secretPaths.secretsDir}/bearer_token and would be silently ` +
+          `ignored. Delete it first, then re-run setup.`,
+        preflight,
+      }
+    }
+
+    // Guard 3: an explicit acknowledgement of what is being given up. (Preflight
+    // has already established the backend is Running, so the tailnet half of the
+    // exposure is the part the operator is being asked to confirm.)
+    const accepted = await deps.prompter.promptConfirm(
+      `This node will accept /trigger and /report with NO authentication. ` +
+        `Anything that can reach ${tailscaleIp}:8787 can dispatch work. ` +
+        `Continue?`,
+    )
+    if (accepted !== "y") {
+      // Declined is not a dead end: fall back to the released behaviour instead of
+      // stranding the setup. The operator changed their mind; nothing is broken.
+      authMode = "bearer-token"
+      bearerToken = generateBearerToken(false)
+      await deps.prompter.promptInput(
+        `Falling back to a generated bearer token: ${bearerToken}\n` +
+          `(Copy this token to use on your peer machine. Press Enter to continue)`,
+      )
+    } else {
+      authMode = "none"
+      // Never written to disk: the `writeSecret` call below is guarded on
+      // `authMode`, not on this value. It exists only so the variable is
+      // definitely assigned on every path.
+      bearerToken = ""
+      await deps.prompter.promptInput(
+        `Authentication disabled. The bridge will run unauthenticated on ` +
+          `${tailscaleIp}. Press Enter to continue.`,
+      )
+    }
+  } else if (tokenChoice === "paste") {
     bearerToken = await deps.prompter.promptSecret("Enter shared bearer token:")
   } else {
     // Generate 64 hex characters (32 bytes) CSPRNG token for backward test compatibility
@@ -237,7 +340,7 @@ async function runHeadlessWizard(
       password_env: "OPENCODE_SERVER_PASSWORD",
     },
     security: {
-      auth_mode: "bearer-token",
+      auth_mode: authMode,
       allowed_sources: [
         {
           source_agent_id: peerId,
@@ -285,7 +388,11 @@ async function runHeadlessWizard(
   // Persist directories, config, and secrets with 0600 permissions
   await deps.fileOps.ensureProfileDirs(paths)
   await deps.fileOps.writeConfig(configPath, config)
-  await deps.fileOps.writeSecret(`${paths.secretsDir}/bearer_token`, bearerToken)
+  // No secret in `none` mode: writeSecret throws on an empty value, and writing
+  // one anyway would produce exactly the stale secret `aibr verify` warns about.
+  if (authMode === "bearer-token") {
+    await deps.fileOps.writeSecret(`${paths.secretsDir}/bearer_token`, bearerToken)
+  }
   await deps.fileOps.writeSecret(`${paths.secretsDir}/opencode_password`, ocPassword)
 
   // Step 5: write the platform supervisor unit.

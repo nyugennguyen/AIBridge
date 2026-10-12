@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { runSetupWizard, generateBearerToken, StepperFSM } from "../../../src/cli/setup-wizard.js"
+import { runSetupWizard, generateBearerToken, parseBearerTokenChoice, StepperFSM } from "../../../src/cli/setup-wizard.js"
 import { generateLaunchdPlist, generateSystemdUnit, installDaemonUnit } from "../../../src/host/daemonizer.js"
 import { mkdtemp, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -319,6 +319,131 @@ describe("runSetupWizard", () => {
     expect(outcome.kind).toBe("blocked")
     if (outcome.kind !== "blocked") return
     expect(outcome.reason).toContain("Tailscale BackendState is not Running")
+  })
+})
+
+describe("bearer authentication mode", () => {
+  const env = { HOME: "/mock/home" }
+
+  /**
+   * Answers for a full run in `none` mode. Confirms are the risky ordering:
+   * confirming the no-auth exposure comes FIRST, before the two that finish setup.
+   */
+  function noneModeQueues() {
+    return {
+      inputs: ["open", "", "none", "", "", "", "", "", "", ""],
+      secrets: ["oc-password"],
+      confirms: ["y", "y", "n"],
+    }
+  }
+
+  it("persists auth_mode none and writes no bearer secret", async () => {
+    const fileOps = new TestFileOps()
+    const prompter = new TestPrompter(noneModeQueues())
+
+    const outcome = await runSetupWizard({
+      platformInspector: makePlatformInspector(),
+      processRunner: makeFakeProcessRunner(),
+      prompter,
+      fileOps,
+      env,
+    })
+
+    expect(outcome.kind).toBe("persisted")
+    if (outcome.kind !== "persisted") return
+    const saved = fileOps.writtenConfigs[outcome.configPath]
+    expect(saved).toBeDefined()
+    expect(saved?.security).toMatchObject({ auth_mode: "none" })
+    // The OpenCode password is still written -- only the bearer secret is skipped.
+    expect(fileOps.writtenSecrets["/mock/home/.local/share/aibridge/open/secrets/opencode_password"]).toBe("oc-password")
+    expect(
+      Object.keys(fileOps.writtenSecrets).some((k) => k.endsWith("/bearer_token")),
+    ).toBe(false)
+  })
+
+  it("refuses no-auth on a bridge that is not bound to a CGNAT address", async () => {
+    const fileOps = new TestFileOps()
+    // 10.0.0.0/8 is RFC1918, not 100.64.0.0/10: nothing network-level stands in
+    // for the bearer token here, so the mode is not authorable.
+    const prompter = new TestPrompter({
+      inputs: ["open", "", "none"],
+      secrets: [],
+      confirms: [],
+    })
+
+    const outcome = await runSetupWizard({
+      platformInspector: makePlatformInspector(),
+      processRunner: makeFakeProcessRunner({ tailscaleIp: "10.0.0.5" }),
+      prompter,
+      fileOps,
+      env,
+    })
+
+    expect(outcome.kind).toBe("blocked")
+    if (outcome.kind !== "blocked") return
+    expect(outcome.reason).toContain("not a Tailscale CGNAT address")
+    expect(fileOps.writtenConfigs).toEqual({})
+  })
+
+  it("refuses no-auth when a stale bearer token secret already exists", async () => {
+    const fileOps = new TestFileOps()
+    // writeSecret is write-once and never re-read, so a leftover secret would be
+    // silently ignored while the operator believed it was protecting the node.
+    const prompter = new TestPrompter({
+      inputs: ["open", "", "none"],
+      secrets: [],
+      confirms: [],
+    })
+
+    const outcome = await runSetupWizard({
+      platformInspector: makePlatformInspector(),
+      processRunner: makeFakeProcessRunner(),
+      prompter,
+      fileOps,
+      env,
+      pathExists: async (path) => path.endsWith("/bearer_token"),
+    })
+
+    expect(outcome.kind).toBe("blocked")
+    if (outcome.kind !== "blocked") return
+    expect(outcome.reason).toContain("already")
+  })
+
+  it("falls back to a generated token when the no-auth exposure is declined", async () => {
+    const fileOps = new TestFileOps()
+    const prompter = new TestPrompter({
+      inputs: ["open", "", "none", "", "", "", "", "", "", ""],
+      secrets: ["oc-password"],
+      confirms: ["n", "y", "n"], // decline no-auth, then save
+    })
+
+    const outcome = await runSetupWizard({
+      platformInspector: makePlatformInspector(),
+      processRunner: makeFakeProcessRunner(),
+      prompter,
+      fileOps,
+      env,
+    })
+
+    expect(outcome.kind).toBe("persisted")
+    if (outcome.kind !== "persisted") return
+    const saved = fileOps.writtenConfigs[outcome.configPath]
+    expect(saved?.security).toMatchObject({ auth_mode: "bearer-token" })
+    const bearerSecret = fileOps.writtenSecrets["/mock/home/.local/share/aibridge/open/secrets/bearer_token"]
+    expect(bearerSecret).toHaveLength(64)
+  })
+
+  it("still reads a bare 'n' as 'paste my own token'", () => {
+    // Backward compatibility: "n" has meant "don't generate" since this prompt
+    // existed. Rebinding it to no-auth would turn an old muscle memory into an
+    // unauthenticated bridge, so only an explicit "none" disables auth.
+    expect(parseBearerTokenChoice("n")).toBe("paste")
+    expect(parseBearerTokenChoice("no")).toBe("paste")
+    expect(parseBearerTokenChoice("p")).toBe("paste")
+    expect(parseBearerTokenChoice("y")).toBe("generate")
+    expect(parseBearerTokenChoice("")).toBe("generate")
+    expect(parseBearerTokenChoice("none")).toBe("none")
+    expect(parseBearerTokenChoice("NOAUTH")).toBe("none")
   })
 })
 

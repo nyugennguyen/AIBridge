@@ -1,6 +1,19 @@
 # Changelog
 
-## [2.1.5] - 2026-10-09
+## [Unreleased]
+
+### Added
+
+- **Optional bearer authentication.** `security.auth_mode` accepts `"bearer-token"` (default, unchanged behaviour) or `"none"`. In `none` mode `/trigger` and `/report` accept unauthenticated requests, no `bearer_token` secret is written, and callbacks are delivered with the `Authorization` header omitted rather than sent as a malformed one. `aibr setup` gains a third option at Step 2 (`none`), and refuses to author it unless the bridge is bound to a Tailscale CGNAT address (`100.64.0.0/10`) with the backend running, or when a `bearer_token` secret is already on disk that would be silently ignored. A bare `n` at Step 2 keeps its existing meaning (paste your own token); only an explicit `none` disables authentication.
+- **Fail-closed auth selection.** `createAuthProvider(mode, token)` in `src/security/auth-provider.ts` throws rather than degrading when a `bearer-token` profile has no secret, so a missing token file cannot become an open bridge. `BearerAuthProvider` now also refuses an empty token at construction.
+- **`aibr verify` distinguishes warnings from failures.** A missing bearer secret on a `none`-mode profile is a standing `warn`, not a `fail`, and `ok` is now "nothing failed" instead of "everything passed" — a node in the mode the operator chose should not report FAILED.
+
+### Changed
+
+- `bearerToken` is nullable across `AppDependencies`, `RuntimeOptions`, `CallbackReporter.send`/`drainPending`, and `EgressOutboxStore.deliverClaimedRow`. Backwards compatible: every existing config and test still passes a real token.
+- `src/index.ts` no longer requires `AIBRIDGE_BEARER_TOKEN`, so the legacy agent-face entrypoint serves whatever `security.auth_mode` the profile declares.
+
+## [2.1.6] - 2026-10-09
 
 ### Fixed
 

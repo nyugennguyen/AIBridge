@@ -269,7 +269,7 @@ export class EgressOutboxStore {
   async deliverClaimedRow(
     row: EgressOutboxRow,
     claimToken: string,
-    bearerToken: string,
+    bearerToken: string | null,
     options?: {
       readonly fetcher?: (url: string, init?: RequestInit) => Promise<Response>
       readonly nowMs?: number
@@ -284,10 +284,14 @@ export class EgressOutboxStore {
         row.destination_url,
         {
           method: "POST",
-          headers: {
-            Authorization: `Bearer ${bearerToken}`,
-            "Content-Type": "application/json",
-          },
+          ...(bearerToken === null
+            ? {}
+            : {
+                headers: {
+                  Authorization: `Bearer ${bearerToken}`,
+                  "Content-Type": "application/json",
+                },
+              }),
           body: row.payload_json,
         },
         row.destination_origin,

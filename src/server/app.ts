@@ -15,7 +15,17 @@ import type { ShadowIngressMirror } from "./shadow.js"
 
 export interface AppDependencies {
   config: BridgeConfig
-  bearerToken: string
+  /**
+   * The shared bearer secret, or `null` when the profile runs with
+   * `security.auth_mode: "none"`.
+   *
+   * Nullable by design rather than by omission: it is read from a secret file that
+   * `aibr setup` declines to write in `none` mode, and a caller holding `""` would
+   * be indistinguishable from a caller holding no opinion. The routes resolve this
+   * against `config.security.auth_mode` through `createAuthProvider`, which fails
+   * closed if the two disagree.
+   */
+  bearerToken: string | null
   jobManager: JobManager
   opencodeClient: OpencodeClient
   callbackReporter: CallbackReporter

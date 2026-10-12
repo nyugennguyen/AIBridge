@@ -96,10 +96,37 @@ export class FakeTaskGraphSyncer implements TaskGraphSyncer {
   stopWatching(): void {}
 }
 
+/**
+ * A `testConfig()` with `security.auth_mode` set to `"none"`.
+ *
+ * Separate from an inline patch so every test that needs an unauthenticated node
+ * starts from the same baseline: a test that only overrode `auth_mode` while
+ * leaving `bridge.host` alone would be asserting about a bridge bound to
+ * `0.0.0.0`, which is the exposure the mode is meant to rule out.
+ */
+export function testConfigNoAuth(): BridgeConfig {
+  const config = testConfig()
+  return {
+    ...config,
+    bridge: { ...config.bridge, host: "100.64.0.7" },
+    security: { ...config.security, auth_mode: "none" },
+  }
+}
+
 export interface BuildTestAppOverrides {
   jobManager?: JobManager
   opencodeClient?: FakeOpencodeClient
   taskGraphSyncer?: TaskGraphSyncer
+  /**
+   * Replaces the default `testConfig()`. Pass `testConfigNoAuth()` to exercise the
+   * routes with no authentication.
+   */
+  config?: BridgeConfig
+  /**
+   * Overrides the bearer secret injected into the app. `null` models a profile
+   * whose secret file is absent, which is what `auth_mode: "none"` produces.
+   */
+  bearerToken?: string | null
   /**
    * Attaches the orchestration kernel to the legacy routes. Omitted by default
    * so the pre-existing suites keep exercising the RELEASED behaviour; the
@@ -109,13 +136,13 @@ export interface BuildTestAppOverrides {
 }
 
 export async function buildTestApp(overrides: BuildTestAppOverrides = {}) {
-  const config = testConfig()
+  const config = overrides.config ?? testConfig()
   const opencode = overrides.opencodeClient ?? new FakeOpencodeClient()
   const taskGraphSyncer = overrides.taskGraphSyncer ?? new FakeTaskGraphSyncer()
   const jobManager = overrides.jobManager ?? new JobManager(new JsonFileJobStore(await mkdtemp(join(tmpdir(), "aibridge-integration-"))))
   const app = createApp({
     config,
-    bearerToken: "secret",
+    bearerToken: overrides.bearerToken ?? "secret",
     jobManager,
     opencodeClient: opencode,
     callbackReporter: new CallbackReporter({ attempts: 1, baseDelayMs: 1, fetcher: async () => new Response(null, { status: 200 }) }),

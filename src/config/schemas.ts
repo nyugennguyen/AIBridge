@@ -3,6 +3,25 @@ import { z } from "zod"
 export const planStatusSchema = z.enum(["none", "submitted", "approved", "rejected"])
 export const permissionResponseSchema = z.enum(["reject", "once", "always"])
 
+/**
+ * How this node authenticates inbound `/trigger` and `/report` requests.
+ *
+ * `bearer-token` is the released behaviour: every request carries a shared bearer
+ * secret compared in constant time, and a missing or wrong token is a 401.
+ *
+ * `none` runs the routes with no authentication at all. It exists for a node
+ * that is deliberately not a peer-facing endpoint -- a throwaway local profile, a
+ * test harness, a single-machine install on a machine with no tailnet. It is NOT
+ * a general-purpose option, and `aibr setup` refuses to author it unless the
+ * bridge is bound to a Tailscale CGNAT address with a running backend (see
+ * `src/cli/setup-wizard.ts`).
+ *
+ * Defaulted rather than required so an existing config keeps its meaning when it
+ * is re-read: widening this literal without a default would turn every stored
+ * config into a parse failure, which is the wrong way to discover an old file.
+ */
+export const authModeSchema = z.enum(["bearer-token", "none"])
+
 export const allowedSourceSchema = z.object({
   source_agent_id: z.string().min(1),
   capabilities: z.array(z.string().min(1)),
@@ -36,7 +55,7 @@ export const bridgeConfigSchema = z.object({
     password_env: z.string().default("OPENCODE_SERVER_PASSWORD"),
   }),
   security: z.object({
-    auth_mode: z.literal("bearer-token"),
+    auth_mode: authModeSchema.default("bearer-token"),
     allowed_sources: z.array(allowedSourceSchema),
   }),
   permissions: z.object({

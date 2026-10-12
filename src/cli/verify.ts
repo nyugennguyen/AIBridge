@@ -3,6 +3,7 @@ import { resolveProfilePaths, type ProfilePaths } from "../host/paths.js"
 import { readConfig } from "../host/profile-store.js"
 import { planPreflight } from "../host/preflight.js"
 import { bridgeConfigSchema } from "../config/schemas.js"
+import type { BridgeConfig } from "../config/types.js"
 import { lstat, readFile, access } from "node:fs/promises"
 import { constants } from "node:fs"
 
@@ -176,6 +177,11 @@ export async function runVerify(profileName: string, deps?: VerifyDeps): Promise
   }
 
   let configData: Record<string, unknown> | null = null
+  // The parsed profile, carried forward so the secret checks below can read
+  // `security.auth_mode` and `bridge.host` without a second schema parse: two
+  // parses are two opinions about the same file, and only one of them is the one
+  // that decided the checks are safe to run.
+  let parsedConfig: BridgeConfig | null = null
   try {
     configData = await fileOps.readConfig(configPath)
   } catch (err) {
@@ -196,6 +202,7 @@ export async function runVerify(profileName: string, deps?: VerifyDeps): Promise
   } else {
     const parseResult = bridgeConfigSchema.safeParse(configData)
     if (parseResult.success) {
+      parsedConfig = parseResult.data
       checks.push({
         name: "config-valid",
         status: "pass",
@@ -233,6 +240,36 @@ export async function runVerify(profileName: string, deps?: VerifyDeps): Promise
   }
 
   // ── 5. Check Secrets (Bearer token & OpenCode password) ────────────
+  //
+  // A profile in `auth_mode: "none"` has no bearer secret by construction, so the
+  // block below is skipped and replaced by a standing warning. Reporting a missing
+  // secret as a failure there would tell an operator their install is broken when
+  // it is in the mode they chose -- and a check that is always wrong is a check
+  // people learn to ignore.
+  const authMode = parsedConfig?.security.auth_mode === "none" ? "none" : "bearer-token"
+  const bridgeHost = parsedConfig?.bridge.host ?? null
+  const bearerTokenPath = `${paths.secretsDir}/bearer_token`
+  if (authMode === "none") {
+    checks.push({
+      name: "auth-mode-src-none",
+      status: "warn",
+      message:
+        "Node runs with security.auth_mode \"none\": /trigger and /report accept " +
+        "unauthenticated requests. Only safe on a Tailscale CGNAT bind.",
+      detail: `bridge.host is ${bridgeHost ?? "unset"}`,
+    })
+    const staleToken = await fileOps.pathExists(bearerTokenPath).catch(() => false)
+    if (staleToken) {
+      checks.push({
+        name: "auth-mode-src-stale-secret",
+        status: "warn",
+        message:
+          "A bearer_token secret exists but security.auth_mode is \"none\", so it " +
+          "is never read. Delete it if it is no longer wanted.",
+        detail: bearerTokenPath,
+      })
+    }
+  } else {
   const bearerTokenPath = `${paths.secretsDir}/bearer_token`
   try {
     const stat = await fileOps.stat(bearerTokenPath)
@@ -274,6 +311,7 @@ export async function runVerify(profileName: string, deps?: VerifyDeps): Promise
       message: `Bearer token secret not found at ${bearerTokenPath}`,
     })
   }
+  }
 
   const ocPasswordPath = `${paths.secretsDir}/opencode_password`
   try {
@@ -309,9 +347,15 @@ export async function runVerify(profileName: string, deps?: VerifyDeps): Promise
   }
 
   // ── Build summary ──────────────────────────────────────────────────
-  const ok = checks.every((c) => c.status === "pass")
+  //
+  // `ok` is "nothing failed", not "everything passed": a `warn` is an exposure the
+  // operator should see, not a broken install. Scoring it as a failure means the
+  // first node configured without a bearer token reports FAILED through no fault
+  // of its own, which teaches operators to ignore `aibr verify` entirely.
   const failCount = checks.filter((c) => c.status === "fail").length
+  const warnCount = checks.filter((c) => c.status === "warn").length
   const passCount = checks.filter((c) => c.status === "pass").length
+  const ok = failCount === 0
 
   const lines = [
     `AIBridge Verification Report for profile "${profileName}":`,
@@ -322,7 +366,9 @@ export async function runVerify(profileName: string, deps?: VerifyDeps): Promise
     }),
     "",
     ok
-      ? `Status: PASSED (${passCount}/${checks.length} checks passed)`
+      ? `Status: PASSED (${passCount}/${checks.length} checks passed${
+          warnCount > 0 ? `, ${warnCount} warning${warnCount === 1 ? "" : "s"}` : ""
+        })`
       : `Status: FAILED (${failCount} check${failCount === 1 ? "" : "s"} failed)`,
   ]
 

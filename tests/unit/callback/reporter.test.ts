@@ -41,6 +41,25 @@ describe("CallbackReporter", () => {
     expect(JSON.parse(String(calls[0].body)).job_id).toBe("job_1")
   })
 
+  it("omits the Authorization header entirely when there is no bearer token", async () => {
+    // A `none`-mode node still delivers callbacks. Sending "Bearer null" or an
+    // empty header would be a request that looks like a broken client; sending
+    // no header at all is a request that honestly says "I am not authenticating".
+    let seenHeaders: unknown
+    const reporter = new CallbackReporter({
+      attempts: 1,
+      baseDelayMs: 1,
+      fetcher: async (_url: string, init?: RequestInit) => {
+        seenHeaders = init?.headers
+        return new Response(null, { status: 200 })
+      },
+    })
+
+    await reporter.send("http://dev-main.tailnet:8787/report", report, null)
+
+    expect(seenHeaders).toBeUndefined()
+  })
+
   it("throws after exhausting retry attempts", async () => {
     const reporter = new CallbackReporter({
       attempts: 2,

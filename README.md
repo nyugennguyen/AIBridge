@@ -179,7 +179,7 @@ The wizard walks five steps. You can jump straight to any step you have already 
 | Step | What it does |
 | --- | --- |
 | **1. Network** | Verifies Tailscale is running, extracts this machine's Tailscale IPv4 and MagicDNS hostname, and checks that ports `4095` (router), `4096` (OpenCode), and `8787` (bridge) are free. |
-| **2. Security** | Generates a CSPRNG bearer token, or accepts one you paste. Press `r` to regenerate. Confirms the security floor: constant-time token comparison, a 2 MB body cap, and automatic secret redaction. |
+| **2. Security** | Generates a CSPRNG bearer token, accepts one you paste, or runs with no authentication. Press `r` to regenerate. Confirms the security floor: constant-time token comparison, a 2 MB body cap, and automatic secret redaction. |
 | **3. Allowlists** | Choose the project roots agents may touch. Containment is enforced **fail-closed**: a path that is not under an allowed root is refused, not clamped. |
 | **4. AI Runtimes** | Probes the OpenCode loopback endpoint and resolves the `claude` and `codex` CLIs on `$PATH`. Sets peer agent ID and URL. |
 | **5. Install & Test** | Writes a supervisor unit (launchd on macOS, systemd on Linux) and runs a preflight audit. |
@@ -193,6 +193,14 @@ openssl rand -hex 32
 ```
 
 Save it in an approved secret channel, such as a password manager. Both machines must use the same token.
+
+#### Running with no bearer token
+
+Answer `none` at Step 2 to configure `security.auth_mode: "none"`. The node then accepts `/trigger` and `/report` with no authentication at all, and `aibr setup` will not author it unless the bridge is bound to a Tailscale CGNAT address (`100.64.0.0/10`) with the backend running — with anything else there is no network standing in for the token.
+
+`n` and `p` keep their existing meaning: **paste a token you supply yourself**. Only an explicit `none` disables authentication. Choosing `none` also refuses to run when a `bearer_token` secret is already on disk, because `writeSecret` is write-once and that leftover file would be silently ignored.
+
+A node in this mode reports a standing warning from `aibr verify` rather than a failure, so the exposure stays visible instead of becoming a desktop notification everyone learns to dismiss.
 
 Do not put it in shell history or source control. The token is not stored in `config.json` — it is kept separately at `~/.local/share/aibridge/<profile>/secrets/bearer_token` with `0600` permissions, beneath your configured XDG data directory.
 

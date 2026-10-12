@@ -34,7 +34,13 @@ import { FileTaskGraphSyncer } from "../tasks/syncer.js"
 export interface RuntimeOptions {
   readonly configPath: string
   readonly stateDir: string
-  readonly bearerToken: string
+  /**
+   * The shared bearer secret, or `null` for a profile in `none` mode. The callback
+   * reporter omits the `Authorization` header entirely when this is null, rather
+   * than sending a malformed one -- a peer that requires a token answers 401
+   * either way, but only one of those looks like a bug in the log.
+   */
+  readonly bearerToken: string | null
   readonly environment: Record<string, string>
   readonly deps?: {
     readonly opencodeClient?: OpencodeClient

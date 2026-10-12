@@ -123,6 +123,7 @@ function makeFakeFileOps(overrides?: {
   passwordSymlink?: boolean
   passwordContent?: string
   projectExists?: boolean
+  bearerTokenExists?: boolean
 }) {
   return {
     readConfig: async (_path: string) => {
@@ -160,7 +161,8 @@ function makeFakeFileOps(overrides?: {
       }
       throw new Error(`ENOENT: ${path}`)
     },
-    pathExists: async (_path: string) => {
+    pathExists: async (path: string) => {
+      if (path.endsWith("bearer_token")) return overrides?.bearerTokenExists ?? false
       return overrides?.projectExists ?? true
     },
   }
@@ -323,5 +325,50 @@ describe("runVerify", () => {
 
     expect(report.ok).toBe(false)
     expect(report.summary).toContain("Invalid profile")
+  })
+
+  it("warns rather than fails when auth_mode is none and no token exists", async () => {
+    const report = await runVerify("test-profile", {
+      processRunner: makeFakeProcessRunner(),
+      platformInspector: makeFakePlatformInspector(),
+      fileOps: makeFakeFileOps({ config: { ...validConfig, security: { ...validConfig.security, auth_mode: "none" } } }),
+      env,
+      bunVersion: "1.3.0",
+    })
+
+    // `ok` stays true: a missing bearer secret is the mode the operator chose, not
+    // a fault. Reporting FAILED here would train people to ignore verify.
+    expect(report.ok).toBe(true)
+    expect(report.summary).toContain("accept unauthenticated requests")
+    expect(report.summary).not.toContain("Bearer token secret not found")
+  })
+
+  it("flags a stale bearer secret that none mode will never read", async () => {
+    const report = await runVerify("test-profile", {
+      processRunner: makeFakeProcessRunner(),
+      platformInspector: makeFakePlatformInspector(),
+      fileOps: makeFakeFileOps({
+        config: { ...validConfig, security: { ...validConfig.security, auth_mode: "none" } },
+        bearerTokenExists: true,
+      }),
+      env,
+      bunVersion: "1.3.0",
+    })
+
+    expect(report.ok).toBe(true)
+    expect(report.summary).toContain("so it is never read")
+  })
+
+  it("still fails a bearer-token profile whose secret is missing", async () => {
+    const report = await runVerify("test-profile", {
+      processRunner: makeFakeProcessRunner(),
+      platformInspector: makeFakePlatformInspector(),
+      fileOps: makeFakeFileOps({ tokenFileMissing: true }),
+      env,
+      bunVersion: "1.3.0",
+    })
+
+    expect(report.ok).toBe(false)
+    expect(report.summary).toContain("Bearer token secret not found")
   })
 })

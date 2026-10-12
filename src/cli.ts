@@ -16,6 +16,7 @@
  */
 
 import { existsSync } from "node:fs"
+import { access } from "node:fs/promises"
 import { validateProfileName } from "./host/paths.js"
 import { readSecret } from "./host/profile-store.js"
 import type { IpcBusHandle } from "./ipc/bridge.js"
@@ -257,6 +258,28 @@ function validateProfileArg(value: string | null): string | null {
     return null
   } catch {
     return "Invalid profile name (use alphanumeric and hyphens, 1-64 chars)"
+  }
+}
+
+/**
+ * Reads a secret that the profile may legitimately not have.
+ *
+ * `readSecret` throws when the file is absent -- that is correct for a secret that
+ * must exist, and wrong for the bearer token of a profile in `none` mode, where
+ * `aibr setup` never writes one. Returns `null` for absent, unreadable, or
+ * permission-refused, and lets a real error (a symlink, a bad mode) surface, since
+ * those are configuration faults an operator needs to hear about rather than a
+ * mode that was chosen.
+ *
+ * Callers pass the result straight into `createAuthProvider`, which fails closed
+ * if a `bearer-token` profile turns out to have no secret.
+ */
+async function readOptionalSecret(secretPath: string): Promise<string | null> {
+  try {
+    const value = await readSecret(secretPath)
+    return value.length === 0 ? null : value
+  } catch {
+    return null
   }
 }
 
@@ -608,6 +631,17 @@ async function createRealDeps(): Promise<CliDeps> {
           ensureProfileDirs: async (paths) => ensureProfileDirs(paths),
           readConfig: async (path) => readConfig(path),
         },
+        // The wizard's own stale-secret guard for `auth_mode: "none"`. Backed by a
+        // real filesystem lookup here; the module defaults to the same check when
+        // a caller (a test) does not supply one.
+        pathExists: async (path) => {
+          try {
+            await access(path)
+            return true
+          } catch {
+            return false
+          }
+        },
       })
     },
 
@@ -659,7 +693,7 @@ async function createRealDeps(): Promise<CliDeps> {
           // unreadable or missing
         }
       }
-      const bearerToken = await readSecret(`${paths.secretsDir}/bearer_token`)
+      const bearerToken = await readOptionalSecret(`${paths.secretsDir}/bearer_token`)
       const bridge = await startBridge({
         configPath,
         stateDir: paths.stateDir,
@@ -680,7 +714,10 @@ async function createRealDeps(): Promise<CliDeps> {
           jobManager: bridge.jobManager,
           bridge: queueBridge,
           outboxPendingCount: () => 0,
-          customSecrets: [bearerToken],
+          // Only a secret that exists is a secret worth scrubbing: a null bearer
+          // token handed to the redactor would become a pattern matching every
+          // empty string, which redacts nothing and costs a pass per client.
+          customSecrets: bearerToken === null ? [] : [bearerToken],
         })
       } catch {
         // IPC bus is optional; bridge continues if socket cannot be bound
@@ -702,7 +739,7 @@ async function createRealDeps(): Promise<CliDeps> {
     runWorker: async (profile: string, workerOptions?: { readonly publishIpc?: boolean }) => {
       const { startIngressWorker } = await import("./ingress/worker.js")
       const paths = resolveProfilePaths(profile)
-      const bearerToken = await readSecret(`${paths.secretsDir}/bearer_token`)
+      const bearerToken = await readOptionalSecret(`${paths.secretsDir}/bearer_token`)
       const publishIpc = workerOptions?.publishIpc === true
 
       // Created before the worker and attached after, because the drainer needs its
@@ -734,7 +771,9 @@ async function createRealDeps(): Promise<CliDeps> {
           outboxPendingCount: () => worker.pendingIngressCount(),
           // The node's own bearer token, so a token an agent echoed into a job detail
           // is scrubbed on the way to a client rather than merely on the way to a log.
-          customSecrets: [bearerToken],
+          // Dropped when there is none: a null in this list would reach the redactor
+          // as an empty-string pattern that matches everything and redacts nothing.
+          customSecrets: bearerToken === null ? [] : [bearerToken],
         })
       }
 

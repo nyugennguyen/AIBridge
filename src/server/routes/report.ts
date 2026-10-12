@@ -1,10 +1,13 @@
 import type { FastifyInstance } from "fastify"
 import { reportCallbackSchema } from "../../config/schemas.js"
-import { BearerAuthProvider } from "../../security/auth-provider.js"
+import { createAuthProvider } from "../../security/auth-provider.js"
 import type { AppDependencies } from "../app.js"
 
 export function registerReportRoute(app: FastifyInstance, dependencies: AppDependencies): void {
-  const auth = new BearerAuthProvider(dependencies.bearerToken)
+  const auth = createAuthProvider(
+    dependencies.config.security.auth_mode,
+    dependencies.bearerToken,
+  )
 
   app.post("/report", async (request, reply) => {
     if (!auth.validate(request.headers.authorization)) return reply.code(401).send({ error: "Unauthorized" })

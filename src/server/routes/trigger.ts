@@ -1,13 +1,19 @@
 import type { FastifyInstance } from "fastify"
 import { triggerRequestSchema, triggerResponseSchema } from "../../config/schemas.js"
-import { BearerAuthProvider } from "../../security/auth-provider.js"
+import { createAuthProvider } from "../../security/auth-provider.js"
 import { assertProjectAllowed } from "../../security/allowlist.js"
 import { assertSourceAuthorized } from "../../security/source-authorization.js"
 import { ConfigPlanReviewProvider } from "../../planning/provider.js"
 import type { AppDependencies } from "../app.js"
 
 export function registerTriggerRoute(app: FastifyInstance, dependencies: AppDependencies): void {
-  const auth = new BearerAuthProvider(dependencies.bearerToken)
+  // Built at registration, not per request: a null token with `bearer-token` mode
+  // throws here, so a misconfigured profile fails when the app is created rather
+  // than on the first inbound request.
+  const auth = createAuthProvider(
+    dependencies.config.security.auth_mode,
+    dependencies.bearerToken,
+  )
   const planReview = new ConfigPlanReviewProvider(dependencies.config.planning.require_approval_for)
 
   app.post("/trigger", async (request, reply) => {

@@ -31,7 +31,7 @@ export class CallbackReporter {
   async send(
     url: string,
     report: ReportCallback,
-    bearerToken: string,
+    bearerToken: string | null,
     options?: { readonly jobId?: string },
   ): Promise<void> {
     // 1. Destination origin MUST resolve against config.agents[].url BEFORE any
@@ -80,10 +80,14 @@ export class CallbackReporter {
         url,
         {
           method: "POST",
-          headers: {
-            Authorization: `Bearer ${bearerToken}`,
-            "Content-Type": "application/json",
-          },
+          ...(bearerToken === null
+            ? {}
+            : {
+                headers: {
+                  Authorization: `Bearer ${bearerToken}`,
+                  "Content-Type": "application/json",
+                },
+              }),
           body: JSON.stringify(report),
         },
         expectedOrigin,
@@ -102,7 +106,7 @@ export class CallbackReporter {
    * Drain pending and stale outbox deliveries (M7-C9).
    */
   async drainPending(
-    bearerToken: string,
+    bearerToken: string | null,
     options?: { readonly limit?: number; readonly nowMs?: number },
   ): Promise<{ delivered: number; failed: number; requeued: number }> {
     if (!this.options.outboxStore) {

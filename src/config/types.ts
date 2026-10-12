@@ -1,5 +1,6 @@
 import type { z } from "zod"
 import type {
+  authModeSchema,
   agentConfigSchema,
   allowedSourceSchema,
   bridgeConfigSchema,
@@ -12,6 +13,7 @@ import type {
 
 export type AgentConfig = z.infer<typeof agentConfigSchema>
 export type AllowedSource = z.infer<typeof allowedSourceSchema>
+export type AuthMode = z.infer<typeof authModeSchema>
 export type BridgeConfig = z.infer<typeof bridgeConfigSchema>
 export type PlanMetadata = z.infer<typeof planMetadataSchema>
 export type ProjectConfig = z.infer<typeof projectConfigSchema>

@@ -181,7 +181,7 @@ The wizard walks five steps. You can jump straight to any step you have already 
 | **1. Network** | Verifies Tailscale is running, extracts this machine's Tailscale IPv4 and MagicDNS hostname, and checks that ports `4095` (router), `4096` (OpenCode), and `8787` (bridge) are free. |
 | **2. Security** | Generates a CSPRNG bearer token, accepts one you paste, or runs with no authentication. Press `r` to regenerate. Confirms the security floor: constant-time token comparison, a 2 MB body cap, and automatic secret redaction. |
 | **3. Allowlists** | Choose the project roots agents may touch. Containment is enforced **fail-closed**: a path that is not under an allowed root is refused, not clamped. |
-| **4. AI Runtimes** | Probes the OpenCode loopback endpoint and resolves the `claude` and `codex` CLIs on `$PATH`. Sets peer agent ID and URL. |
+| **4. AI Runtimes** | Probes the OpenCode loopback endpoint and resolves the `claude` and `codex` CLIs on `$PATH`. Uses tailnet discovery to propose peers (see [Peer Discovery](#peer-discovery)) and sets peer agent ID and URL. |
 | **5. Install & Test** | Writes a supervisor unit (launchd on macOS, systemd on Linux) and runs a preflight audit. |
 
 **Controls.** `Tab` / `Shift+Tab` move between fields, `Space` toggles the focused checkbox, `Enter` submits and advances, `Esc` or `b` goes back, `r` regenerates the token in Step 2, and the mouse works throughout — step tabs, checkboxes, and buttons are all clickable.
@@ -276,6 +276,111 @@ This reports:
 
 ---
 
+## Peer Discovery
+
+List the other machines on your tailnet and ask each one to identify itself:
+
+```bash
+aibr discover --profile <name>
+```
+
+This is a **read-only query**. It runs `tailscale status --json` through the local daemon to enumerate peers, drops this machine from the list, and makes one unauthenticated `GET /health` request to `http://<peer-ip>:8787/health` on each. It writes nothing, starts nothing, and changes no config. An empty tailnet is a successful result, not an error — the common single-machine install prints no peers and exits `0`.
+
+Each peer is reported with three separately-sourced facts, kept apart on purpose:
+
+| Field | Source | Means |
+|---|---|---|
+| `online` | the local daemon's peer listing | the daemon believes the machine is up |
+| `reachable` | an HTTP answer on `/health` | something answered at that address |
+| `agentId` | that peer's own `/health` body | the number it calls itself — **not** proof of who it is |
+
+`null` is used where a fact was not learned (an unreachable peer has no `agentId`, no `capabilities`, and no `opencodeReachable`). It is never collapsed to `false`, because "we were not told" and "told, and no" are different facts.
+
+### `aibr discover --json`
+
+`--json` emits exactly one JSON document on stdout and nothing else — no banner, no trailing text — so a consumer can pipe it straight into a parser. **This is the surface the Herdr manager plugin calls.** The top-level shape is pinned and a rename is a breaking change:
+
+```json
+{
+  "schemaVersion": 1,
+  "ok": true,
+  "enrolledSource": "dev-main",
+  "peersFound": 2,
+  "reachableCount": 1,
+  "enrolledCount": 1,
+  "peers": [
+    {
+      "ip": "100.64.0.9",
+      "hostname": "worker-a",
+      "os": "linux",
+      "online": true,
+      "bridgeUrl": "http://100.64.0.9:8787",
+      "reachable": true,
+      "agentId": "worker-a",
+      "capabilities": ["code", "review"],
+      "opencodeReachable": true,
+      "enrolled": true
+    }
+  ],
+  "notice": "Reachability is not authentication..."
+}
+```
+
+`enrolledSource` names the profile whose `agents[]` and `security.allowed_sources[]` supplied the `enrolled` labels, and is `null` when no `--profile` was given. On failure the same keys are still present with `ok: false` and an `error` field, so a consumer switches on `ok` rather than on which keys happen to be there. The output is byte-stable across runs on an unchanged tailnet.
+
+### Enrolling a discovered peer
+
+`aibr setup` uses the same probe to *propose* peers. Discovery is a menu, not a decision: the operator explicitly selects one peer and chooses the capabilities it will be allowed, and nothing is written until that selection is made. A peer that is never selected is not enrolled.
+
+Enrolling writes the peer into **both** halves of the config at once, from a single in-memory object: `agents[]` (outbound — who this node may call) and `security.allowed_sources[]` (inbound — who may trigger this node, and with which capabilities), carrying the same id and the same capabilities. They are not independent, and half-writing one is not an option: `assertSourceAuthorized` authorizes on `source_agent_id` **and** capability membership, so a peer present in `agents[]` but missing from `allowed_sources[]` is answered with `403` on `/trigger`. Selecting nobody enrols nobody, leaving both arrays empty and consistent.
+
+Step 4 offers three answers, and the first two are both refusals to act:
+
+1. a peer number, hostname, or IP — then a capability list to grant it, then an explicit confirmation,
+2. `m` to type a peer in by hand, which is the same fallback used when the tailnet is empty,
+3. <kbd>Enter</kbd> (or anything unrecognised) to enrol nobody.
+
+A peer that did not name itself in its `/health` response additionally requires its agent ID to be typed, out of band from whoever owns that machine. Enrolling is **config authoring** — it tells the existing allowlist checks to accept a peer; on a `bearer-token` profile it is that peer's existing shared secret that authenticates it, not this enrolment.
+
+### Security boundary
+
+> **Discovery proves reachability. It never proves authentication, and it never confers trust.**
+>
+> A Tailscale connection provides reachability — the packets arrive. It does not provide identity, enrolment, project membership, or approval. Everything discovery reports is therefore scoped to "this address answered": a green checkmark means a process replied on that address and port, nothing more. That reply is exactly what a mis-routed address, a hijacked peer, or any machine that has joined your tailnet would also produce.
+>
+> `agentId` is the peer's own claim about itself, read from its own config over an unauthenticated route. **No AIBridge route accepts an `agent_id` from a caller as proof of who that caller is** — `/trigger` resolves `target_agent_id` against the local config and the bearer against the shared secret, exactly as before discovery existed.
+>
+> Real trust comes from the mesh identity path in `src/mesh/identity/`: ed25519 node keys, enrollment codes, and peer key pins. Nothing in discovery feeds that path, and enrolling a peer through `aibr setup` is a config-authoring convenience — a trust-on-first-use convenience an operator chose by hand — not a trust decision made by the probe.
+>
+> No `tskey-` string is ever surfaced by discovery or setup. `tskey-` values are reusable node-enrollment credentials, so the daemon's raw output never leaves `discoverTailscalePeers`; only normalised fields are printed, and a peer whose only self-description is a credential-shaped string is reported as `unidentified` with `agentId: null`.
+
+### What `/health` exposes
+
+`/health` is **intentionally unauthenticated**: it is what a peer probes during setup-time discovery, before any shared secret has been exchanged. It returns exactly four fields:
+
+| Field | Meaning |
+|---|---|
+| `ok` | a daemon answered this request |
+| `opencode` | the local `opencode serve` health check passed |
+| `agent_id` | this node's own configured id |
+| `capabilities` | the sorted, de-duplicated union of `security.allowed_sources[].capabilities` — the work kinds this node will accept |
+
+`capabilities` is flattened from `allowed_sources`, not from `agents[]`, on purpose: `agents[]` describes who this node can *call*, so projecting it would turn a discovery probe into topology disclosure. For the same reason `/health` deliberately does **not** expose the `source_agent_id` beside each capability, `requires_plan_approval`, or the `agents[]` registry. A probe learns what work this node accepts, not which tailnet peers it has authorised.
+
+### In `aibr verify`
+
+`aibr verify` includes a `tailscale-discovery` line as an **informational** check:
+
+```
+  [✓] Tailnet discovery: 2 peers reachable, 1 enrolled
+      Enrolled in this profile: worker-a (100.64.0.9). Reachability only: a peer
+      answering /health is not enrolled or trusted by this check.
+```
+
+Zero reachable peers — no Tailscale, an empty tailnet, or peers that are all offline — is a `pass` and never changes `ok`, because a machine alone on its tailnet is a normal install rather than a fault. It is `warn` only when peers answer but this profile enrols none of them (work sent there would be refused), or when the probe could not run at all.
+
+---
+
 ## Verify Cross-Host Authentication
 
 `aibr status` confirms that the local bridge is reachable, but `/health` does not require a bearer token. To verify that the two hosts share the same token without putting it in shell history, read it into a temporary shell variable, then send a deliberately incomplete request to the peer's protected trigger endpoint. Paste the token at the hidden prompt and press Enter:
@@ -309,6 +414,7 @@ aibr <command> [options]
 | `aibr worker` | Starts the Tier 2 ingress drain worker (no listener). | **Yes** |
 | `aibr serve` | Runs the bridge HTTP server directly (engine or shadow mode). | **Yes** |
 | `aibr status` | Checks process health, queue depth, and probe connectivity. | **Yes** |
+| `aibr discover` | Lists tailnet peers and probes each peer's `/health`. Read-only; enrols nothing. | Optional |
 | `aibr tui` | Opens the full-screen interactive agent orchestrator TUI (Rust `ratatui` client over the local IPC bus). | **Yes** |
 | `aibr bundle` | Generates a redacted diagnostic support bundle. | **Yes** |
 

@@ -1,4 +1,5 @@
 import type { PlatformInspector, ProcessRunner } from "../host/types.js"
+import type { AgentDiscoveryDeps, AgentDiscoveryResult } from "./setup-step-widgets.js"
 import { resolveProfilePaths, type ProfilePaths } from "../host/paths.js"
 import { readConfig } from "../host/profile-store.js"
 import { planPreflight } from "../host/preflight.js"
@@ -38,7 +39,20 @@ export interface VerifyDeps {
   readonly env?: Record<string, string | undefined>
   readonly customConfigPath?: string
   readonly bunVersion?: string
+  /**
+   * Tailnet discovery probe. Defaults to `probeDiscoveredAgents`, and is a dep
+   * rather than a direct import for the same reason `processRunner` is: the real
+   * one shells out to `tailscale` and dials every peer over HTTP, so a unit test
+   * must be able to say "here is the tailnet" instead of reading the operator's.
+   */
+  readonly discoverAgents?: (deps?: AgentDiscoveryDeps) => Promise<AgentDiscoveryResult>
 }
+
+/** Peers named in the discovery detail line before the list is truncated. */
+const DISCOVERY_DETAIL_PEER_LIMIT = 5
+
+/** Shorter than `probeDiscoveredAgents`' default: `verify` is a batch report, not a wizard screen. */
+const DISCOVERY_TIMEOUT_MS = 1500
 
 function parseSemverGte(current: string, min: string): boolean {
   const cParts = current.split(".").map((n) => parseInt(n, 10))
@@ -343,6 +357,113 @@ export async function runVerify(profileName: string, deps?: VerifyDeps): Promise
       name: "secret-opencode-password",
       status: "fail",
       message: `OpenCode password secret not found at ${ocPasswordPath}`,
+    })
+  }
+
+  // ── 6. Tailnet peer discovery (informational) ──────────────────────
+  //
+  // REACHABILITY IS NOT AUTHENTICATION. Everything below reports what the tailnet
+  // looked like and which peers this profile already names. A node with no peers, an
+  // empty tailnet, or a missing `tailscale` binary is a normal single-machine
+  // install, so none of those paths may reach `fail` — `ok` is computed from
+  // `failCount`, and spending a check on "this host is alone" is how a report that
+  // is supposed to be trusted becomes one people scroll past.
+  //
+  // Only two things here are more than trivia: peers that answer while this profile
+  // enrols none of them (work sent there would be refused, which is a real gap
+  // between what is visible and what is configured), and a probe that could not run
+  // at all. Both are `warn`, neither is `fail`.
+  // The trust caveat rides along with every projection of this check rather than
+  // living in one branch: an operator reading `3 peers reachable` in a green report
+  // should not have to know which module to go read to find out what "reachable"
+  // does not mean.
+  const TRUST_NOTE = "Reachability only: a peer answering /health is not enrolled or trusted by this check."
+
+  const discoverAgents = deps?.discoverAgents ?? (await import("./setup-step-widgets.js")).probeDiscoveredAgents
+
+  const enrolledIds: string[] = []
+  if (parsedConfig !== null) {
+    for (const agent of parsedConfig.agents) enrolledIds.push(agent.id)
+    for (const source of parsedConfig.security.allowed_sources) {
+      if (!enrolledIds.includes(source.source_agent_id)) {
+        enrolledIds.push(source.source_agent_id)
+      }
+    }
+  }
+
+  let discovery: AgentDiscoveryResult
+  try {
+    discovery = await discoverAgents({
+      ...(processRunner !== undefined ? { processRunner } : {}),
+      ...(parsedConfig !== null ? { bridgePort: parsedConfig.bridge.port } : {}),
+      timeoutMs: DISCOVERY_TIMEOUT_MS,
+      enrolledAgentIds: enrolledIds,
+    })
+  } catch (err) {
+    checks.push({
+      name: "tailscale-discovery",
+      status: "warn",
+      message: "Tailnet discovery could not run",
+      detail:
+        `${err instanceof Error ? err.message : String(err)}. This check is advisory and ` +
+        "proves nothing about authentication; verify the peer list with `aibr discover`. " +
+        TRUST_NOTE,
+    })
+    discovery = { agents: [], reachableCount: 0, enrolledCount: 0, peersFound: 0 }
+  }
+
+  const enrolledAgents = discovery.agents.filter((a) => a.enrolled)
+  const enrolledDetail = (): string | undefined => {
+    if (enrolledAgents.length === 0) return undefined
+    const shown = enrolledAgents.slice(0, DISCOVERY_DETAIL_PEER_LIMIT)
+    const names = shown.map((a) => `${a.hostname} (${a.ip})`).join(", ")
+    const overflow = enrolledAgents.length - shown.length
+    // Counts, not identities, for the peers we could not reach: a tailnet of 30
+    // sleeping laptops would otherwise bury the config and secret checks below.
+    return `Enrolled in this profile: ${names}${overflow > 0 ? `, +${overflow} more` : ""}. ${TRUST_NOTE}`
+  }
+
+  if (discovery.reachableCount === 0) {
+    if (discovery.peersFound === 0) {
+      checks.push({
+        name: "tailscale-discovery",
+        status: "pass",
+        message: "Tailnet discovery: 0 peers reachable, 0 enrolled (no peers on the tailnet)",
+        detail:
+          "No peers were enumerated — normal for a single-machine install, and also " +
+          "what an absent tailscaled or a daemon that cannot be read looks like. " +
+          `Discovery is advisory. ${TRUST_NOTE}`,
+      })
+    } else {
+      checks.push({
+        name: "tailscale-discovery",
+        status: "pass",
+        message:
+          `Tailnet discovery: 0 peers reachable, 0 enrolled ` +
+          `(${discovery.peersFound} peer(s) on the tailnet, none answering /health)`,
+        detail:
+          "Every peer was offline, or its bridge is not running. A peer that is " +
+          `down is not a fault in this node. ${TRUST_NOTE}`,
+      })
+    }
+  } else if (discovery.enrolledCount === 0) {
+    checks.push({
+      name: "tailscale-discovery",
+      status: "warn",
+      message: `Tailnet discovery: ${discovery.reachableCount} peers reachable, 0 enrolled`,
+      detail:
+        `${discovery.reachableCount} peer(s) answered /health but this profile names none of them ` +
+        `in agents[] or security.allowed_sources[]. Work sent to them would be refused. ` +
+        TRUST_NOTE,
+    })
+  } else {
+    checks.push({
+      name: "tailscale-discovery",
+      status: "pass",
+      message:
+        `Tailnet discovery: ${discovery.reachableCount} peers reachable, ` +
+        `${discovery.enrolledCount} enrolled`,
+      detail: enrolledDetail(),
     })
   }
 

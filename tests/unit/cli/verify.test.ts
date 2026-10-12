@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { runVerify } from "../../../src/cli/verify.js"
+import type { AgentDiscoveryResult } from "../../../src/cli/setup-step-widgets.js"
 import type { PlatformInspector, ProcessRunner } from "../../../src/host/types.js"
 
 function makeFakeProcessRunner(params?: {
@@ -165,6 +166,42 @@ function makeFakeFileOps(overrides?: {
       if (path.endsWith("bearer_token")) return overrides?.bearerTokenExists ?? false
       return overrides?.projectExists ?? true
     },
+  }
+}
+
+/**
+ * A discovery probe that reports exactly the given shape.
+ *
+ * The real one shells out to `tailscale` and dials every peer, so every test that
+ * cares about the discovery CHECK injects one of these; no test here touches a
+ * tailnet, and the ones that do not inject it fall through to the real probe with
+ * the fake `ProcessRunner` above, which reports a tailnet with no peers.
+ */
+function fakeDiscovery(
+  partial: Partial<AgentDiscoveryResult> & { readonly agents?: AgentDiscoveryResult["agents"] },
+): (deps?: unknown) => Promise<AgentDiscoveryResult> {
+  const agents = partial.agents ?? []
+  return async () => ({
+    agents,
+    reachableCount: partial.reachableCount ?? agents.filter((a) => a.reachable).length,
+    enrolledCount: partial.enrolledCount ?? agents.filter((a) => a.enrolled).length,
+    peersFound: partial.peersFound ?? agents.length,
+  })
+}
+
+function peer(overrides: Partial<AgentDiscoveryResult["agents"][number]> = {}) {
+  return {
+    ip: "100.64.0.2",
+    hostname: "peer",
+    os: "linux",
+    online: true,
+    bridgeUrl: "http://100.64.0.2:8787",
+    reachable: true,
+    agentId: "peer",
+    capabilities: ["testing"],
+    opencodeReachable: true,
+    enrolled: true,
+    ...overrides,
   }
 }
 
@@ -370,5 +407,218 @@ describe("runVerify", () => {
 
     expect(report.ok).toBe(false)
     expect(report.summary).toContain("Bearer token secret not found")
+  })
+
+  // ── Tailnet discovery check (informational) ─────────────────────────
+  //
+  // The invariant this whole block protects: discovery never has authority over
+  // `report.ok`. Everything below a healthy install must stay PASSED no matter what
+  // the tailnet looks like, because a check that fails on "my peers are asleep"
+  // trains operators to stop reading the report that tells them their bearer token
+  // has bad permissions.
+
+  const discoveryDeps = {
+    processRunner: makeFakeProcessRunner(),
+    platformInspector: makeFakePlatformInspector(),
+    fileOps: makeFakeFileOps(),
+    env,
+    bunVersion: "1.3.0",
+  }
+
+  function discoveryCheck(report: { checks: readonly { name: string; status: string; message: string; detail?: string }[] }) {
+    const check = report.checks.find((c) => c.name === "tailscale-discovery")
+    expect(check, "expected a tailscale-discovery check").toBeDefined()
+    return check!
+  }
+
+  it("reports reachable and enrolled peer counts", async () => {
+    const report = await runVerify("test-profile", {
+      ...discoveryDeps,
+      discoverAgents: fakeDiscovery({
+        agents: [
+          peer({ hostname: "peer-a", ip: "100.64.0.2" }),
+          peer({ hostname: "peer-b", ip: "100.64.0.3", agentId: "peer-b", enrolled: false }),
+        ],
+        reachableCount: 2,
+        enrolledCount: 1,
+        peersFound: 2,
+      }),
+    })
+
+    const check = discoveryCheck(report)
+    expect(check.status).toBe("pass")
+    expect(check.message).toBe("Tailnet discovery: 2 peers reachable, 1 enrolled")
+    expect(report.ok).toBe(true)
+  })
+
+  it("passes on a tailnet with no peers and says so plainly", async () => {
+    const report = await runVerify("test-profile", {
+      ...discoveryDeps,
+      discoverAgents: fakeDiscovery({ agents: [], peersFound: 0 }),
+    })
+
+    const check = discoveryCheck(report)
+    expect(check.status).toBe("pass")
+    expect(check.message).toBe("Tailnet discovery: 0 peers reachable, 0 enrolled (no peers on the tailnet)")
+    expect(check.detail).toContain("single-machine install")
+    expect(report.ok).toBe(true)
+    expect(report.summary).toContain("Status: PASSED")
+  })
+
+  it("passes when every peer is offline rather than failing", async () => {
+    const report = await runVerify("test-profile", {
+      ...discoveryDeps,
+      discoverAgents: fakeDiscovery({
+        agents: [
+          peer({ reachable: false, enrolled: false, agentId: null, opencodeReachable: null }),
+          peer({ hostname: "peer-b", ip: "100.64.0.3", reachable: false, enrolled: false, agentId: null }),
+        ],
+        reachableCount: 0,
+        enrolledCount: 0,
+        peersFound: 2,
+      }),
+    })
+
+    const check = discoveryCheck(report)
+    expect(check.status).toBe("pass")
+    expect(check.message).toContain("0 peers reachable, 0 enrolled")
+    expect(check.message).toContain("2 peer(s) on the tailnet")
+    expect(check.message).toContain("none answering /health")
+    expect(report.ok).toBe(true)
+  })
+
+  it("never emits a fail for discovery, whatever the tailnet says", async () => {
+    const results = await Promise.all([
+      runVerify("test-profile", { ...discoveryDeps, discoverAgents: fakeDiscovery({ agents: [] }) }),
+      runVerify("test-profile", {
+        ...discoveryDeps,
+        discoverAgents: fakeDiscovery({ agents: [peer({ reachable: false, enrolled: false })], reachableCount: 0, peersFound: 1 }),
+      }),
+      runVerify("test-profile", {
+        ...discoveryDeps,
+        discoverAgents: fakeDiscovery({ agents: [peer({ enrolled: false })], enrolledCount: 0 }),
+      }),
+      runVerify("test-profile", {
+        ...discoveryDeps,
+        discoverAgents: async () => {
+          throw new Error("tailscaled socket exploded")
+        },
+      }),
+    ])
+
+    for (const report of results) {
+      expect(discoveryCheck(report).status).not.toBe("fail")
+      expect(report.ok).toBe(true)
+    }
+  })
+
+  it("warns when reachable peers are none of them enrolled in this profile", async () => {
+    const report = await runVerify("test-profile", {
+      ...discoveryDeps,
+      discoverAgents: fakeDiscovery({
+        agents: [peer({ agentId: "stranger", enrolled: false })],
+        reachableCount: 1,
+        enrolledCount: 0,
+        peersFound: 1,
+      }),
+    })
+
+    const check = discoveryCheck(report)
+    // `warn`, not `fail`: this is a gap between what is visible and what is
+    // configured, not a broken install.
+    expect(check.status).toBe("warn")
+    expect(report.ok).toBe(true)
+    expect(report.summary).toContain("Status: PASSED")
+    expect(check.detail).toContain("agents[]")
+  })
+
+  it("warns rather than crashing when the discovery probe throws", async () => {
+    const report = await runVerify("test-profile", {
+      ...discoveryDeps,
+      discoverAgents: async () => {
+        throw new Error("tailscaled socket exploded")
+      },
+    })
+
+    const check = discoveryCheck(report)
+    expect(check.status).toBe("warn")
+    expect(check.detail).toContain("tailscaled socket exploded")
+    expect(report.ok).toBe(true)
+  })
+
+  it("puts enrolled peers in the detail string, capped", async () => {
+    const many = Array.from({ length: 8 }, (_, i) =>
+      peer({ hostname: `peer-${i}`, ip: `100.64.0.${10 + i}`, agentId: `peer-${i}`, enrolled: true }),
+    )
+    const report = await runVerify("test-profile", {
+      ...discoveryDeps,
+      discoverAgents: fakeDiscovery({ agents: many, reachableCount: 8, enrolledCount: 8, peersFound: 8 }),
+    })
+
+    const check = discoveryCheck(report)
+    // The counts are in the message; the identities are in the detail, and only five
+    // of them — a long tailnet must not bury the checks below it.
+    expect(check.message).toBe("Tailnet discovery: 8 peers reachable, 8 enrolled")
+    expect(check.detail).toContain("Enrolled in this profile: peer-0 (100.64.0.10)")
+    expect(check.detail).toContain("+3 more")
+    expect(check.detail).not.toContain("peer-7")
+  })
+
+  it("states on every path that reachability is not trust", async () => {
+    const reports = await Promise.all([
+      runVerify("test-profile", { ...discoveryDeps, discoverAgents: fakeDiscovery({ agents: [] }) }),
+      runVerify("test-profile", {
+        ...discoveryDeps,
+        discoverAgents: fakeDiscovery({ agents: [peer({ reachable: false, enrolled: false, agentId: null })], reachableCount: 0, peersFound: 1 }),
+      }),
+      runVerify("test-profile", {
+        ...discoveryDeps,
+        discoverAgents: fakeDiscovery({ agents: [peer({ enrolled: false })], enrolledCount: 0 }),
+      }),
+      runVerify("test-profile", {
+        ...discoveryDeps,
+        discoverAgents: async () => {
+          throw new Error("boom")
+        },
+      }),
+    ])
+
+    for (const report of reports) {
+      expect(discoveryCheck(report).detail).toContain(
+        "not enrolled or trusted",
+      )
+    }
+  })
+
+  it("passes the enrolled ids and bridge port from config into discovery", async () => {
+    let seenDeps: Record<string, unknown> | null = null
+    await runVerify("test-profile", {
+      ...discoveryDeps,
+      fileOps: makeFakeFileOps({ config: { ...validConfig, bridge: { ...validConfig.bridge, port: 9911 } } }),
+      discoverAgents: async (d) => {
+        seenDeps = d as Record<string, unknown>
+        return { agents: [], reachableCount: 0, enrolledCount: 0, peersFound: 0 }
+      },
+    })
+
+    expect(seenDeps).not.toBeNull()
+    expect(seenDeps!.enrolledAgentIds).toEqual(["peer"])
+    expect(seenDeps!.bridgePort).toBe(9911)
+    expect(seenDeps!.processRunner).toBeDefined()
+  })
+
+  it("keeps the discovery check out of the way of a failing install", async () => {
+    const report = await runVerify("test-profile", {
+      ...discoveryDeps,
+      fileOps: makeFakeFileOps({ tokenFileMissing: true }),
+      discoverAgents: fakeDiscovery({ agents: [peer()], reachableCount: 1, enrolledCount: 1, peersFound: 1 }),
+    })
+
+    expect(report.ok).toBe(false)
+    // The real failure is still the thing the operator reads first.
+    expect(discoveryCheck(report).status).toBe("pass")
+    expect(report.summary.indexOf("Bearer token secret not found")).toBeLessThan(
+      report.summary.indexOf("Tailnet discovery"),
+    )
   })
 })

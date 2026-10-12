@@ -23,6 +23,8 @@ import {
   renderDirectorySelector,
   probeRuntimes,
   renderRuntimeProbe,
+  probeDiscoveredAgents,
+  renderAgentDiscoveryProbe,
   FAIL_CLOSED_SUBPATH_NOTICE,
 } from "../../../src/cli/setup-step-widgets.js"
 
@@ -470,6 +472,562 @@ describe("Runtime Probe Widget", () => {
     expect(rendered).toContain("OpenCode Serve Loopback")
     expect(rendered).toContain("Claude Code CLI Binary")
     expect(rendered).toContain("Codex CLI Runtime")
+  })
+})
+
+describe("Tailnet Agent Discovery Widget", () => {
+  // ── Fakes ────────────────────────────────────────────────────────────
+
+  interface FetchCall {
+    readonly url: string
+    readonly init: RequestInit | undefined
+  }
+
+  type FetchBehavior =
+    | { readonly kind: "json"; readonly status?: number; readonly body: unknown }
+    | { readonly kind: "text"; readonly status?: number; readonly body: string }
+    | { readonly kind: "throw"; readonly error: unknown }
+
+  /**
+   * Per-URL scripted fetch.
+   *
+   * Behaviours are per-URL rather than a single canned response because the
+   * loop-completeness test needs three peers to fail in three DIFFERENT ways
+   * in one call, which a single-response fake cannot express.
+   */
+  class FakeFetch {
+    public calls: FetchCall[] = []
+    private readonly behaviors: Map<string, FetchBehavior>
+
+    constructor(behaviors: Record<string, FetchBehavior>) {
+      this.behaviors = new Map(Object.entries(behaviors))
+    }
+
+    get fetch(): typeof fetch {
+      const impl = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+        const url = typeof input === "string" ? input : input.toString()
+        this.calls.push({ url, init })
+        const behavior = this.behaviors.get(url)
+        if (behavior === undefined) {
+          return new Response("not found", { status: 404 })
+        }
+        if (behavior.kind === "throw") throw behavior.error
+        const status = behavior.status ?? 200
+        if (behavior.kind === "text") return new Response(behavior.body, { status })
+        return new Response(JSON.stringify(behavior.body), { status })
+      }
+      return impl as unknown as typeof fetch
+    }
+  }
+
+  // ── Fixtures ─────────────────────────────────────────────────────────
+
+  const SELF = {
+    BackendState: "Running",
+    DNSName: "myhost.ts.net.",
+    HostName: "myhost",
+    TailscaleIPs: ["100.64.0.1"],
+  }
+
+  function peerNode(ip: string, host: string, overrides?: Record<string, unknown>) {
+    return {
+      HostName: host,
+      DNSName: `${host}.ts.net.`,
+      TailscaleIPs: [ip],
+      OS: "linux",
+      Online: true,
+      ...overrides,
+    }
+  }
+
+  /** Runner that answers `tailscale status --json` with the given Peer map. */
+  function tailnetRunner(peers: Record<string, Record<string, unknown>>): FakeProcessRunner {
+    return new FakeProcessRunner({
+      "tailscale status --json": {
+        exitCode: 0,
+        stdout: JSON.stringify({ BackendState: "Running", Self: SELF, Peer: peers }),
+        stderr: "",
+      },
+    })
+  }
+
+  const HEALTH_BODY = {
+    ok: true,
+    opencode: true,
+    agent_id: "probe-target",
+    capabilities: ["analysis", "deployment"],
+  }
+
+  // ── Tests ────────────────────────────────────────────────────────────
+
+  it("returns an empty result when the tailnet has no peers", async () => {
+    const result = await probeDiscoveredAgents({
+      processRunner: tailnetRunner({}),
+      fetchFn: new FakeFetch({}).fetch,
+    })
+
+    expect(result).toEqual({ agents: [], reachableCount: 0, enrolledCount: 0, peersFound: 0 })
+  })
+
+  it("does not throw when the daemon itself is unavailable", async () => {
+    // `FakeProcessRunner` with no mapping answers exitCode 1, which
+    // `discoverTailscalePeers` degrades to an empty peer list.
+    const result = await probeDiscoveredAgents({
+      processRunner: new FakeProcessRunner({}),
+      fetchFn: new FakeFetch({}).fetch,
+    })
+
+    expect(result.agents).toEqual([])
+    expect(result.peersFound).toBe(0)
+  })
+
+  it("dials the bridge /health on the default port with no Authorization header", async () => {
+    const http = new FakeFetch({
+      "http://100.64.0.4:8787/health": { kind: "json", body: HEALTH_BODY },
+    })
+
+    await probeDiscoveredAgents({
+      processRunner: tailnetRunner({ "nodekey-alpha": peerNode("100.64.0.4", "alpha") }),
+      fetchFn: http.fetch,
+    })
+
+    expect(http.calls).toHaveLength(1)
+    expect(http.calls[0].url).toBe("http://100.64.0.4:8787/health")
+    const headers = http.calls[0].init?.headers as Record<string, string> | undefined
+    expect(headers?.Authorization).toBeUndefined()
+    expect(http.calls[0].init?.headers).toBeUndefined()
+  })
+
+  it("honours a custom bridge port", async () => {
+    const http = new FakeFetch({
+      "http://100.64.0.4:9999/health": { kind: "json", body: HEALTH_BODY },
+    })
+
+    const result = await probeDiscoveredAgents({
+      processRunner: tailnetRunner({ "nodekey-alpha": peerNode("100.64.0.4", "alpha") }),
+      fetchFn: http.fetch,
+      bridgePort: 9999,
+    })
+
+    expect(result.agents[0]?.bridgeUrl).toBe("http://100.64.0.4:9999")
+    expect(result.agents[0]?.reachable).toBe(true)
+  })
+
+  it("maps a full /health body onto a reachable DiscoveredAgent", async () => {
+    const http = new FakeFetch({
+      "http://100.64.0.4:8787/health": { kind: "json", body: HEALTH_BODY },
+    })
+
+    const result = await probeDiscoveredAgents({
+      processRunner: tailnetRunner({ "nodekey-alpha": peerNode("100.64.0.4", "alpha") }),
+      fetchFn: http.fetch,
+    })
+
+    expect(result.peersFound).toBe(1)
+    expect(result.reachableCount).toBe(1)
+    expect(result.agents[0]).toEqual({
+      ip: "100.64.0.4",
+      hostname: "alpha.ts.net",
+      os: "linux",
+      online: true,
+      bridgeUrl: "http://100.64.0.4:8787",
+      reachable: true,
+      agentId: "probe-target",
+      capabilities: ["analysis", "deployment"],
+      opencodeReachable: true,
+      enrolled: false,
+    })
+  })
+
+  it("preserves the tailnet's online flag independently of the HTTP probe", async () => {
+    const http = new FakeFetch({
+      "http://100.64.0.4:8787/health": { kind: "json", body: HEALTH_BODY },
+    })
+
+    const result = await probeDiscoveredAgents({
+      processRunner: tailnetRunner({
+        "nodekey-alpha": peerNode("100.64.0.4", "alpha", { Online: false }),
+      }),
+      fetchFn: http.fetch,
+    })
+
+    expect(result.agents[0]?.online).toBe(false)
+    expect(result.agents[0]?.reachable).toBe(true)
+  })
+
+  it("sorts and de-duplicates capabilities", async () => {
+    const http = new FakeFetch({
+      "http://100.64.0.4:8787/health": {
+        kind: "json",
+        body: {
+          ok: true,
+          opencode: false,
+          agent_id: "probe-target",
+          capabilities: ["deployment", "analysis", "deployment", "audit"],
+        },
+      },
+    })
+
+    const result = await probeDiscoveredAgents({
+      processRunner: tailnetRunner({ "nodekey-alpha": peerNode("100.64.0.4", "alpha") }),
+      fetchFn: http.fetch,
+    })
+
+    expect(result.agents[0]?.capabilities).toEqual(["analysis", "audit", "deployment"])
+    expect(result.agents[0]?.opencodeReachable).toBe(false)
+  })
+
+  it("treats a network error, a non-2xx, and a timeout as unreachable but still probes every peer", async () => {
+    // Three failure modes across three peers in one call: the assertion that
+    // matters is that the third peer's result is present at all.
+    const http = new FakeFetch({
+      "http://100.64.0.2:8787/health": {
+        kind: "throw",
+        error: new TypeError("fetch failed: ECONNREFUSED"),
+      },
+      "http://100.64.0.3:8787/health": { kind: "text", status: 503, body: "unavailable" },
+      "http://100.64.0.4:8787/health": { kind: "json", body: HEALTH_BODY },
+    })
+
+    const result = await probeDiscoveredAgents({
+      processRunner: tailnetRunner({
+        "nodekey-bravo": peerNode("100.64.0.2", "bravo"),
+        "nodekey-charlie": peerNode("100.64.0.3", "charlie"),
+        "nodekey-alpha": peerNode("100.64.0.4", "alpha"),
+      }),
+      fetchFn: http.fetch,
+    })
+
+    expect(http.calls).toHaveLength(3)
+    expect(result.peersFound).toBe(3)
+    expect(result.reachableCount).toBe(1)
+
+    const byHost = new Map(result.agents.map((a) => [a.hostname, a]))
+
+    const bravo = byHost.get("bravo.ts.net")
+    expect(bravo?.reachable).toBe(false)
+    expect(bravo?.agentId).toBeNull()
+    expect(bravo?.capabilities).toEqual([])
+    expect(bravo?.opencodeReachable).toBeNull()
+
+    const charlie = byHost.get("charlie.ts.net")
+    expect(charlie?.reachable).toBe(false)
+    expect(charlie?.agentId).toBeNull()
+
+    // The loop did not abort: the peer after the two failures was still probed.
+    const alpha = byHost.get("alpha.ts.net")
+    expect(alpha?.reachable).toBe(true)
+    expect(alpha?.agentId).toBe("probe-target")
+  })
+
+  it("reports unreachable when the fetch exceeds the timeout budget", async () => {
+    const http = new FakeFetch({
+      "http://100.64.0.4:8787/health": {
+        kind: "throw",
+        error: Object.assign(new Error("The operation was aborted"), { name: "TimeoutError" }),
+      },
+    })
+
+    const result = await probeDiscoveredAgents({
+      processRunner: tailnetRunner({ "nodekey-alpha": peerNode("100.64.0.4", "alpha") }),
+      fetchFn: http.fetch,
+      timeoutMs: 25,
+    })
+
+    expect(result.agents[0]?.reachable).toBe(false)
+    expect(result.agents[0]?.agentId).toBeNull()
+  })
+
+  it("passes an AbortSignal so a hung peer cannot stall the probe", async () => {
+    const http = new FakeFetch({
+      "http://100.64.0.4:8787/health": { kind: "json", body: HEALTH_BODY },
+    })
+
+    await probeDiscoveredAgents({
+      processRunner: tailnetRunner({ "nodekey-alpha": peerNode("100.64.0.4", "alpha") }),
+      fetchFn: http.fetch,
+      timeoutMs: 1500,
+    })
+
+    expect(http.calls[0].init?.signal).toBeInstanceOf(AbortSignal)
+  })
+
+  it("treats a garbage body as unreachable without throwing", async () => {
+    const http = new FakeFetch({
+      "http://100.64.0.4:8787/health": { kind: "text", body: "<html>not aibridge</html>" },
+      "http://100.64.0.5:8787/health": { kind: "text", body: "" },
+    })
+
+    const result = await probeDiscoveredAgents({
+      processRunner: tailnetRunner({
+        "nodekey-alpha": peerNode("100.64.0.4", "alpha"),
+        "nodekey-bravo": peerNode("100.64.0.5", "bravo"),
+      }),
+      fetchFn: http.fetch,
+    })
+
+    expect(result.reachableCount).toBe(0)
+    for (const agent of result.agents) {
+      expect(agent.reachable).toBe(false)
+      expect(agent.agentId).toBeNull()
+      expect(agent.capabilities).toEqual([])
+      expect(agent.opencodeReachable).toBeNull()
+    }
+  })
+
+  it("treats a structurally wrong JSON body as unreachable", async () => {
+    const http = new FakeFetch({
+      "http://100.64.0.4:8787/health": {
+        kind: "json",
+        body: { agent_id: 42, capabilities: "analysis" },
+      },
+    })
+
+    const result = await probeDiscoveredAgents({
+      processRunner: tailnetRunner({ "nodekey-alpha": peerNode("100.64.0.4", "alpha") }),
+      fetchFn: http.fetch,
+    })
+
+    expect(result.agents[0]?.reachable).toBe(false)
+  })
+
+  it("keeps reachable: true when agent_id is absent from the body", async () => {
+    const http = new FakeFetch({
+      "http://100.64.0.4:8787/health": { kind: "json", body: { ok: true, opencode: true } },
+    })
+
+    const result = await probeDiscoveredAgents({
+      processRunner: tailnetRunner({ "nodekey-alpha": peerNode("100.64.0.4", "alpha") }),
+      fetchFn: http.fetch,
+    })
+
+    expect(result.agents[0]?.reachable).toBe(true)
+    expect(result.agents[0]?.agentId).toBeNull()
+    expect(result.agents[0]?.capabilities).toEqual([])
+    expect(result.agents[0]?.opencodeReachable).toBe(true)
+  })
+
+  it("marks enrolled when the agent id matches, and separately when the ip matches", async () => {
+    const http = new FakeFetch({
+      "http://100.64.0.2:8787/health": { kind: "json", body: { agent_id: "worker-b", opencode: true } },
+      "http://100.64.0.4:8787/health": { kind: "json", body: { agent_id: "worker-a", opencode: true } },
+      "http://100.64.0.5:8787/health": { kind: "throw", error: new Error("down") },
+    })
+
+    const result = await probeDiscoveredAgents({
+      processRunner: tailnetRunner({
+        "nodekey-bravo": peerNode("100.64.0.2", "bravo"),
+        "nodekey-alpha": peerNode("100.64.0.4", "alpha"),
+        "nodekey-charlie": peerNode("100.64.0.5", "charlie"),
+      }),
+      fetchFn: http.fetch,
+      // `worker-a` matches by id; `100.64.0.5` matches by address even though
+      // that peer never answered, because "known but down" is still enrolled.
+      enrolledAgentIds: ["worker-a", "100.64.0.5"],
+    })
+
+    const byHost = new Map(result.agents.map((a) => [a.hostname, a]))
+    expect(byHost.get("alpha.ts.net")?.enrolled).toBe(true)
+    expect(byHost.get("charlie.ts.net")?.enrolled).toBe(true)
+    expect(byHost.get("charlie.ts.net")?.reachable).toBe(false)
+    expect(byHost.get("bravo.ts.net")?.enrolled).toBe(false)
+    expect(result.enrolledCount).toBe(2)
+  })
+
+  it("does not infer enrolment from a peer that merely answered", async () => {
+    const http = new FakeFetch({
+      "http://100.64.0.4:8787/health": { kind: "json", body: HEALTH_BODY },
+    })
+
+    const result = await probeDiscoveredAgents({
+      processRunner: tailnetRunner({ "nodekey-alpha": peerNode("100.64.0.4", "alpha") }),
+      fetchFn: http.fetch,
+      enrolledAgentIds: ["some-other-agent"],
+    })
+
+    expect(result.agents[0]?.reachable).toBe(true)
+    expect(result.agents[0]?.enrolled).toBe(false)
+    expect(result.enrolledCount).toBe(0)
+  })
+
+  it("orders agents deterministically by hostname regardless of input order", async () => {
+    const peers = {
+      "nodekey-zulu": peerNode("100.64.0.9", "zulu"),
+      "nodekey-alpha": peerNode("100.64.0.4", "alpha"),
+      "nodekey-mike": peerNode("100.64.0.7", "mike"),
+      "nodekey-bravo": peerNode("100.64.0.2", "bravo"),
+    }
+    const behavior = { kind: "json" as const, body: HEALTH_BODY }
+    const behaviors = Object.fromEntries(
+      ["100.64.0.2", "100.64.0.4", "100.64.0.7", "100.64.0.9"].map((ip) => [
+        `http://${ip}:8787/health`,
+        behavior,
+      ]),
+    )
+
+    const first = await probeDiscoveredAgents({
+      processRunner: tailnetRunner(peers),
+      fetchFn: new FakeFetch(behaviors).fetch,
+    })
+    const second = await probeDiscoveredAgents({
+      processRunner: tailnetRunner(peers),
+      fetchFn: new FakeFetch(behaviors).fetch,
+    })
+
+    expect(first.agents.map((a) => a.hostname)).toEqual([
+      "alpha.ts.net",
+      "bravo.ts.net",
+      "mike.ts.net",
+      "zulu.ts.net",
+    ])
+    expect(second.agents.map((a) => a.hostname)).toEqual(first.agents.map((a) => a.hostname))
+  })
+
+  it("breaks hostname ties on the ip", async () => {
+    // Two nodes publishing the same DNS name: ordering must still be total.
+    const http = new FakeFetch({
+      "http://100.64.0.20:8787/health": { kind: "json", body: HEALTH_BODY },
+      "http://100.64.0.10:8787/health": { kind: "json", body: HEALTH_BODY },
+    })
+
+    const result = await probeDiscoveredAgents({
+      processRunner: tailnetRunner({
+        "nodekey-b": peerNode("100.64.0.20", "twin"),
+        "nodekey-a": peerNode("100.64.0.10", "twin"),
+      }),
+      fetchFn: http.fetch,
+    })
+
+    expect(result.agents.map((a) => a.ip)).toEqual(["100.64.0.10", "100.64.0.20"])
+  })
+
+  it("renders hostname and ip for every peer", async () => {
+    const http = new FakeFetch({
+      "http://100.64.0.2:8787/health": { kind: "json", body: HEALTH_BODY },
+    })
+
+    const result = await probeDiscoveredAgents({
+      processRunner: tailnetRunner({
+        "nodekey-alpha": peerNode("100.64.0.4", "alpha"),
+        "nodekey-bravo": peerNode("100.64.0.2", "bravo"),
+      }),
+      fetchFn: http.fetch,
+      enrolledAgentIds: ["probe-target"],
+    })
+
+    const rendered = renderAgentDiscoveryProbe(result)
+    expect(rendered).toContain("Tailnet Agent Discovery")
+    expect(rendered).toContain("alpha.ts.net")
+    expect(rendered).toContain("100.64.0.4")
+    expect(rendered).toContain("bravo.ts.net")
+    expect(rendered).toContain("100.64.0.2")
+    expect(rendered).toContain("REACHABLE")
+    expect(rendered).toContain("UNREACHABLE")
+    expect(rendered).toContain("probe-target")
+    expect(rendered).toContain("ENROLLED")
+    expect(rendered).toContain("NOT ENROLLED")
+    // Assertions run against the plain text: ANSI codes sit between the count
+    // and its noun, so a raw substring match would be asserting on styling.
+    const plain = rendered.replace(/\x1b\[[0-9;]*m/g, "")
+    expect(plain).toContain("2 capabilities")
+    expect(plain).toContain("capabilities unknown")
+  })
+
+  it("renders an empty tailnet without throwing", () => {
+    const rendered = renderAgentDiscoveryProbe({
+      agents: [],
+      reachableCount: 0,
+      enrolledCount: 0,
+      peersFound: 0,
+    })
+
+    expect(rendered).toContain("Tailnet Agent Discovery")
+    expect(rendered).toContain("NO PEERS FOUND")
+  })
+
+  it("never renders raw daemon output or credentials", async () => {
+    // The Peer map carries a `tskey-` enrollment credential — a reusable node
+    // credential, which is exactly why discovery must not echo the listing.
+    const http = new FakeFetch({
+      "http://100.64.0.4:8787/health": { kind: "json", body: HEALTH_BODY },
+    })
+
+    const result = await probeDiscoveredAgents({
+      processRunner: tailnetRunner({
+        "nodekey-alpha": peerNode("100.64.0.4", "alpha", {
+          ExtraField: "tskey-abcdef0123456789-secret",
+          NodeKey: "nodekey:0123456789abcdef",
+        }),
+      }),
+      fetchFn: http.fetch,
+    })
+
+    const rendered = renderAgentDiscoveryProbe(result)
+    expect(rendered).not.toContain("tskey-")
+    expect(rendered).not.toContain("nodekey")
+    expect(rendered).not.toContain("ExtraField")
+    // The projected agent exposes only the normalised fields, so the daemon's
+    // extra keys have nowhere to survive into.
+    expect(Object.keys(result.agents[0] ?? {}).sort()).toEqual([
+      "agentId",
+      "bridgeUrl",
+      "capabilities",
+      "enrolled",
+      "hostname",
+      "ip",
+      "online",
+      "opencodeReachable",
+      "os",
+      "reachable",
+    ])
+  })
+
+  it("is pure with respect to configuration", async () => {
+    // Enrolment is a separate, credentialed step: discovery reports and writes
+    // nothing. The deps surface has no config or allowlist input at all, and
+    // the result is plain data with no back-reference to any mutable state.
+    const http = new FakeFetch({
+      "http://100.64.0.4:8787/health": { kind: "json", body: HEALTH_BODY },
+    })
+
+    const enrolled: string[] = ["worker-a"]
+    const before = [...enrolled]
+
+    const result = await probeDiscoveredAgents({
+      processRunner: tailnetRunner({ "nodekey-alpha": peerNode("100.64.0.4", "alpha") }),
+      fetchFn: http.fetch,
+      enrolledAgentIds: enrolled,
+    })
+
+    expect(enrolled).toEqual(before)
+    expect(Object.keys(result).sort()).toEqual([
+      "agents",
+      "enrolledCount",
+      "peersFound",
+      "reachableCount",
+    ])
+    expect(result.agents).toHaveLength(1)
+    // Freezing the result and then mutating the input list must not move the
+    // reported state: the ids were snapshotted at call time.
+    enrolled.push("worker-b")
+    expect(result.agents[0]?.enrolled).toBe(false)
+  })
+
+  it("snapshots enrolledAgentIds so later mutation cannot retro-enrol a peer", async () => {
+    const http = new FakeFetch({
+      "http://100.64.0.4:8787/health": { kind: "json", body: HEALTH_BODY },
+    })
+    const enrolled: string[] = []
+
+    const pending = probeDiscoveredAgents({
+      processRunner: tailnetRunner({ "nodekey-alpha": peerNode("100.64.0.4", "alpha") }),
+      fetchFn: http.fetch,
+      enrolledAgentIds: enrolled,
+    })
+    enrolled.push("probe-target")
+
+    const result = await pending
+    expect(result.enrolledCount).toBe(0)
   })
 })
 

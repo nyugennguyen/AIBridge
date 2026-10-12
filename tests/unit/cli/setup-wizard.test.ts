@@ -1,5 +1,15 @@
 import { describe, expect, it } from "vitest"
-import { runSetupWizard, generateBearerToken, parseBearerTokenChoice, StepperFSM } from "../../../src/cli/setup-wizard.js"
+import {
+  runSetupWizard,
+  generateBearerToken,
+  parseBearerTokenChoice,
+  parsePeerSelection,
+  resolveEnrolmentCapabilities,
+  REACHABILITY_NOT_AUTHENTICATION,
+  StepperFSM,
+} from "../../../src/cli/setup-wizard.js"
+import type { AgentDiscoveryResult, DiscoveredAgent } from "../../../src/cli/setup-step-widgets.js"
+import { bridgeConfigSchema } from "../../../src/config/schemas.js"
 import { generateLaunchdPlist, generateSystemdUnit, installDaemonUnit } from "../../../src/host/daemonizer.js"
 import { mkdtemp, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -682,5 +692,617 @@ describe("Service Daemonizer & Preflight Outbox", () => {
     expect(outcome.daemon?.installed).toBe(true)
     expect(outcome.daemon?.started).toBe(false)
     expect(outcome.daemon?.error).toBeNull()
+  })
+})
+
+// ── Step 4: discovery-driven, explicitly-enrolled peer config ────────────
+
+describe("Step 4 — discovery proposes, the operator enrols", () => {
+  const env = { HOME: "/mock/home" }
+
+  // ── Fixtures ────────────────────────────────────────────────────────────
+
+  function peer(overrides: Partial<DiscoveredAgent> = {}): DiscoveredAgent {
+    return {
+      ip: "100.64.0.4",
+      hostname: "alpha.ts.net",
+      os: "linux",
+      online: true,
+      bridgeUrl: "http://100.64.0.4:8787",
+      reachable: true,
+      agentId: "alpha-agent",
+      capabilities: ["deployment"],
+      opencodeReachable: true,
+      enrolled: false,
+      ...overrides,
+    }
+  }
+
+  function discoveryResult(agents: readonly DiscoveredAgent[]): AgentDiscoveryResult {
+    return {
+      agents,
+      peersFound: agents.length,
+      reachableCount: agents.filter((a) => a.reachable).length,
+      enrolledCount: agents.filter((a) => a.enrolled).length,
+    }
+  }
+
+  const ALPHA = peer()
+  const BRAVO = peer({
+    ip: "100.64.0.2",
+    hostname: "bravo.ts.net",
+    bridgeUrl: "http://100.64.0.2:8787",
+    agentId: "bravo-agent",
+    capabilities: ["analysis"],
+  })
+
+  /**
+   * Run a full setup with an injected discovery result and a collecting writer.
+   *
+   * The queues below are in the order the prompts fire, which is asserted
+   * explicitly in "Step 4 prompt order" so a future reordering shows up as a
+   * failure rather than as a mysterious shift in every other test.
+   */
+  async function runWithDiscovery(params: {
+    discovery: AgentDiscoveryResult
+    inputs?: string[]
+    secrets?: string[]
+    confirms?: string[]
+    existing?: Record<string, unknown>
+  }) {
+    const fileOps = new TestFileOps()
+    const configPath = "/mock/home/.config/aibridge/default/config.json"
+    if (params.existing) fileOps.existingConfigs[configPath] = params.existing
+    const prompter = new TestPrompter({
+      inputs: params.inputs ?? [],
+      secrets: params.secrets ?? ["oc-password"],
+      confirms: params.confirms ?? ["y", "n"],
+    })
+    const output: string[] = []
+    const discovered: Array<{ enrolledAgentIds: readonly string[] | undefined }> = []
+
+    const outcome = await runSetupWizard({
+      platformInspector: makePlatformInspector(),
+      processRunner: makeFakeProcessRunner(),
+      prompter,
+      fileOps,
+      env,
+      discoverAgents: async (discoveryDeps) => {
+        discovered.push({ enrolledAgentIds: discoveryDeps?.enrolledAgentIds })
+        // Honour the `enrolledAgentIds` the wizard passed, the way the real
+        // probe does, so the `enrolled` badge is exercised rather than faked.
+        const ids = new Set(discoveryDeps?.enrolledAgentIds ?? [])
+        const agents = params.discovery.agents.map((agent) => ({
+          ...agent,
+          enrolled: agent.agentId !== null && ids.has(agent.agentId),
+        }))
+        return { ...params.discovery, agents }
+      },
+      write: (text) => void output.push(text),
+    })
+
+    return { outcome, fileOps, prompter, output, configPath, discovered }
+  }
+
+  function saved(fileOps: TestFileOps, configPath: string): Record<string, unknown> {
+    const config = fileOps.writtenConfigs[configPath]
+    if (config === undefined) throw new Error(`no config written at ${configPath}`)
+    return config
+  }
+
+  function agentsOf(config: Record<string, unknown>): Array<Record<string, unknown>> {
+    return config.agents as Array<Record<string, unknown>>
+  }
+
+  function sourcesOf(config: Record<string, unknown>): Array<Record<string, unknown>> {
+    return (config.security as { allowed_sources: Array<Record<string, unknown>> }).allowed_sources
+  }
+
+  /** The prompt labels in order, as the prompter saw them. */
+  function promptOrder(prompter: TestPrompter): string[] {
+    return [...prompter.inputs, ...prompter.secrets, ...prompter.confirms]
+  }
+
+  // ── Boundary tests (§18.4 gate) ──────────────────────────────────────────
+
+  it("does not enrol a discovered peer the operator did not select", async () => {
+    // THE GATE. Two reachable peers are on the tailnet and the operator
+    // declines to pick one. Trust-on-first-use enrolment would put both in
+    // the config here.
+    const { fileOps, configPath } = await runWithDiscovery({
+      discovery: discoveryResult([ALPHA, BRAVO]),
+      inputs: [
+        "", // profile name -> default
+        "", // config path -> default
+        "", // generate token
+        "", // acknowledge token
+        "", // agent id -> default
+        "", // project path -> default
+        "", // SKIP enrolment
+        "", // bridge port
+        "", // opencode port
+      ],
+    })
+
+    const config = saved(fileOps, configPath)
+    expect(agentsOf(config)).toEqual([])
+    expect(sourcesOf(config)).toEqual([])
+  })
+
+  it("skips enrolment on the explicit 's' answer too", async () => {
+    // Not just the empty answer. An operator who types something and still
+    // means nobody gets the same result.
+    const { fileOps, configPath } = await runWithDiscovery({
+      discovery: discoveryResult([ALPHA, BRAVO]),
+      inputs: ["", "", "", "", "", "", "s", "", ""],
+    })
+
+    const config = saved(fileOps, configPath)
+    expect(agentsOf(config)).toEqual([])
+    expect(sourcesOf(config)).toEqual([])
+  })
+
+  it("enrols only the selected peer, in both arrays, with matching ids and capabilities", async () => {
+    const { fileOps, configPath } = await runWithDiscovery({
+      discovery: discoveryResult([ALPHA, BRAVO]),
+      inputs: [
+        "", // profile name
+        "", // config path
+        "", // generate token
+        "", // acknowledge token
+        "", // agent id
+        "", // project path
+        "2", // select bravo by number
+        "", // capabilities: accept advertised
+        "", // bridge port
+        "", // opencode port
+      ],
+      confirms: ["y", "y", "n"], // enrol, save, no daemon
+    })
+
+    const config = saved(fileOps, configPath)
+
+    // Both halves, one id, one capability list. `assertSourceAuthorized`
+    // authorizes on `source_agent_id` AND capability membership, so a
+    // mismatch here is a 403 at the first /trigger.
+    expect(agentsOf(config)).toEqual([
+      { id: "bravo-agent", url: "http://100.64.0.2:8787", capabilities: ["analysis"] },
+    ])
+    expect(sourcesOf(config)).toEqual([
+      {
+        source_agent_id: "bravo-agent",
+        capabilities: ["analysis"],
+        requires_plan_approval: [],
+      },
+    ])
+
+    // The peer that was discovered but NOT selected is nowhere in the config.
+    expect(JSON.stringify(config)).not.toContain("alpha")
+  })
+
+  it("writes both arrays in agreement even when the operator overrides the capabilities", async () => {
+    const { fileOps, configPath } = await runWithDiscovery({
+      discovery: discoveryResult([ALPHA]),
+      inputs: [
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "1", // select alpha
+        "development, orchestration", // typed capabilities, not "deployment"
+        "",
+        "",
+      ],
+      confirms: ["y", "y", "n"],
+    })
+
+    const config = saved(fileOps, configPath)
+    expect(agentsOf(config)[0]?.capabilities).toEqual(["development", "orchestration"])
+    expect(sourcesOf(config)[0]?.capabilities).toEqual(["development", "orchestration"])
+  })
+
+  it("falls back to a conservative capability default when the peer advertised none", async () => {
+    // An unidentified peer has no advertised list, and the operator typed
+    // none. The wizard's own default is used rather than an empty grant that
+    // would silently authorize nothing and read as a mistake later.
+    const { fileOps, configPath } = await runWithDiscovery({
+      discovery: discoveryResult([peer({ agentId: null, capabilities: [] })]),
+      inputs: [
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "1",
+        "typed-id", // the agent ID for the unidentified peer
+        "", // capabilities -> default
+        "",
+        "",
+      ],
+      confirms: ["y", "y", "n"],
+    })
+
+    const config = saved(fileOps, configPath)
+    const expected = ["development", "orchestration"]
+    expect(agentsOf(config)[0]?.capabilities).toEqual(expected)
+    expect(sourcesOf(config)[0]?.capabilities).toEqual(expected)
+  })
+
+  it("does not enrol a peer whose /health did not identify it unless the operator types the id", async () => {
+    // `reachable: true, agentId: null` is the documented case: something
+    // answered on that address and did not say what it was. There is nothing
+    // to enrol under until the operator supplies one out of band.
+    const silent = peer({ agentId: null, capabilities: [] })
+    const { fileOps, configPath, prompter, output } = await runWithDiscovery({
+      discovery: discoveryResult([silent]),
+      inputs: [
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "1",
+        "", // Enter at the agent-ID prompt -> enrol nobody
+        "", // bridge port
+        "", // opencode port
+      ],
+    })
+
+    const config = saved(fileOps, configPath)
+    expect(agentsOf(config)).toEqual([])
+    expect(sourcesOf(config)).toEqual([])
+    expect(promptOrder(prompter).some((label) => label.includes("did not identify itself"))).toBe(false)
+    // The copy does say why, so the operator is not left guessing what went wrong.
+    expect(output.join("")).toContain("did not say which agent it is")
+    expect(output.join("")).toContain("Answering is not identifying")
+  })
+
+  it("enrols an unidentified peer under a hand-typed id once the operator supplies one", async () => {
+    const silent = peer({ agentId: null, capabilities: [] })
+    const { fileOps, configPath } = await runWithDiscovery({
+      discovery: discoveryResult([silent]),
+      inputs: [
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "1",
+        "spoken-id", // hand-typed identity
+        "qa", // capabilities
+        "",
+        "",
+      ],
+      confirms: ["y", "y", "n"],
+    })
+
+    const config = saved(fileOps, configPath)
+    expect(agentsOf(config)).toEqual([
+      { id: "spoken-id", url: "http://100.64.0.4:8787", capabilities: ["qa"] },
+    ])
+    expect(sourcesOf(config)).toEqual([
+      { source_agent_id: "spoken-id", capabilities: ["qa"], requires_plan_approval: [] },
+    ])
+  })
+
+  it("enrols nobody when the operator declines the confirmation", async () => {
+    const { fileOps, configPath } = await runWithDiscovery({
+      discovery: discoveryResult([ALPHA]),
+      inputs: ["", "", "", "", "", "", "1", "", "", ""],
+      confirms: ["n", "y", "n"], // decline enrolment, save, no daemon
+    })
+
+    const config = saved(fileOps, configPath)
+    expect(agentsOf(config)).toEqual([])
+    expect(sourcesOf(config)).toEqual([])
+  })
+
+  // ── Manual fallback ──────────────────────────────────────────────────────
+
+  it("still offers the manual prompts when discovery finds nothing", async () => {
+    // A setup run before Tailscale was joined, or a machine whose daemon is
+    // not answering, must not be bricked by a discovery-driven wizard.
+    const { fileOps, configPath, prompter } = await runWithDiscovery({
+      discovery: discoveryResult([]),
+      inputs: [
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "", // manual peer agent ID -> default "peer"
+        "", // manual peer URL -> default http://100.64.0.2:8787
+        "",
+        "",
+      ],
+    })
+
+    const config = saved(fileOps, configPath)
+    expect(agentsOf(config)).toEqual([
+      {
+        id: "peer",
+        url: "http://100.64.0.2:8787",
+        capabilities: ["development", "orchestration"],
+      },
+    ])
+    expect(sourcesOf(config)).toEqual([
+      {
+        source_agent_id: "peer",
+        capabilities: ["development", "orchestration"],
+        requires_plan_approval: [],
+      },
+    ])
+    // The manual prompts fired verbatim, with the released defaults.
+    expect(prompter.inputs).toContain("Enter peer agent ID [peer]:")
+    expect(prompter.inputs).toContain("Enter peer agent URL [http://100.64.0.2:8787]:")
+  })
+
+  it("honours hand-typed manual values when discovery finds nothing", async () => {
+    const { fileOps, configPath } = await runWithDiscovery({
+      discovery: discoveryResult([]),
+      inputs: ["", "", "", "", "", "", "peer-agent", "http://100.64.0.9:8787", "", ""],
+    })
+
+    const config = saved(fileOps, configPath)
+    expect(agentsOf(config)[0]).toMatchObject({
+      id: "peer-agent",
+      url: "http://100.64.0.9:8787",
+    })
+    expect(sourcesOf(config)[0]).toMatchObject({ source_agent_id: "peer-agent" })
+  })
+
+  it("still offers the manual prompts when the operator asks for them over a populated tailnet", async () => {
+    // 'm' on a tailnet that HAS peers: the escape hatch stays available, so
+    // an operator who does not recognise anything on screen is never stuck.
+    const { fileOps, configPath, prompter } = await runWithDiscovery({
+      discovery: discoveryResult([ALPHA, BRAVO]),
+      inputs: ["", "", "", "", "", "", "m", "manual-peer", "http://100.64.0.77:8787", "", ""],
+    })
+
+    const config = saved(fileOps, configPath)
+    expect(agentsOf(config)[0]).toMatchObject({ id: "manual-peer" })
+    expect(sourcesOf(config)[0]).toMatchObject({ source_agent_id: "manual-peer" })
+    expect(prompter.inputs).toContain("Enter peer agent ID [peer]:")
+  })
+
+  // ── Security copy and schema ─────────────────────────────────────────────
+
+  it("tells the operator that reachability is not trust, every run", async () => {
+    // The green checkmark the table prints is the most misreadable string on
+    // the screen, so the de-fusing sentence ships with it — on the skip path
+    // as much as the enrol path.
+    const { output } = await runWithDiscovery({
+      discovery: discoveryResult([ALPHA]),
+      inputs: ["", "", "", "", "", "", "", "", "", ""],
+    })
+
+    const narration = output.join("")
+    expect(narration).toContain(REACHABILITY_NOT_AUTHENTICATION)
+    expect(narration).toContain("Reachability is not authentication")
+    expect(narration).toContain("not that it is trusted")
+    expect(narration).toContain("provides reachability, not identity, enrolment, project membership, or approval")
+    expect(narration).toContain("src/mesh/identity/")
+    expect(narration).toContain("Discovery enrols nothing")
+  })
+
+  it("never surfaces a tskey- enrollment credential from the discovery table", async () => {
+    // `agent_id` crosses the network in a response direction, and a `tskey-…`
+    // value is a reusable node-enrollment credential. A peer that answers with
+    // one is not identifying itself with an agent id, so the wizard must not
+    // print it, offer it, or write it into the config.
+    const credential = peer({ agentId: "tskey-abcdef0123456789-reusable-secret" })
+    const { output, fileOps, configPath } = await runWithDiscovery({
+      discovery: discoveryResult([credential]),
+      inputs: [
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "1", // select the credential-bearing peer
+        "typed-id", // ... and enrol it under something else
+        "", // capabilities
+        "", // bridge port
+        "", // opencode port
+      ],
+      confirms: ["y", "y", "n"],
+    })
+
+    const narration = output.join("")
+    expect(narration).not.toContain("tskey-")
+    // Scrubbed to "did not identify itself", which routes the operator onto
+    // the hand-typed-id path rather than onto an unverified credential.
+    expect(narration).toContain("did not identify itself")
+    // ...and the credential never reaches the config either.
+    expect(JSON.stringify(fileOps.writtenConfigs[configPath])).not.toContain("tskey-")
+  })
+
+  it("produces a config that bridgeConfigSchema accepts", async () => {
+    // `writeConfig` in src/host/profile-store.ts validates, so a malformed
+    // config throws at the worst possible moment. Enrol, skip and manual all
+    // have to survive a real parse.
+    const cases: Array<{ label: string; inputs: string[]; confirms: string[] }> = [
+      { label: "enrolled", inputs: ["", "", "", "", "", "", "1", "", "", ""], confirms: ["y", "y", "n"] },
+      { label: "skipped", inputs: ["", "", "", "", "", "", "", "", "", ""], confirms: ["y", "n"] },
+      { label: "manual", inputs: ["", "", "", "", "", "", "", "", "", ""], confirms: ["y", "n"] },
+    ]
+
+    for (const testCase of cases) {
+      const { fileOps, configPath } = await runWithDiscovery({
+        discovery: discoveryResult([ALPHA]),
+        inputs: testCase.inputs,
+        confirms: testCase.confirms,
+      })
+      const config = saved(fileOps, configPath)
+      // Throws on a malformed config, which is the assertion.
+      expect(() => bridgeConfigSchema.parse(config)).not.toThrow()
+      expect(bridgeConfigSchema.parse(config).agent_id).toBe("default")
+    }
+  })
+
+  it("labels already-enrolled peers from the config it is about to overwrite", async () => {
+    // The `enrolled` badge is a label from the existing config's `agents[]`
+    // and nothing else; it must not be a side effect of discovery.
+    const { fileOps, output, configPath, discovered } = await runWithDiscovery({
+      discovery: discoveryResult([ALPHA]),
+      inputs: ["", "", "", "", "", "", "", "", "", ""],
+      confirms: ["y", "y", "n"], // confirm overwrite, save, no daemon
+      existing: { agent_id: "old", agents: [{ id: "alpha-agent", url: "http://100.64.0.4:8787" }] },
+    })
+
+    // The wizard passed the config's own ids in, so the operator sees which
+    // peer they are replacing instead of a table claiming nothing is enrolled.
+    expect(discovered[0]?.enrolledAgentIds).toEqual(["alpha-agent"])
+    expect(output.join("")).toContain("already enrolled here")
+    expect(fileOps.writtenConfigs[configPath]).toBeDefined()
+  })
+
+  it("passes no enrolled ids when the profile does not exist yet", async () => {
+    const { discovered } = await runWithDiscovery({
+      discovery: discoveryResult([ALPHA]),
+      inputs: ["", "", "", "", "", "", "", "", "", ""],
+    })
+
+    expect(discovered[0]?.enrolledAgentIds).toEqual([])
+  })
+
+  // ── Step 4 prompt order ──────────────────────────────────────────────────
+
+  it("Step 4 prompt order: select, then identity, then capabilities, then confirm", async () => {
+    // The sequence is the UX. Asserting it here means a future reordering is a
+    // failing test rather than a surprise at somebody's terminal.
+    const { prompter } = await runWithDiscovery({
+      discovery: discoveryResult([peer({ agentId: null, capabilities: [] })]),
+      inputs: ["", "", "", "", "", "", "1", "typed", "qa", "", ""],
+      confirms: ["y", "y", "n"],
+    })
+
+    expect(prompter.inputs).toEqual([
+      "Enter profile name [default]:",
+      "Enter config file path [/mock/home/.config/aibridge/default/config.json]:",
+      expect.stringContaining("Bearer authentication"),
+      expect.stringContaining("Press Enter to continue"),
+      "Enter agent ID [default]:",
+      expect.stringContaining("Enter project path"),
+      "Enrol a peer by number, hostname, or IP (Enter = enrol nobody, m = enter a peer by hand):",
+      "Agent ID for alpha.ts.net (Enter to enrol nobody):",
+      expect.stringContaining("Capabilities to grant typed"),
+      "Enter bridge port [8787]:",
+      "Enter OpenCode server port [4096]:",
+    ])
+    expect(prompter.confirms).toEqual([
+      expect.stringContaining("Enrol typed at http://100.64.0.4:8787"),
+      "Save configuration to \"/mock/home/.config/aibridge/default/config.json\"?",
+      // The activation command is platform-derived; only its shape is pinned.
+      expect.stringContaining("Start the daemon now?"),
+    ])
+  })
+
+  it("shows every discovered peer with its address, reachability, id and capabilities", async () => {
+    const { output } = await runWithDiscovery({
+      discovery: discoveryResult([
+        ALPHA,
+        BRAVO,
+        peer({ ip: "100.64.0.9", hostname: "charlie.ts.net", reachable: false, agentId: null, capabilities: [] }),
+      ]),
+      inputs: ["", "", "", "", "", "", "", "", "", ""],
+    })
+
+    const narration = output.join("")
+    expect(narration).toContain("alpha.ts.net")
+    expect(narration).toContain("100.64.0.4")
+    expect(narration).toContain("answered /health")
+    expect(narration).toContain("agent_id: alpha-agent")
+    expect(narration).toContain("advertises: deployment")
+    expect(narration).toContain("charlie.ts.net")
+    expect(narration).toContain("no answer on /health")
+    expect(narration).toContain("did not identify itself")
+  })
+})
+
+// ── Parsing helpers ────────────────────────────────────────────────────
+
+describe("parsePeerSelection", () => {
+  const agents: DiscoveredAgent[] = [
+    {
+      ip: "100.64.0.4",
+      hostname: "alpha.ts.net",
+      os: "linux",
+      online: true,
+      bridgeUrl: "http://100.64.0.4:8787",
+      reachable: true,
+      agentId: "alpha-agent",
+      capabilities: [],
+      opencodeReachable: null,
+      enrolled: false,
+    },
+    {
+      ip: "100.64.0.2",
+      hostname: "bravo.ts.net",
+      os: "linux",
+      online: true,
+      bridgeUrl: "http://100.64.0.2:8787",
+      reachable: false,
+      agentId: null,
+      capabilities: [],
+      opencodeReachable: null,
+      enrolled: false,
+    },
+  ]
+
+  it("reads a 1-based row number as printed", () => {
+    expect(parsePeerSelection("1", agents)).toEqual({ kind: "agent", agent: agents[0] })
+    expect(parsePeerSelection("2", agents)).toEqual({ kind: "agent", agent: agents[1] })
+  })
+
+  it("reads a hostname or an IP case-insensitively", () => {
+    expect(parsePeerSelection("ALPHA.TS.NET", agents)).toEqual({ kind: "agent", agent: agents[0] })
+    expect(parsePeerSelection("100.64.0.2", agents)).toEqual({ kind: "agent", agent: agents[1] })
+  })
+
+  it("treats every unanswered form as skip, never as a default choice", () => {
+    // This is the security-relevant property: there is no answer that picks a
+    // peer the operator did not name, and no answer that traps them in a loop.
+    for (const answer of ["", "   ", "s", "skip", "n", "no", "3", "99", "0", "-1", "who?", "100.64.0.9"]) {
+      expect(parsePeerSelection(answer, agents)).toEqual({ kind: "skip" })
+    }
+  })
+
+  it("routes 'm' to the released manual prompts", () => {
+    expect(parsePeerSelection("m", agents)).toEqual({ kind: "manual" })
+    expect(parsePeerSelection("MANUAL", agents)).toEqual({ kind: "manual" })
+  })
+})
+
+describe("resolveEnrolmentCapabilities", () => {
+  it("uses what the operator typed, trimmed and de-duplicated, in their order", () => {
+    expect(resolveEnrolmentCapabilities(" b , a ,b ", ["deployment"])).toEqual(["b", "a"])
+  })
+
+  it("falls back to the advertised list only when the operator typed nothing", () => {
+    expect(resolveEnrolmentCapabilities("", ["deployment", "analysis"])).toEqual([
+      "deployment",
+      "analysis",
+    ])
+    expect(resolveEnrolmentCapabilities("  ", ["analysis"])).toEqual(["analysis"])
+  })
+
+  it("does not silently take a peer's whole advertised list when the peer claims everything", () => {
+    // The advertised list is an OFFER, not a grant. `resolveEnrolmentCapabilities`
+    // returning it is only reached because the operator pressed Enter on a
+    // prompt that showed them exactly what they were accepting.
+    const advertised = ["deployment", "destructive", "multi-agent-fanout"]
+    expect(resolveEnrolmentCapabilities("deployment", advertised)).toEqual(["deployment"])
+  })
+
+  it("uses the conservative wizard default when nothing was typed and nothing was advertised", () => {
+    expect(resolveEnrolmentCapabilities("", [])).toEqual(["development", "orchestration"])
   })
 })

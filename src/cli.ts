@@ -9,7 +9,7 @@
  * Design constraints:
  * - `_opencode` is hidden from `--help` output.
  * - `--profile` is required for `start`, `serve`, `status`, `tui`, `_opencode`;
- *   optional for `setup`.
+ *   optional for `setup`, `verify`, and `discover`.
  * - Help and version output are deterministic (no timestamps, no random).
  * - Error messages never leak internal paths, stack traces, or env values.
  * - `setup` rejects non-TTY environments.
@@ -17,9 +17,17 @@
 
 import { existsSync } from "node:fs"
 import { access } from "node:fs/promises"
-import { validateProfileName } from "./host/paths.js"
-import { readSecret } from "./host/profile-store.js"
+import { validateProfileName, resolveProfilePaths } from "./host/paths.js"
+import { readSecret, readConfig } from "./host/profile-store.js"
 import type { IpcBusHandle } from "./ipc/bridge.js"
+// Type-only, so the discovery command costs nothing at import time and `aibr
+// --help` on a machine with no Tailscale still runs. The module that defines
+// these types is loaded lazily inside `createRealDeps`'s `discoverAgents`.
+import type { AgentDiscoveryResult } from "./cli/setup-step-widgets.js"
+import {
+  isCredentialShapedAgentId,
+  scrubCredentialShapedAgentId,
+} from "./cli/discovery-safety.js"
 import { CLI_VERSION } from "./version.js"
 import { findInPath } from "./host/binaries.js"
 
@@ -111,6 +119,25 @@ export interface CliDeps {
     readonly ok: boolean
     readonly message: string
   }>
+  /**
+   * Enumerate the tailnet and ask each peer to identify itself.
+   *
+   * Optional because `discover` is a read-only query, not a state-changing
+   * command: when this is absent the dispatcher falls back to the same module
+   * lazily, the way `verify`/`update` do. Keeping it injectable is what makes
+   * the command testable at all — a test cannot conjure a tailnet, and one
+   * that shells out to the real `tailscale` binary would be a test that
+   * depends on the machine it runs on.
+   *
+   * `profile` is optional and only ever supplies ids to LABEL rows as already
+   * enrolled; omitting it is fully supported and is what makes the command
+   * usable before any profile exists.
+   *
+   * This reports. It must never enrol: there is no code path from a reachable
+   * `/health` to a config write, because a Tailscale connection buys
+   * reachability and not identity (`Docs/security/milestone-0-threat-model.md`).
+   */
+  readonly discoverAgents?: (options?: { readonly profile?: string }) => Promise<AgentDiscoveryResult>
   /** Package version string. */
   readonly version: string
 }
@@ -119,7 +146,7 @@ export interface CliDeps {
 
 const PROG = "aibr"
 
-const COMMANDS = ["setup", "start", "serve", "worker", "status", "verify", "update", "tui", "bundle"] as const
+const COMMANDS = ["setup", "start", "serve", "worker", "status", "verify", "update", "tui", "bundle", "discover"] as const
 const ALL_COMMANDS = [...COMMANDS, "_opencode"] as const
 
 // ── Argv parsing ───────────────────────────────────────────────────────
@@ -154,12 +181,19 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     } else if (arg === "--ipc-publish") {
       knownFlags.push("--ipc-publish")
     } else if (arg === "--preview") {
+      // Known, and therefore NOT pushed onto `unknownFlags`. It used to be
+      // pushed onto both lists, which made the unknown-flag guard below reject
+      // `aibr bundle --preview` before the bundle branch could ever read it --
+      // a flag that was documented and implemented but unreachable. One entry
+      // per flag, in one list; the guard's job is to catch typos, not the flags
+      // it already recognises.
       knownFlags.push("--preview")
-      unknownFlags.push(arg)
     } else if (arg === "--yes" || arg === "-y") {
       knownFlags.push("--yes")
     } else if (arg === "--check" || arg === "-c") {
       knownFlags.push("--check")
+    } else if (arg === "--json") {
+      knownFlags.push("--json")
     } else if (command === null) {
       command = arg
     } else {
@@ -196,11 +230,13 @@ function helpText(): string {
     "  update   Check and update to the latest version",
     "  tui      Open the interactive local UI",
     "  bundle   Generate diagnostic support bundle",
+    "  discover List tailnet peers and probe their /health (read-only)",
     "",
     "Options:",
     "  --profile, -p <name>   Profile name (required for start/serve/worker/status/tui)",
     "  --check, -c            Check for updates without installing (for update)",
     "  --yes, -y              Automatic yes to prompts (for update)",
+    "  --json                 Emit one JSON document and nothing else (for discover)",
     "  --help, -h             Show this help",
     "  --version, -v          Show version",
     "  --shadow-mode          Run in shadow mode (mirroring ingress to router)",
@@ -283,7 +319,170 @@ async function readOptionalSecret(secretPath: string): Promise<string | null> {
   }
 }
 
+/**
+ * The agent ids a profile already lists in its `agents[]`.
+ *
+ * OPTIONAL BY DESIGN. `aibr discover` must work with no profile at all, so an
+ * absent profile is an ordinary empty answer rather than an error — the
+ * `enrolled` flag degrades to "we know of no enrolments", which is honest, and
+ * the output says so through `enrolledSource`.
+ *
+ * READ-ONLY, and reads only this one file. Enrolment belongs to a separate,
+ * credentialed step; a discovery run that so much as created a profile
+ * directory to look inside would be a command that changes state in order to
+ * report state.
+ */
+async function readEnrolledAgentIds(profile: string | undefined): Promise<readonly string[]> {
+  if (profile === undefined) return []
+
+  let config: Record<string, unknown> | null
+  try {
+    const paths = resolveProfilePaths(profile)
+    config = await readConfig(`${paths.configDir}/config.json`) as Record<string, unknown> | null
+  } catch {
+    // An unresolvable HOME or an unreadable config means "no labels to draw",
+    // not "abort the report": the tailnet is still worth listing.
+    return []
+  }
+  if (config === null) return []
+
+  const agents = config.agents
+  if (!Array.isArray(agents)) return []
+  return agents
+    .map((entry) => (typeof (entry as { id?: unknown }).id === "string" ? (entry as { id: string }).id : null))
+    .filter((id): id is string => id !== null)
+}
+
+// ── discover output projection ──────────────────────────────────────────
+
+/**
+ * Bumped when a field is removed or changes meaning, never for an addition.
+ *
+ * The Herdr agent-manager plugin parses this document, so a consumer pinned to
+ * `schemaVersion: 1` must be able to trust that `peers[i].reachable` still
+ * means what it meant when it pinned. Additive keys stay additive.
+ */
+const DISCOVERY_SCHEMA_VERSION = 1
+
+/**
+ * Fixed reminder carried in every `--json` document.
+ *
+ * It ships IN the machine-readable output rather than in a comment because the
+ * field most likely to be misread by a consumer is `reachable`: a downstream
+ * that reads it as "trusted" has misread the threat model, and a string in the
+ * payload travels with the data to whoever debugs it later.
+ */
+const DISCOVERY_NOTICE =
+  "Reachability is not authentication: 'reachable' means an HTTP answer on the bridge port, " +
+  "not an identity. 'enrolled' is a label for ids already listed in this profile's agents[]. " +
+  "Trust is established with ed25519 node keys, enrollment codes, and peer pins (src/mesh/identity/). " +
+  "Discovery enrols nothing and writes nothing."
+
+/**
+ * The probe result with credential-shaped ids removed, for both output paths.
+ *
+ * Applied to the render as well as the JSON document on purpose: the widget
+ * prints `agentId` too, so scrubbing only the machine-readable half would leave
+ * the same string on screen for anyone who forgets the flag.
+ *
+ * The rule itself lives in `./discovery-safety.js`, which `aibr setup` also
+ * imports: this was a second copy, and two copies of a redaction guard is one
+ * copy too many.
+ */
+function sanitizeDiscoveryResult(result: AgentDiscoveryResult): AgentDiscoveryResult {
+  if (!result.agents.some((agent) => isCredentialShapedAgentId(agent.agentId))) {
+    return result
+  }
+  return {
+    ...result,
+    agents: result.agents.map((agent) => ({
+      ...agent,
+      agentId: scrubCredentialShapedAgentId(agent.agentId),
+    })),
+  }
+}
+
+/**
+ * Project the probe result into the stable `--json` document.
+ *
+ * Peer fields are otherwise copied verbatim rather than reshaped: the probe
+ * already emits exactly the fields a caller needs, and a second projection here
+ * would be a second place for the shape to drift. `peersFound` is kept
+ * alongside `peers.length` because they answer different questions — the
+ * daemon's peer count before probing, versus what this run reported on.
+ */
+function discoveryDocument(
+  result: AgentDiscoveryResult,
+  enrolledSource: string | null,
+): Record<string, unknown> {
+  const safe = sanitizeDiscoveryResult(result)
+  return {
+    schemaVersion: DISCOVERY_SCHEMA_VERSION,
+    ok: true,
+    // Which profile's `agents[]` supplied the enrolled labels, or `null` when
+    // none were loaded. Without this a consumer cannot tell "no peers are
+    // enrolled" from "we never looked".
+    enrolledSource,
+    peers: safe.agents,
+    peersFound: safe.peersFound,
+    reachableCount: safe.reachableCount,
+    enrolledCount: safe.enrolledCount,
+    notice: DISCOVERY_NOTICE,
+  }
+}
+
+/**
+ * The same shape with `ok: false`, so a consumer parses one document type
+ * whether the run succeeded or not.
+ */
+function discoveryErrorDocument(message: string): Record<string, unknown> {
+  return {
+    schemaVersion: DISCOVERY_SCHEMA_VERSION,
+    ok: false,
+    error: message,
+    enrolledSource: null,
+    peers: [],
+    peersFound: 0,
+    reachableCount: 0,
+    enrolledCount: 0,
+    notice: DISCOVERY_NOTICE,
+  }
+}
+
+/** One line after the widget, for a human at a terminal. */
+function discoverySummaryLine(result: AgentDiscoveryResult): string {
+  if (result.peersFound === 0) {
+    // An empty tailnet is a normal answer, not a failure: a single-node
+    // tailnet, a laptop with Tailscale stopped, and "the daemon is not
+    // installed" all look identical from here, and none of them is an error
+    // an operator needs to be scolded for.
+    return "No peers found. Nothing was enrolled and nothing was changed.\n"
+  }
+  return (
+    `Discovered ${result.peersFound} peer(s); ${result.reachableCount} answered /health; ` +
+    `${result.enrolledCount} enrolled.\n` +
+    "Reachability is not authentication, and a reachable peer is not a trusted one.\n"
+  )
+}
+
 // ── Main entry ─────────────────────────────────────────────────────────
+
+/**
+ * Run discovery through the injected dependency, falling back to the host
+ * module.
+ *
+ * The fallback mirrors `verify`/`update`/`bundle`: a caller that supplies a
+ * `CliDeps` without `discoverAgents` (an older embedder, a partial fake) still
+ * gets a working command, loaded on demand so nothing discovery-shaped is
+ * pulled into a process that only wanted `--help`.
+ */
+async function runDiscovery(deps: CliDeps, profile: string | undefined): Promise<AgentDiscoveryResult> {
+  if (deps.discoverAgents !== undefined) {
+    return await deps.discoverAgents(profile === undefined ? undefined : { profile })
+  }
+  const { probeDiscoveredAgents } = await import("./cli/setup-step-widgets.js")
+  return await probeDiscoveredAgents()
+}
 
 /**
  * Run the CLI with the given argv and dependencies.
@@ -419,6 +618,59 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<Cl
       return result.ok ? 0 : 1
     } catch (err) {
       deps.writer(`Error: ${err instanceof Error ? err.message : "update failed"}\n`)
+      return 1
+    }
+  }
+
+  // ── discover ────────────────────────────────────────────────────────
+  // Ahead of the `--profile` gate below: discovery queries the tailnet, not a
+  // profile, and a scriptable command that refuses to run before setup has ever
+  // been run is not scriptable.
+  if (command === "discover") {
+    const json = args.hasFlag("--json")
+
+    // Optional, and validated only when given. It contributes enrolled LABELS
+    // and nothing else; an invalid name is still an error rather than a
+    // silent downgrade to "no profile".
+    let profile: string | undefined
+    if (args.profile !== null) {
+      const profileErr = validateProfileArg(args.profile)
+      if (profileErr !== null) {
+        if (json) {
+          deps.writer(JSON.stringify(discoveryErrorDocument(profileErr)) + "\n")
+        } else {
+          deps.writer(`Error: ${profileErr}\n`)
+        }
+        return 1
+      }
+      profile = args.profile
+    }
+
+    try {
+      const result = await runDiscovery(deps, profile)
+      if (json) {
+        deps.writer(JSON.stringify(discoveryDocument(result, profile ?? null)) + "\n")
+      } else {
+        // Lazy for the same reason as the probe itself: a `--json` caller on a
+        // machine that never renders a widget should not pay to load one.
+        const { renderAgentDiscoveryProbe } = await import("./cli/setup-step-widgets.js")
+        deps.writer(renderAgentDiscoveryProbe(sanitizeDiscoveryResult(result)) + "\n")
+        deps.writer(discoverySummaryLine(result))
+      }
+      return 0
+    } catch {
+      // Deliberately not `err.message`. The documented throw paths here are a
+      // runner that cannot spawn and a host that cannot resolve its config
+      // directory, and both of those put a filesystem path into the message.
+      // The CLI's rule is that operator output carries no internal paths, and
+      // a fixed string loses nothing an operator can act on here: discovery
+      // degrades to an empty list on every ordinary failure, so a throw means
+      // the probe itself was broken, not that the tailnet is.
+      if (json) {
+        deps.writer(JSON.stringify(discoveryErrorDocument("discovery failed")) + "\n")
+      } else {
+        deps.writer("Error: discovery failed\n")
+      }
       return 1
     }
   }
@@ -568,8 +820,7 @@ async function createRealDeps(): Promise<CliDeps> {
   const { startProfile, statusProfile } = await import("./host/tmux.js")
   const { runSetup } = await import("./host/setup.js")
   const { BunProcessRunner, BunPlatformInspector, BunPrompter, createStreamLineReader } = await import("./host/runtime.js")
-  const { ensureProfileDirs, readConfig, writeConfig, writeSecret } = await import("./host/profile-store.js")
-  const { resolveProfilePaths } = await import("./host/paths.js")
+  const { ensureProfileDirs, writeConfig, writeSecret } = await import("./host/profile-store.js")
   const { readFile } = await import("node:fs/promises")
 
   const processRunner = new BunProcessRunner()
@@ -881,6 +1132,18 @@ async function createRealDeps(): Promise<CliDeps> {
         ok: result.ok,
         message: result.message,
       }
+    },
+
+    discoverAgents: async (options?: { readonly profile?: string }) => {
+      const { probeDiscoveredAgents } = await import("./cli/setup-step-widgets.js")
+      // Always passing the list, empty or not: the probe turns it into a
+      // lookup set, and an empty set and an absent one behave identically.
+      // Which profile the labels came from is reported separately, through
+      // `enrolledSource`, so nothing here depends on the array being absent.
+      return await probeDiscoveredAgents({
+        processRunner,
+        enrolledAgentIds: await readEnrolledAgentIds(options?.profile),
+      })
     },
 
     runOpencode: async (profile: string) => {

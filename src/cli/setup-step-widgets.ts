@@ -12,6 +12,8 @@
  *    or raw 64-hex = 256 bits), clipboard utility, security checkboxes.
  * 3. Directory Selector Widget: Multi-select project folders with path normalization and fail-closed subpath policy.
  * 4. Runtime Probe Widget: OpenCode loopback HTTP check (127.0.0.1:4096), Claude and Codex binary probes on PATH.
+ * 5. Tailnet Agent Discovery Widget: enumerates the tailnet via `discoverTailscalePeers` and asks each peer's
+ *    unauthenticated `/health` who it is. Reports only — enrolment is a separate, credentialed step.
  */
 
 import { randomBytes } from "node:crypto"
@@ -20,7 +22,9 @@ import * as fs from "node:fs/promises"
 import * as path from "node:path"
 import { execFile, spawn } from "node:child_process"
 import { promisify } from "node:util"
+import { z } from "zod"
 import type { ProcessRunner, HttpProbe } from "../host/types.js"
+import { discoverTailscalePeers, type TailscalePeer } from "../host/tailscale-discovery.js"
 
 const execFileAsync = promisify(execFile)
 
@@ -848,6 +852,363 @@ export function renderRuntimeProbe(result: RuntimeProbeResult): string {
   const codexBadge = result.codex.status === "ok" ? `${emerald}✔ READY${reset}` : `${dim}○ OPTIONAL${reset}`
   lines.push(`   🛠️  ${bold}${result.codex.label}${reset}`)
   lines.push(`      ${dim}${result.codex.detail}${reset}  ${codexBadge}`)
+
+  return lines.join("\n")
+}
+
+// ── 5. Tailnet Agent Discovery Widget ─────────────────────────────────────
+
+/**
+ * One tailnet peer, paired with what its `/health` route said about itself.
+ *
+ * The two halves are deliberately separate fields rather than one merged
+ * verdict, because they answer different questions and fail independently:
+ * `online`/`reachable` come from the local daemon and from an HTTP answer
+ * respectively, while `agentId`/`capabilities`/`opencodeReachable` are the
+ * remote node's own self-description. Collapsing them would let a caller
+ * present "the daemon says it is online" as if it were "the node identifies
+ * itself as X", which is precisely the confusion the threat model warns about.
+ */
+export interface DiscoveredAgent {
+  readonly ip: string
+  readonly hostname: string
+  readonly os: string | null
+  /** From the local tailnet listing, NOT from the HTTP probe. */
+  readonly online: boolean
+  /** `http://<ip>:<bridgePort>` — the exact URL the probe dialled. */
+  readonly bridgeUrl: string
+  /** `/health` answered at all. Not an authentication signal — see below. */
+  readonly reachable: boolean
+  /** `/health` `.agent_id`; `null` when unreachable or absent from the body. */
+  readonly agentId: string | null
+  /** `/health` `.capabilities`, sorted and de-duplicated; `[]` when unknown. */
+  readonly capabilities: readonly string[]
+  /** `/health` `.opencode`; `null` when unreachable or absent from the body. */
+  readonly opencodeReachable: boolean | null
+  /** The peer's `agentId` (or, failing that, its ip) is in `enrolledAgentIds`. */
+  readonly enrolled: boolean
+}
+
+export interface AgentDiscoveryDeps {
+  readonly processRunner?: ProcessRunner
+  readonly fetchFn?: typeof fetch
+  /** Bridge port to dial on each peer. Defaults to 8787. */
+  readonly bridgePort?: number
+  /** Per-peer HTTP budget. Defaults to 2000ms. */
+  readonly timeoutMs?: number
+  /** Ids this host already trusts. Drives the `enrolled` flag and nothing else. */
+  readonly enrolledAgentIds?: readonly string[]
+}
+
+export interface AgentDiscoveryResult {
+  readonly agents: readonly DiscoveredAgent[]
+  readonly reachableCount: number
+  readonly enrolledCount: number
+  /** Tailnet peers seen by the daemon, before any HTTP probing happened. */
+  readonly peersFound: number
+}
+
+// ── Wire schema ─────────────────────────────────────────────────────────
+
+/**
+ * `/health` as seen from the outside, parsed defensively.
+ *
+ * Every field is optional for the same reason `tailscalePeerSchema` is: the
+ * node on the other end may be running an older build, a different
+ * implementation entirely, or something that merely happens to answer on 8787.
+ * A probe that hard-requires `agent_id` would report "unreachable" for a node
+ * that is plainly up, which is a worse answer than a partial one — the operator
+ * needs to see "something is there, it just did not say much".
+ *
+ * `ok` is parsed but deliberately NOT used as the reachability signal: a 200
+ * with `ok: false` still proves a daemon is listening on that address, which
+ * is the only thing reachability claims.
+ */
+const peerHealthSchema = z.object({
+  ok: z.boolean().optional(),
+  opencode: z.boolean().optional(),
+  agent_id: z.string().optional(),
+  capabilities: z.array(z.string()).optional(),
+})
+
+/** An agent for which `/health` told us nothing usable. */
+function unreachableAgent(
+  peer: TailscalePeer,
+  bridgeUrl: string,
+  enrolledAgentIds: ReadonlySet<string>,
+): DiscoveredAgent {
+  return {
+    ip: peer.ip,
+    hostname: peer.hostname,
+    os: peer.os,
+    online: peer.online,
+    bridgeUrl,
+    reachable: false,
+    agentId: null,
+    capabilities: [],
+    opencodeReachable: null,
+    // Enrolment is decided on the id OR the address, so an unreachable peer
+    // can still be recognised as one we already trust — "we know this node,
+    // it just is not up right now" is a distinct and useful thing to say.
+    enrolled: enrolledAgentIds.has(peer.ip),
+  }
+}
+
+/**
+ * Order by hostname, case-insensitively, with the IP as tie-break.
+ *
+ * Byte-for-byte the same rule `discoverTailscalePeers` sorts with, and for
+ * the same reason: `localeCompare` produces a different order under a
+ * different ambient locale, and this output is read in diffs and snapshots
+ * where a moving order looks like a changing tailnet.
+ */
+function compareAgents(a: DiscoveredAgent, b: DiscoveredAgent): number {
+  const left = a.hostname.toLowerCase()
+  const right = b.hostname.toLowerCase()
+  if (left < right) return -1
+  if (left > right) return 1
+  if (a.ip < b.ip) return -1
+  if (a.ip > b.ip) return 1
+  return 0
+}
+
+/** Sorted, de-duplicated capability list — same projection `/health` emits. */
+function normalizeCapabilities(values: readonly string[] | undefined): readonly string[] {
+  if (values === undefined) return []
+  const unique = new Set(values)
+  return [...unique].sort()
+}
+
+/** Guard against a caller passing a budget `AbortSignal.timeout` would reject. */
+function safeTimeout(timeoutMs: number | undefined): number {
+  if (timeoutMs === undefined) return DEFAULT_DISCOVERY_TIMEOUT_MS
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return DEFAULT_DISCOVERY_TIMEOUT_MS
+  return timeoutMs
+}
+
+const DEFAULT_DISCOVERY_TIMEOUT_MS = 2000
+const DEFAULT_BRIDGE_PORT = 8787
+
+/**
+ * Probe one peer's bridge `/health`.
+ *
+ * Never throws, never retries, and never sends an `Authorization` header: the
+ * route is unauthenticated by design because this call happens before any
+ * secret has been exchanged. Every failure — refused connection, timeout, non
+ * 2xx, unparseable body — collapses to the same "unreachable" projection so a
+ * caller cannot mistake a garbled answer for a healthy node.
+ */
+async function probePeerHealth(
+  bridgeUrl: string,
+  peer: TailscalePeer,
+  fetchImpl: typeof fetch,
+  timeoutMs: number,
+  enrolledAgentIds: ReadonlySet<string>,
+): Promise<DiscoveredAgent> {
+  try {
+    // No `headers` key at all, rather than an empty object with a comment:
+    // there is no credential to send here and the option should not exist on
+    // this call site for a future edit to reach for.
+    const response = await fetchImpl(`${bridgeUrl}/health`, {
+      method: "GET",
+      signal: AbortSignal.timeout(timeoutMs),
+    })
+
+    if (!response.ok) return unreachableAgent(peer, bridgeUrl, enrolledAgentIds)
+
+    let decoded: unknown
+    try {
+      decoded = JSON.parse(await response.text())
+    } catch {
+      // A 200 carrying something that is not our JSON is not an AIBridge
+      // bridge, whatever it is serving. Reporting it as reachable-but-silent
+      // would put a wrong node in front of the operator as a candidate.
+      return unreachableAgent(peer, bridgeUrl, enrolledAgentIds)
+    }
+
+    const parsed = peerHealthSchema.safeParse(decoded)
+    if (!parsed.success) return unreachableAgent(peer, bridgeUrl, enrolledAgentIds)
+
+    const agentId = parsed.data.agent_id ?? null
+    return {
+      ip: peer.ip,
+      hostname: peer.hostname,
+      os: peer.os,
+      online: peer.online,
+      bridgeUrl,
+      reachable: true,
+      agentId,
+      capabilities: normalizeCapabilities(parsed.data.capabilities),
+      opencodeReachable: parsed.data.opencode ?? null,
+      enrolled: agentId !== null
+        ? enrolledAgentIds.has(agentId) || enrolledAgentIds.has(peer.ip)
+        : enrolledAgentIds.has(peer.ip),
+    }
+  } catch {
+    // Network error, DNS failure, or `AbortSignal.timeout` firing. All three
+    // mean the same thing to the operator and are deliberately not distinguished
+    // in the result: a timeout is a flavour of "not answering".
+    return unreachableAgent(peer, bridgeUrl, enrolledAgentIds)
+  }
+}
+
+/**
+ * `ProcessRunner` over `execFile` for the case where a caller supplies none.
+ *
+ * Exists so `probeDiscoveredAgents()` works from the wizard with no wiring.
+ * Every failure is reported as a nonzero exit rather than thrown, because
+ * `discoverTailscalePeers` is documented to degrade to an empty peer list on
+ * exactly that signal and a missing `tailscale` binary is the most ordinary
+ * outcome here, not an exception.
+ */
+const defaultTailscaleRunner: ProcessRunner = {
+  async exec(argv, options) {
+    const [command, ...args] = argv
+    if (command === undefined) return { exitCode: 1, stdout: "", stderr: "empty argv" }
+    try {
+      const { stdout, stderr } = await execFileAsync(command, args, {
+        timeout: options?.timeoutMs ?? 3000,
+      })
+      return { exitCode: 0, stdout, stderr }
+    } catch (error) {
+      const err = error as { code?: unknown; stdout?: unknown; stderr?: unknown }
+      return {
+        exitCode: typeof err.code === "number" ? err.code : 1,
+        stdout: typeof err.stdout === "string" ? err.stdout : "",
+        stderr: typeof err.stderr === "string" ? err.stderr : String(error),
+      }
+    }
+  },
+}
+
+/**
+ * Enumerate the tailnet and ask each peer who it is.
+ *
+ * REACHABILITY IS NOT AUTHENTICATION. `Docs/security/milestone-0-threat-model.md`
+ * is explicit that a Tailscale connection buys reachability and not identity,
+ * and `src/mesh/` repeats that wherever a peer is admitted. So `reachable`
+ * here means "a process answered on this address", full stop; `agentId` is the
+ * node's own claim about itself and no route accepts it as proof of who is
+ * calling. Trust is established on the mesh identity path in
+ * `src/mesh/identity/` — ed25519 node keys, enrollment codes, peer pins — and
+ * nothing in this function feeds it.
+ *
+ * PURE BY CONSTRUCTION. This reports and never enrolls. There is no code path
+ * from here to a config write or an allowlist mutation, because at this point
+ * in the setup flow no peer has been shown to be anything in particular: a
+ * reachable `/health` on a tailnet address is exactly what a wrong node, a
+ * hijacked address, or an attacker who joined the tailnet would also produce.
+ * Enrolling on discovery would be trust-on-first-use with no operator in the
+ * loop. `enrolledAgentIds` is an input used only to LABEL what is already
+ * enrolled; enrolment itself belongs to a separate, explicit, credentialed
+ * step.
+ *
+ * NOTHING IS ENROLLED, NOTHING IS PRINTED RAW. The daemon's own output is
+ * never surfaced: `tailscale status --json` carries node keys and, on some
+ * builds, `tskey-` enrollment credentials that are reusable against the
+ * node. `src/memory/redaction/` scrubs those patterns, but scrubbing on the
+ * way to disk is not a licence to print them on the way to a terminal, so only
+ * the normalised fields above ever leave this module.
+ *
+ * Discovery never throws. An empty tailnet, an absent daemon, or a tailnet
+ * where every peer is down all produce a result object, because a caller
+ * rendering a setup step wants a degraded screen, not a stack trace.
+ */
+export async function probeDiscoveredAgents(
+  deps?: AgentDiscoveryDeps,
+): Promise<AgentDiscoveryResult> {
+  const bridgePort = deps?.bridgePort ?? DEFAULT_BRIDGE_PORT
+  const timeoutMs = safeTimeout(deps?.timeoutMs)
+  const fetchImpl = deps?.fetchFn ?? fetch
+  const enrolledAgentIds = new Set(deps?.enrolledAgentIds ?? [])
+  const runner = deps?.processRunner ?? defaultTailscaleRunner
+
+  const peers = await discoverTailscalePeers(runner)
+
+  if (peers.length === 0) {
+    return { agents: [], reachableCount: 0, enrolledCount: 0, peersFound: 0 }
+  }
+
+  // Sequential, and that is a choice rather than an oversight: a setup screen
+  // is I/O-bound against a handful of peers, and probing in order keeps the
+  // `AbortSignal` budgets from overlapping into a burst that a laptop on
+  // battery would rather not send. The contract that matters is the one in
+  // the catch below — one dead peer must not cost us the report on the rest.
+  const agents: DiscoveredAgent[] = []
+  for (const peer of peers) {
+    const bridgeUrl = `http://${peer.ip}:${bridgePort}`
+    // `probePeerHealth` is total: it resolves to an unreachable projection on
+    // every failure path, so the loop below cannot be aborted by a peer.
+    agents.push(await probePeerHealth(bridgeUrl, peer, fetchImpl, timeoutMs, enrolledAgentIds))
+  }
+
+  agents.sort(compareAgents)
+
+  let reachableCount = 0
+  let enrolledCount = 0
+  for (const agent of agents) {
+    if (agent.reachable) reachableCount++
+    if (agent.enrolled) enrolledCount++
+  }
+
+  return { agents, reachableCount, enrolledCount, peersFound: peers.length }
+}
+
+/**
+ * Formats tailnet discovery as ANSI rows matching the TUI design.
+ *
+ * Per peer: hostname, address, whether `/health` answered, the id it claimed,
+ * how much work it accepts, and whether this host already trusts it. The id
+ * and the enrolment badge are rendered side by side precisely so an operator
+ * can see the mismatch case — a node that answers but is not enrolled, or one
+ * that is enrolled under a different id than the address it was reached at.
+ */
+export function renderAgentDiscoveryProbe(result: AgentDiscoveryResult): string {
+  const { cyan, emerald, amber, dim, bold, reset } = BRAND_COLORS
+  const lines: string[] = []
+
+  lines.push(`🛰️  ${bold}Tailnet Agent Discovery${reset}`)
+  lines.push(
+    `   ${dim}${result.peersFound} peer(s) on tailnet • ${result.reachableCount} answering /health • ${result.enrolledCount} enrolled${reset}`,
+  )
+
+  if (result.agents.length === 0) {
+    lines.push(`   ${amber}▲ NO PEERS FOUND${reset} ${dim}(discovery is advisory; enter ids by hand)${reset}`)
+    return lines.join("\n")
+  }
+
+  for (const agent of result.agents) {
+    const reachBadge = agent.reachable
+      ? `${emerald}✔ REACHABLE${reset}`
+      : `${amber}▲ UNREACHABLE${reset}`
+
+    // `null` is "we were not told", which is a different fact from `false`
+    // ("told, and opencode is down"), and the badges keep them apart.
+    const opencodeBadge =
+      agent.opencodeReachable === true
+        ? `${emerald}✔ OPENCODE${reset}`
+        : agent.opencodeReachable === false
+          ? `${amber}▲ OPENCODE DOWN${reset}`
+          : `${dim}○ OPENCODE UNKNOWN${reset}`
+
+    const enrolledBadge = agent.enrolled
+      ? `${emerald}✔ ENROLLED${reset}`
+      : `${dim}○ NOT ENROLLED${reset}`
+
+    const capabilityCount = agent.capabilities.length
+    const capabilityLabel =
+      agent.reachable && capabilityCount > 0
+        ? `${cyan}${capabilityCount}${reset} ${dim}capabilit${capabilityCount === 1 ? "y" : "ies"}${reset}`
+        : `${dim}capabilities unknown${reset}`
+
+    const agentIdLabel = agent.agentId ?? `${dim}unidentified${reset}`
+
+    lines.push(`   • ${bold}${agent.hostname}${reset} ${dim}(${agent.ip})${reset}  ${reachBadge}`)
+    lines.push(
+      `      ${dim}agent_id:${reset} ${agentIdLabel}  ${dim}•${reset}  ${capabilityLabel}  ${enrolledBadge}`,
+    )
+    lines.push(`      ${opencodeBadge}`)
+  }
 
   return lines.join("\n")
 }

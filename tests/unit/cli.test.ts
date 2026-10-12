@@ -201,6 +201,33 @@ describe("cli unknown flags", () => {
     expect(exitCode).not.toBe(0)
     expect(output).toContain("unknown")
   })
+
+  it("does not reject a flag it recognises itself", async () => {
+    // Regression. `--preview` was pushed onto BOTH `knownFlags` and
+    // `unknownFlags`, so the guard above rejected `aibr bundle --preview`
+    // before the bundle branch could read it: a documented, implemented flag
+    // that was unreachable in every released version. Asserting on the error
+    // TEXT rather than the exit code, because the bundle branch's own
+    // "profile is required" failure is a different nonzero path and would
+    // otherwise make this test pass for the wrong reason.
+    const { output } = await captureRun(["bundle", "--preview", "--profile", "p"])
+
+    expect(output).not.toContain("unknown flag")
+    // The stronger evidence that the flag reached the bundle branch rather than
+    // merely escaping the guard: the bundle actually rendered, and named the
+    // profile we passed.
+    expect(output).toContain("Support Bundle")
+    expect(output).toContain("(p)")
+  })
+
+  it("still rejects a flag it does not recognise", async () => {
+    // The other half of the pair above: relaxing the guard for one known flag
+    // must not have relaxed it for everything.
+    const { exitCode, output } = await captureRun(["bundle", "--previewz", "--profile", "p"])
+
+    expect(exitCode).not.toBe(0)
+    expect(output).toContain("unknown flag")
+  })
 })
 
 // ── setup command ──────────────────────────────────────────────────────

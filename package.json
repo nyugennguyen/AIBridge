@@ -1,6 +1,6 @@
 {
   "name": "@nyugennguyen/aibridge",
-  "version": "2.1.5",
+  "version": "2.1.6",
   "description": "Private Tailscale bridge for OpenCode agents",
   "license": "MIT",
   "type": "module",
@@ -33,10 +33,12 @@
     "test:integration": "vitest run tests/integration",
     "test:watch": "vitest",
     "test:installer": "shellcheck scripts/install.sh && bash -n scripts/install.sh && vitest run tests/unit/installer",
-    "release:check": "bun install --frozen-lockfile && bun run build && bun test && bun run typecheck && shellcheck scripts/install.sh && bash -n scripts/install.sh && bun dist/cli.js --help && bun pm pack --dry-run",
+    "contracts:check": "command -v cargo >/dev/null 2>&1 || { echo 'contracts:check requires a Rust toolchain: router/src/contracts.rs and crates/aibr-ipc/src/contracts.rs are GENERATED from contracts/v1 and cannot be verified with Bun alone.' >&2; exit 1; }; bun run generate:contracts && bun run generate:parity-vector && { git diff --exit-code contracts/ router/src/contracts.rs crates/aibr-ipc/src/contracts.rs router/tests/parity-vector.json; } && { untracked=$(git status --porcelain contracts/ router/src/contracts.rs crates/aibr-ipc/src/contracts.rs router/tests/parity-vector.json | rg '^\\?\\?'); if [ -n \"$untracked\" ]; then echo \"contracts:check found generated artefacts that are not committed:\" >&2; echo \"$untracked\" >&2; exit 1; fi; }",
+    "release:check": "bun install --frozen-lockfile && bun run build && bun test && bun run typecheck && shellcheck scripts/install.sh && bash -n scripts/install.sh && bun run contracts:check && bun dist/cli.js --help && bun pm pack --dry-run",
     "generate:parity-vector": "tsx scripts/generate-parity-vector.ts",
     "package:binaries": "tsx scripts/package-binaries.ts"
   },
+  "_contractsCheckWhy": "contracts/v1/*.schema.json, router/src/contracts.rs, crates/aibr-ipc/src/contracts.rs and router/tests/parity-vector.json are COMMITTED generated artefacts, which is what makes them reviewable in a pull request and also what makes a hand edit indistinguishable from a stale one. .github/workflows/ci.yml has run the regenerate-and-diff step since ADR 0008 \u00a72.3; release:check did not, so a stale contracts/v1/bridge-config.schema.json once shipped while the local gate was green. `contracts:check` is the local half of that step, which is what makes the local gate the same gate CI runs. generate:parity-vector is included because it needs no Rust and asserts that the freshly generated schemas still accept every canonical fixture in tests/contracts/examples/ -- the cheap half of the cross-language check, before cargo test makes the same claim about Rust -- and its vector is diffed as well, which is a superset of the CI step. Deliberately still CI-only: cargo fmt/clippy/test --workspace, which are lint and unit gates rather than artefact-drift gates.",
   "dependencies": {
     "@fastify/websocket": "11.3.1",
     "@opencode-ai/sdk": "1.17.7",

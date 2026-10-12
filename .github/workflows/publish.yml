@@ -29,6 +29,26 @@ jobs:
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
 
+      - name: Install Rust toolchain
+        # `bun run release:check` runs `contracts:check`, which regenerates the
+        # contract artefacts and refuses to pass while the committed copies
+        # disagree. `router/src/contracts.rs` and `crates/aibr-ipc/src/contracts.rs`
+        # are emitted by `cargo run -p aibr-contract-gen`, so the gate needs
+        # cargo -- without this step the release either fails on "cargo: command
+        # not found" or, worse, the check is dropped to keep the release green.
+        #
+        # `@master` + an explicit `toolchain:` mirrors the pairing in
+        # `.github/workflows/milestone-7.yml`, and the channel matches the one
+        # `rust-toolchain.toml` pins in the tree. Leaving it to `@stable` builds
+        # the artefacts with a different compiler than every other job does,
+        # which is a drift that only shows up as an unexplainable diff.
+        #
+        # No `targets:` here: this step only compiles a generator for the host,
+        # unlike the musl matrix.
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.99.0
+
       - name: Read package manifest
         id: package
         run: echo "manifest=$(jq -c . package.json)" >> "$GITHUB_OUTPUT"

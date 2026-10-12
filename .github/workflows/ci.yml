@@ -106,6 +106,16 @@ jobs:
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
 
+      # `release:check` runs `contracts:check`, which regenerates the contract
+      # artefacts and refuses to pass while the committed copies disagree.
+      # `router/src/contracts.rs` and `crates/aibr-ipc/src/contracts.rs` are
+      # emitted by `cargo run -p aibr-contract-gen`, so the release validation
+      # needs cargo. Mirrors the same step in `publish.yml`.
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.99.0
+
       - name: Check and publish package if version bumped
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

@@ -320,14 +320,19 @@ pub fn build(state: AppState) -> Router {
 ///
 /// # It does not call opencode
 ///
-/// The engine's version returns `{"ok": true, "opencode": await health()}`
-/// ([`src/server/routes/health.ts:5`](../../src/server/routes/health.ts)), which
-/// makes a liveness probe depend on a second process being up. That is the right
-/// answer for a process that *is* the bridge. It is the wrong answer for the
+/// The engine's version returns `ok` plus the result of asking `opencode` for its
+/// health ([`src/server/routes/health.ts`](../../src/server/routes/health.ts)),
+/// which makes a liveness probe depend on a second process being up. That is the
+/// right answer for a process that *is* the bridge. It is the wrong answer for the
 /// component that will sit in front of it: `aibr serve` being unreachable and
 /// `opencode serve` being unreachable are different failures with different
 /// responses, and collapsing them into one `ok: false` tells a supervisor to restart
 /// the wrong process.
+///
+/// The engine also reports `agent_id` and `capabilities` on the same
+/// unauthenticated route, so a peer can prove which node it reached; this route
+/// stays behind the bearer for the reasons recorded there and in
+/// [`src/server/routes/health.ts`](../../src/server/routes/health.ts).
 ///
 /// So this reports **the router's own liveness** — that it is bound, that its
 /// runtime is scheduling, that its listening socket is accepting — and nothing else.

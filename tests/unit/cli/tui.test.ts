@@ -1,4 +1,8 @@
-import { describe, expect, it } from "vitest"
+import { mkdtempSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join, resolve } from "node:path"
+
+import { afterEach, describe, expect, it } from "vitest"
 import { resolveManagerPluginPath, runTuiCommand } from "../../../src/cli/tui.js"
 import type { ProcessRunner, ProcessResult } from "../../../src/host/types.js"
 
@@ -23,6 +27,20 @@ class FakeProcessRunner implements ProcessRunner {
     }
     return { exitCode: 0, stdout: "", stderr: "" }
   }
+}
+
+const tempManagerDirs: string[] = []
+
+afterEach(() => {
+  for (const dir of tempManagerDirs.splice(0)) {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+function makeTempManagerDir(): string {
+  const dir = mkdtempSync(join(tmpdir(), "aibr-manager-"))
+  tempManagerDirs.push(dir)
+  return dir
 }
 
 describe("CLI aibr tui cutover", () => {
@@ -83,11 +101,12 @@ describe("CLI aibr tui cutover", () => {
       output += data
     }
 
+    const managerPath = makeTempManagerDir()
     const exitCode = await runTuiCommand({
       profile: "default",
       runner,
       writer,
-      managerPath: "/Users/mac/Projects/aibr-manager",
+      managerPath,
     })
 
     expect(exitCode).toBe(0)
@@ -101,7 +120,7 @@ describe("CLI aibr tui cutover", () => {
       (cmd) => cmd[0] === "herdr" && cmd[1] === "plugin" && cmd[2] === "link",
     )
     expect(linkCall).toBeDefined()
-    expect(linkCall?.[3]).toBe("/Users/mac/Projects/aibr-manager")
+    expect(linkCall?.[3]).toBe(resolve(managerPath))
   })
 
   it("fails with clear error if herdr plugin link fails", async () => {
@@ -134,7 +153,7 @@ describe("CLI aibr tui cutover", () => {
       profile: "default",
       runner,
       writer,
-      managerPath: "/Users/mac/Projects/aibr-manager",
+      managerPath: makeTempManagerDir(),
     })
 
     expect(exitCode).toBe(1)

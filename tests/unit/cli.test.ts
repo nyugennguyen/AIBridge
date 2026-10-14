@@ -1,3 +1,7 @@
+import { mkdtempSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+
 import { describe, expect, it } from "vitest"
 import {
   runCli,
@@ -679,28 +683,40 @@ describe("cli tui", () => {
   })
 
   it("links manager plugin when Herdr is present", async () => {
-    const fakeRunner: ProcessRunner = {
-      exec: async (cmd: readonly string[]) => {
-        if (cmd[0] === "which" && cmd[1] === "herdr") {
-          return { exitCode: 0, stdout: "/usr/local/bin/herdr", stderr: "" }
-        }
-        if (cmd[0] === "herdr" && cmd[1] === "api" && cmd[2] === "schema") {
-          return { exitCode: 0, stdout: JSON.stringify({ capabilities: { input_fencing: true, first_class_role: true } }), stderr: "" }
-        }
-        if (cmd[0] === "herdr" && cmd[1] === "plugin" && cmd[2] === "link") {
-          return { exitCode: 0, stdout: "linked", stderr: "" }
-        }
-        return { exitCode: 0, stdout: "", stderr: "" }
-      },
+    const managerPath = mkdtempSync(join(tmpdir(), "aibr-manager-"))
+    const previous = process.env.AIBRIDGE_MANAGER_PLUGIN_PATH
+    process.env.AIBRIDGE_MANAGER_PLUGIN_PATH = managerPath
+    try {
+      const fakeRunner: ProcessRunner = {
+        exec: async (cmd: readonly string[]) => {
+          if (cmd[0] === "which" && cmd[1] === "herdr") {
+            return { exitCode: 0, stdout: "/usr/local/bin/herdr", stderr: "" }
+          }
+          if (cmd[0] === "herdr" && cmd[1] === "api" && cmd[2] === "schema") {
+            return { exitCode: 0, stdout: JSON.stringify({ capabilities: { input_fencing: true, first_class_role: true } }), stderr: "" }
+          }
+          if (cmd[0] === "herdr" && cmd[1] === "plugin" && cmd[2] === "link") {
+            return { exitCode: 0, stdout: "linked", stderr: "" }
+          }
+          return { exitCode: 0, stdout: "", stderr: "" }
+        },
+      }
+
+      const { exitCode, output } = await captureRun(["tui", "--profile", "dev"], {
+        processRunner: fakeRunner,
+      })
+
+      expect(exitCode).toBe(0)
+      expect(output).toContain("AIBridge Manager plugin linked successfully")
+      expect(output).toContain("To open the manager inside Herdr:")
+    } finally {
+      if (previous === undefined) {
+        delete process.env.AIBRIDGE_MANAGER_PLUGIN_PATH
+      } else {
+        process.env.AIBRIDGE_MANAGER_PLUGIN_PATH = previous
+      }
+      rmSync(managerPath, { recursive: true, force: true })
     }
-
-    const { exitCode, output } = await captureRun(["tui", "--profile", "dev"], {
-      processRunner: fakeRunner,
-    })
-
-    expect(exitCode).toBe(0)
-    expect(output).toContain("AIBridge Manager plugin linked successfully")
-    expect(output).toContain("To open the manager inside Herdr:")
   })
 
   it("fails with a clear actionable error when Herdr is absent", async () => {

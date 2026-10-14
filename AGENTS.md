@@ -1,43 +1,99 @@
 # AIBridge - Agent Instructions
 
-TypeScript POC connecting opencode agents across machines via Tailscale.
+Distributed multi-agent orchestration runtime connecting OpenCode, Claude Code, and Codex agents across machines via Tailscale mesh networking, governed by an event-sourced kernel, versioned charters, immutable safety policies, and Herdr workspace presentation.
 
 ## Commands
 
 ```bash
-bun install          # install deps
-bun run dev          # dev server (tsx src/index.ts)
-bun test             # run all tests (vitest run)
-bun run typecheck    # tsc --noEmit
-bun run build        # tsc to dist/
-```
+# Dependencies & Build
+bun install                  # install dependencies
+bun run build                # compile TypeScript to dist/ (tsc -p tsconfig.build.json)
+bun run typecheck            # typecheck without emit (tsc -p tsconfig.json --noEmit)
 
-Run a single test file: `bun test tests/unit/security/auth-provider.test.ts`
+# Development & Server
+bun run dev                  # start development bridge server (tsx src/index.ts)
+bun run start                # run compiled bridge server from dist/ (bun dist/index.js)
+bun run aibr -- <args>       # run local CLI entrypoint (bun src/cli.ts)
+
+# Testing
+bun test                     # run all tests via vitest
+bun run test:unit            # run unit tests only (tests/unit)
+bun run test:integration     # run integration tests only (tests/integration)
+bun run test:installer       # shellcheck, bash syntax, and installer tests
+
+# Run a single test file
+bun test tests/unit/orchestration/roundtable.test.ts
+bun test tests/integration/herdr-roundtable.test.ts
+
+# Code Generation & Parity Checks
+bun run generate:contracts   # regenerate JSON schemas and Rust contracts
+bun run contracts:check      # verify parity between TS schemas, JSON schemas, and Rust crates
+
+# Release Verification Gate
+bun run release:check        # full pre-release gate (frozen install, build, test, typecheck, lint, pack)
+```
 
 ## Architecture
 
-Fastify HTTP bridge on port 8787, talks to local `opencode serve` on port 4096.
+The system coordinates multi-agent workloads across machines with a strict separation of concerns:
+**Herdr owns the terminal; the AIBridge kernel owns the intent.**
 
 ```
 src/
-  server/       - Fastify app + routes (trigger, report, jobs, health)
-  config/       - Zod schemas (schemas.ts), types (types.ts), loader
-  security/     - Bearer auth, source authorization, project allowlist
-  jobs/         - JobManager + JsonFileJobStore (file-backed in .aibridge/jobs/)
-  opencode/     - SDK client adapter, session monitor, permission policy
-  planning/     - Plan approval provider
-  callback/     - Report callback reporter
-  registry/     - Agent registry + router
+  orchestration/   - Kernel: Event store (SqliteEventStore), coordinator, charter repository
+                     & proposal lifecycle, RoleAssignment & RoleBinder, advisory roundtable
+                     deliberation, fan-out scheduler, policy & immutable core validator
+  mesh/            - Distributed mesh protocol: 11 record types, controller leases, epochs,
+                     SSE total-order event gateway, terminal WebSocket gateway, in/outbox
+  notifications/   - Advisory-only notification bus, store, quieting rules, and orchestration
+                     event consumer (zero upward dependencies, isolated per ADR 0007 §17)
+  terminal/        - TerminalBackend abstraction: TmuxTerminalBackend (headless VPS / default)
+                     and HerdrTerminalBackend (interactive Herdr workstation integration)
+  ingress/         - Durable ingress admission queue, commit-before-202 WAL, router client
+  rules/           - Layered rule engine, expression evaluator, SAFETY_FLOOR, limit checks
+  budgets/         - Budget ledgers tracking agent concurrency and fan-out as separate counters
+  memory/          - Scoped memory storage, redaction pipelines (secret scrub), write-back
+  runtime/         - RoleBinder (deterministic prompt compile), runtime adapters (OpenCode,
+                     Claude Code, Codex), capability intersection, conformance kit
+  context/         - Deterministic context assembler and workspace isolation auditor
+  server/          - Fastify HTTP bridge (port 8787), SSE streams, routes (trigger, report,
+                     jobs, health, orchestration, charter, roundtable, discovery)
+  security/        - Bearer auth (BearerAuthProvider, OpenAuthProvider), source authorization,
+                     project allowlists, actor claims, operator tokens (AIBRIDGE_OPERATOR_TOKEN)
+  config/          - Zod schemas (schemas.ts), inferred types (types.ts), profile loader
+  host/            - Host environment probes, binary detection, platform supervisor generators
+  cli/             - CLI command implementations (setup wizard, verify, discover, doctor)
+  jobs/            - JobManager, JsonFileJobStore (file-backed in .aibridge/jobs/)
+  opencode/        - Legacy OpenCode SDK adapter, session monitor, permission policies
+  planning/        - Plan approval provider
+  callback/        - Report callback reporter and egress outbox
+  registry/        - Mesh-aware agent registry and capability router
+  diagnostics/     - Diagnostics bundle generator and system health probes
 ```
 
-Each module has `types.ts` (interfaces), implementation files, and mirrors in `tests/unit/`.
+### Rust Workspace (`crates/` and `router/`)
+
+- `router/` — High-performance polyglot ingress router (`aibr-router`) built in Rust for sub-millisecond commit-before-202 admission.
+- `crates/aibr-ipc` — Wire contracts (generated from `src/ipc/schemas.ts`), 4-byte framing, and Unix domain socket transport.
+- `crates/aibr-pty` — Headless PTY child process supervision using `portable-pty`.
+- *(Note: `crates/aibr-tui` and `src/tui/` are retired in Phase 6 in favor of the Herdr manager plugin).*
+
+### Sibling Repositories & Presentation
+
+- **Herdr Fork (`herdrdev/herdr` branch `aibr-orchestration`)**: Thin fork providing F1 atomic input-ownership fencing (`pane.claim_input` / `pane.release_input`) and F2 first-class `role` fields on pane/agent records.
+- **`aibr-manager`**: Herdr plugin pane (Bun + OpenTUI) embedding Role Grid, Charter Editor, Roundtable Live Transcript, Multi-Machine Grid, and Approval Queue.
+- **`aibr-herdr-bridge`**: Herdr plugin subscribing to remote Tailscale mesh nodes and projecting remote agents into the local Herdr workspace.
 
 ## Key Patterns
 
 - **ESM only**: `"type": "module"`. All local imports MUST use `.js` extension: `import { foo } from "./bar.js"`.
 - **Zod-first config**: Types are inferred from Zod schemas in `config/schemas.ts`, not hand-written. `config/types.ts` re-exports `z.infer<>` types.
-- **Interface adapters**: External services (opencode SDK, fetch) are wrapped behind interfaces defined in `types.ts`. Tests use fakes (see `FakeOpencodeClient` in `tests/integration/fixtures.ts`).
-- **Dependency injection**: `createApp()` takes `AppDependencies` object. No global state in routes.
+- **Kernel as Single Source of Truth**: All orchestration lifecycle changes are committed to the append-only event store (`SqliteEventStore`). External tools, TUIs, and presentation plugins consume read-only projections from the total-order SSE gateway.
+- **The Immutable Core**: `assertCharterDoesNotRelaxCore` strictly refuses any charter proposal attempting to modify the safety floor, input fencing, security perimeter, advisory roundtable invariant, budget limits, or kernel authority.
+- **Advisory-Only Deliberation & Notifications**: Roundtable deliberations and notifications are strictly advisory. `roundtable.closed` appears in zero `COMMAND_EVENT_ALLOWLIST` entries; deliberation produces recommendations, never direct state transitions. Notifications never throw into or branch orchestration logic.
+- **Deterministic Prompt & Capability Compilation**: Prompts are deterministically compiled and digest-stamped: $\text{Charter} + \text{primaryRole} + \sum\text{secondaryRole.addenda} + \text{policy} + \text{taskPrompt}$. Capability envelopes enforce strict intersection ($\text{allowed} \cap \text{roleAllowed} \cap \neg\text{denied}$).
+- **Interface adapters**: External services (runtimes, terminal backends, network probes) are wrapped behind interfaces defined in `types.ts`. Tests use fakes.
+- **Dependency injection**: `createApp()` takes an `AppDependencies` object. No global state in routes.
 - **Fastify inject**: Integration tests use `app.inject()` — no real HTTP server needed.
 
 ## Debugging
@@ -50,27 +106,30 @@ where the docs and the source disagree — commands the runbook documents that d
 
 ## Testing
 
-- Unit tests: `tests/unit/{module}/` — test individual classes/functions in isolation.
-- Integration tests: `tests/integration/` — test full request flows through Fastify routes.
-- Test helpers: `tests/integration/fixtures.ts` has `buildTestApp()`, `testConfig()`, `validTrigger()`.
-- Unit test fixtures: `tests/unit/jobs/fixtures.ts` has shared job test data.
+- **Unit tests**: `tests/unit/{module}/` — test individual modules, aggregators, policies, and algorithms in isolation.
+- **Integration tests**: `tests/integration/` — test end-to-end flows through Fastify routes via `app.inject()`, including roundtable loops and mesh relays.
+- **Contract parity tests**: `tests/contracts/` — verify schema parity between TypeScript schemas (`src/config/schemas.ts`, `src/orchestration/schemas.ts`), generated JSON Schemas (`contracts/v1/`), and Rust contracts (`router/src/contracts.rs`, `crates/aibr-ipc/src/contracts.rs`).
+- **Security tests**: `tests/security/` — verify token redaction pipelines, secret filtering (`canary-token-audit.test.ts`), and permission boundaries.
+- **Test helpers**: `tests/integration/fixtures.ts` has `buildTestApp()`, `testConfig()`, `validTrigger()`.
 
-## Config
+## Config & Environment
 
-JSON config files in `config/`. Two example configs: `dev-main.example.json`, `test-vps.example.json`.
+JSON config files in `config/` or stored in platform profile directories via `aibr setup`. Example configs: `dev-main.example.json`, `test-vps.example.json`.
 
 Required env vars at runtime:
 - `AIBRIDGE_AGENT_ID` — this machine's agent identifier
 - `AIBRIDGE_CONFIG` — path to config JSON
 - `OPENCODE_SERVER_PASSWORD` — for opencode serve auth
+- `AIBRIDGE_OPERATOR_TOKEN` — operator credential token granting user-kind `actor` claims for charter approval authority, human roundtable injection, and emergency intervention
 
 ## Operational
 
-- Process management via tmux. `scripts/tmux-start.sh` starts both opencode serve and aibridge.
-- Job state persisted as JSON files in `.aibridge/jobs/` (gitignored).
+- Process management: headless via `tmux` or interactive via Herdr workspace manager. `scripts/tmux-start.sh` starts background services for headless environments.
+- Terminal backend: selected via `terminal.backend` in config (`"tmux"` for headless VPS nodes, `"herdr"` for interactive operator workstations).
+- Presentation: `aibr-tui` is retired; `aibr tui` checks Herdr availability and launches/links the `aibr-manager` Herdr plugin.
+- Job state persisted as JSON files in `.aibridge/jobs/` (gitignored), with orchestration state managed in SQLite event stores.
 - Bridge port (8787) must be Tailscale-only. Never expose opencode serve publicly.
 - opencode serve must use port 4096 explicitly.
-
 
 ## Release Procedure & Automated CI/CD Publishing
 

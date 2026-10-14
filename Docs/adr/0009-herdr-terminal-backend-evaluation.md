@@ -1,12 +1,17 @@
 # ADR 0009: Herdr Terminal Backend Experiment and Evaluation
 
-- **Status:** Evaluated / DEFERRED for Production Inclusion
-- **Date:** 2026-10-05
+- **Status:** SUPERSEDED by [ADR 0011: Herdr-Orchestrated Multi-Agent Architecture](./0011-herdr-orchestration-architecture.md) (formerly: Evaluated / DEFERRED for Production Inclusion)
+- **Date:** 2026-10-05 (Superseded: 2026-10-14)
 - **Authors:** AIBridge Architecture & Hardening Team
 - **Deciders:** Core Engineering Team, Release Gate
 - **Related Milestones:** Milestone 8 (M8.8), Milestone 4 (Mesh), Milestone 7 (Polyglot Ingress)
 - **Supersedes / Amends:** N/A (Herdr evaluated as optional `TerminalBackend`)
+- **Superseded By:** [ADR 0011: Herdr-Orchestrated Multi-Agent Architecture](./0011-herdr-orchestration-architecture.md)
 
+> **SUPERSEDED NOTICE (2026-10-14):**
+> This ADR is superseded by **[ADR 0011: Herdr-Orchestrated Multi-Agent Architecture](./0011-herdr-orchestration-architecture.md)**.
+> The initial evaluation deferred Herdr because it assumed Herdr would act as a headless `TerminalBackend` owning processes that AIBridge would drive headlessly without human presence, creating impedance mismatches and competing state authorities.
+> In ADR 0011, this relationship is inverted: Herdr serves as the presentation substrate and operator TUI for human-visible agent sessions, while the AIBridge kernel remains the sole source of truth and state authority. ADR 0009's Revisit Condition #1 ("Herdr publishes a stable, versioned daemon IPC protocol with atomic input-ownership fencing primitives") was satisfied via the thin Herdr fork (`herdrdev/herdr` branch `aibr-orchestration`) implementing atomic input-ownership fencing (`F1`) and first-class `role` tagging (`F2`).
 ---
 
 ## 1. Context and Objective

@@ -1,8 +1,10 @@
 # Changelog
 
-## [Unreleased]
+## [2.2.0] - 2026-10-14
 
-### Added
+### Setup, Peer Discovery, & Security (Part B)
+
+#### Added
 
 - **Optional bearer authentication.** `security.auth_mode` accepts `"bearer-token"` (default, unchanged behaviour) or `"none"`. In `none` mode `/trigger` and `/report` accept unauthenticated requests, no `bearer_token` secret is written, and callbacks are delivered with the `Authorization` header omitted rather than sent as a malformed one. `aibr setup` gains a third option at Step 2 (`none`), and refuses to author it unless the bridge is bound to a Tailscale CGNAT address (`100.64.0.0/10`) with the backend running, or when a `bearer_token` secret is already on disk that would be silently ignored. A bare `n` at Step 2 keeps its existing meaning (paste your own token); only an explicit `none` disables authentication.
 - **Fail-closed auth selection.** `createAuthProvider(mode, token)` in `src/security/auth-provider.ts` throws rather than degrading when a `bearer-token` profile has no secret, so a missing token file cannot become an open bridge. `BearerAuthProvider` now also refuses an empty token at construction.
@@ -14,12 +16,12 @@
 - **Informational discovery check in `aibr verify`.** A new `tailscale-discovery` check reports "N peers reachable, M enrolled", with enrolled peers named in the detail string (capped at five). It is never a `fail`: no Tailscale, an empty tailnet, or all peers offline all pass, because a machine alone on its tailnet is a normal single-machine install. It is a `warn` only when reachable peers are none of them enrolled, or when the probe could not run at all.
 - **Reachability is not authentication, stated at every surface.** Every discovery projection — the wizard widget, `aibr discover`, and the `verify` check — carries an explicit caveat that a peer answering `/health` is not enrolled or trusted. Real trust stays on the mesh identity path (`src/mesh/identity/`: ed25519 node keys, enrollment codes, peer pins), and no route accepts a caller-supplied `agent_id` as proof of identity. `tailscale status --json` is never printed raw, and no `tskey-` node-enrollment credential is surfaced by any of these paths — a peer whose only self-description is a credential-shaped string is reported as unidentified.
 
-### Fixed
+#### Fixed
 
 - **`aibr bundle --preview` was rejected as an unknown flag.** `parseArgs` pushed `--preview` onto both `knownFlags` and `unknownFlags`, so the unknown-flag guard rejected the flag before the bundle branch could read it — a documented, implemented flag that was unreachable in every released version. Genuinely unknown flags are still rejected.
 - **The `tskey-` guard had two copies.** `aibr discover` and `aibr setup` each carried their own `TSKEY_PREFIX` and scrub function. Duplicated redaction logic reads as deliberate in either copy, which is what makes it likely one is edited and the other is not. The rule now lives once in `src/cli/discovery-safety.ts` and is imported by both.
 
-### Changed
+#### Changed
 
 - `bearerToken` is nullable across `AppDependencies`, `RuntimeOptions`, `CallbackReporter.send`/`drainPending`, and `EgressOutboxStore.deliverClaimedRow`. Backwards compatible: every existing config and test still passes a real token.
 - `src/index.ts` no longer requires `AIBRIDGE_BEARER_TOKEN`, so the legacy agent-face entrypoint serves whatever `security.auth_mode` the profile declares.

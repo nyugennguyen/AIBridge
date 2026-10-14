@@ -49,7 +49,6 @@ const FORBIDDEN_IMPORTERS: readonly { directory: string; why: string }[] = [
   { directory: join(REPOSITORY_ROOT, "src/mesh"), why: "ADR 0007 section 1: the M6 modules sit ABOVE mesh, and rules -> mesh/protocol/safe-pattern is a read of a frozen protocol" },
   { directory: join(REPOSITORY_ROOT, "src/context"), why: "src/context is an M0 surface with its own attested direction, and it must not depend on M6" },
   { directory: join(REPOSITORY_ROOT, "src/application"), why: "the application service is the M0 orchestrator; M6 rules reach it through the kernel, not the other way round" },
-  { directory: join(REPOSITORY_ROOT, "src/tui"), why: "the TUI is a view over orchestration state and must not reach into an M6 engine directly" },
   { directory: join(REPOSITORY_ROOT, "src/jobs"), why: "the job subsystem is an M0 surface and predates M6 entirely" },
   { directory: join(REPOSITORY_ROOT, "src/runtime"), why: "the runtime adapter is an M0 surface; a rule must be evaluated before it reaches a runtime, not by it" },
 ]

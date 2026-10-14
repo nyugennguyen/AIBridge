@@ -1,7 +1,7 @@
 /**
  * scripts/package-binaries.ts
  *
- * Package compiled native binaries (aibr-tui and aibr-router) into per-platform
+ * Package compiled native binary (aibr-router) into per-platform
  * npm packages (@nyugennguyen/aibridge-<platform>) for distribution via npm optionalDependencies.
  */
 import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
@@ -81,25 +81,17 @@ export interface PackageResult {
 /**
  * Locate source binaries for a given target.
  */
-function findSourceBinaries(config: PlatformConfig, allowLocalRelease = false): {
-  router: string | null
-  tui: string | null
-} {
+function findSourceBinary(config: PlatformConfig, allowLocalRelease = false): string | null {
   let router: string | null = null
-  let tui: string | null = null
 
   // 1. Check dist-bin for explicit target
   const distRouter = join(DIST_BIN, `aibr-router-${config.target}`)
-  const distTui = join(DIST_BIN, `aibr-tui-${config.target}`)
   if (existsSync(distRouter)) router = distRouter
-  if (existsSync(distTui)) tui = distTui
 
   // 2. Darwin universal fallback if target-specific binary is absent
   if (config.os.includes("darwin")) {
     const universalRouter = join(DIST_BIN, "aibr-router-universal-apple-darwin")
-    const universalTui = join(DIST_BIN, "aibr-tui-universal-apple-darwin")
     if (router === null && existsSync(universalRouter)) router = universalRouter
-    if (tui === null && existsSync(universalTui)) tui = universalTui
   }
 
   // 3. Fallback to target/release if matching host platform
@@ -110,13 +102,11 @@ function findSourceBinaries(config: PlatformConfig, allowLocalRelease = false): 
 
     if (isHost) {
       const localRouter = join(ROOT, "target", "release", "aibr-router")
-      const localTui = join(ROOT, "target", "release", "aibr-tui")
       if (router === null && existsSync(localRouter)) router = localRouter
-      if (tui === null && existsSync(localTui)) tui = localTui
     }
   }
 
-  return { router, tui }
+  return router
 }
 
 /**
@@ -128,14 +118,14 @@ export function packagePlatform(
   options: { allowLocalRelease?: boolean; dryRun?: boolean } = {},
 ): PackageResult {
   const packageDir = join(PACKAGES_DIR, config.unscoped)
-  const { router, tui } = findSourceBinaries(config, options.allowLocalRelease)
+  const router = findSourceBinary(config, options.allowLocalRelease)
 
-  if (router === null || tui === null) {
+  if (router === null) {
     return {
       platform: config.name,
       packageDir,
       packaged: false,
-      reason: `Missing binary: router=${router !== null}, tui=${tui !== null}`,
+      reason: "Missing binary: router=false",
     }
   }
 
@@ -152,13 +142,8 @@ export function packagePlatform(
 
   // Copy binaries and set executable bit
   const destRouter = join(packageDir, "bin", "aibr-router")
-  const destTui = join(packageDir, "bin", "aibr-tui")
-
   copyFileSync(router, destRouter)
   chmodSync(destRouter, 0o755)
-
-  copyFileSync(tui, destTui)
-  chmodSync(destTui, 0o755)
 
   // Copy documentation & license
   const licenseSrc = join(ROOT, "LICENSE")
@@ -178,7 +163,6 @@ export function packagePlatform(
     os: [...config.os],
     cpu: [...config.cpu],
     bin: {
-      "aibr-tui": "bin/aibr-tui",
       "aibr-router": "bin/aibr-router",
     },
     files: ["bin", "README.md", "LICENSE"],

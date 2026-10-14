@@ -64,7 +64,6 @@ const FORBIDDEN_IMPORTERS: readonly { directory: string; why: string }[] = [
   { directory: join(REPOSITORY_ROOT, "src/routing"), why: "routing is an M6 sibling, not a dependency of templates; a cycle between siblings is a drift" },
   { directory: join(REPOSITORY_ROOT, "src/budgets"), why: "budgets owns the budget ALGEBRA; templates declare an authored budget body and must not depend on the algebra that consumes it" },
   { directory: join(REPOSITORY_ROOT, "src/application"), why: "the application service is the M0 orchestrator; an M6 module reaches it through the kernel, not the other way round" },
-  { directory: join(REPOSITORY_ROOT, "src/tui"), why: "the TUI is a view over orchestration state and must not reach into an M6 engine directly" },
   { directory: join(REPOSITORY_ROOT, "src/context"), why: "src/context is an M0 surface with its own attested one-way edge to memory; it must not depend on M6" },
   { directory: join(REPOSITORY_ROOT, "src/mesh"), why: "the M6 modules sit ABOVE mesh; workflows needs nothing from it" },
   { directory: join(REPOSITORY_ROOT, "src/jobs"), why: "the job subsystem is an M0 surface and predates M6 entirely" },

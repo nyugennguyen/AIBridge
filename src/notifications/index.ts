@@ -23,15 +23,14 @@
  * pipeline in the order the data flows, and a name collision introduced later would
  * be visible against the pipeline rather than against the alphabet.
  *
- * WHAT IS DELIBERATELY NOT RE-EXPORTED: anything from `src/tui/`. The notice shape
- * this module produces is `string | null`, which is structurally
- * `TuiUiState.notice`, and the M6.8 integration is an import in `src/tui/` of
- * `src/notifications/` — the correct direction. Re-exporting a TUI type here would
- * make the dependency edge point the wrong way and would be a cycle the moment the
- * shell imported this barrel. See `tui-adapter.ts` S4.
+ * WHAT IS DELIBERATELY NOT RE-EXPORTED: presentation-layer state. The notice shape
+ * this module produces is `string | null`, which is a standalone primitive shape.
+ * Re-exporting an external UI type here would make the dependency edge point the
+ * wrong way. See `tui-adapter.ts` S4.
  */
 
 export * from "./types.js"
 export * from "./store.js"
 export * from "./bus.js"
 export * from "./tui-adapter.js"
+export * from "./consumer.js"

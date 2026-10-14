@@ -4,6 +4,7 @@ import {
   type CliDeps,
   type CliExitCode,
 } from "../../src/cli.js"
+import type { ProcessRunner } from "../../src/host/types.js"
 
 // ── Fake deps ──────────────────────────────────────────────────────────
 
@@ -32,6 +33,7 @@ function fakeDeps(overrides?: {
   updateRunner?: CliDeps["runUpdate"]
   opencodeRunner?: CliDeps["runOpencode"]
   tuiRunner?: NonNullable<CliDeps["runTui"]>
+  processRunner?: CliDeps["processRunner"]
   version?: string
 }): {
   deps: CliDeps
@@ -70,6 +72,7 @@ function fakeDeps(overrides?: {
       })),
       runOpencode: overrides?.opencodeRunner ?? (async () => {}),
       runTui: overrides?.tuiRunner,
+      processRunner: overrides?.processRunner,
       version: overrides?.version ?? "1.0.0",
     },
     writer,
@@ -675,33 +678,51 @@ describe("cli tui", () => {
     expect(output).toContain("--profile")
   })
 
-  it("requires both interactive streams before creating the shell", async () => {
-    let called = false
+  it("links manager plugin when Herdr is present", async () => {
+    const fakeRunner: ProcessRunner = {
+      exec: async (cmd: readonly string[]) => {
+        if (cmd[0] === "which" && cmd[1] === "herdr") {
+          return { exitCode: 0, stdout: "/usr/local/bin/herdr", stderr: "" }
+        }
+        if (cmd[0] === "herdr" && cmd[1] === "api" && cmd[2] === "schema") {
+          return { exitCode: 0, stdout: JSON.stringify({ capabilities: { input_fencing: true, first_class_role: true } }), stderr: "" }
+        }
+        if (cmd[0] === "herdr" && cmd[1] === "plugin" && cmd[2] === "link") {
+          return { exitCode: 0, stdout: "linked", stderr: "" }
+        }
+        return { exitCode: 0, stdout: "", stderr: "" }
+      },
+    }
+
     const { exitCode, output } = await captureRun(["tui", "--profile", "dev"], {
-      isTTY: true,
-      isInputTTY: false,
-      tuiRunner: async () => { called = true; return 0 },
+      processRunner: fakeRunner,
+    })
+
+    expect(exitCode).toBe(0)
+    expect(output).toContain("AIBridge Manager plugin linked successfully")
+    expect(output).toContain("To open the manager inside Herdr:")
+  })
+
+  it("fails with a clear actionable error when Herdr is absent", async () => {
+    const fakeRunner: ProcessRunner = {
+      exec: async (cmd: readonly string[]) => {
+        if (cmd[0] === "which" && cmd[1] === "herdr") {
+          return { exitCode: 1, stdout: "", stderr: "herdr not found" }
+        }
+        return { exitCode: 0, stdout: "", stderr: "" }
+      },
+    }
+
+    const { exitCode, output } = await captureRun(["tui", "--profile", "dev"], {
+      processRunner: fakeRunner,
     })
 
     expect(exitCode).toBe(1)
-    expect(output).toContain("stdin and stdout TTYs")
-    expect(called).toBe(false)
+    expect(output).toContain("Error: Herdr is not installed or not found on PATH")
+    expect(output).toContain("brew install herdr")
   })
 
-  it("rejects non-interactive stdout before creating the shell", async () => {
-    let called = false
-    const { exitCode, output } = await captureRun(["tui", "--profile", "dev"], {
-      isTTY: false,
-      isInputTTY: true,
-      tuiRunner: async () => { called = true; return 0 },
-    })
-
-    expect(exitCode).toBe(1)
-    expect(output).toContain("stdin and stdout TTYs")
-    expect(called).toBe(false)
-  })
-
-  it("delegates a validated profile to the separately injected shell", async () => {
+  it("delegates a validated profile to the separately injected tuiRunner", async () => {
     let profile: string | undefined
     const { exitCode } = await captureRun(["tui", "--profile", "dev"], {
       tuiRunner: async (value) => { profile = value; return 0 },
@@ -710,7 +731,6 @@ describe("cli tui", () => {
     expect(exitCode).toBe(0)
     expect(profile).toBe("dev")
   })
-
   it("keeps help and version usable without TTYs", async () => {
     const help = await captureRun(["tui", "--help"], { isTTY: false, isInputTTY: false })
     const version = await captureRun(["tui", "--version"], { isTTY: false, isInputTTY: false })

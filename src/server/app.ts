@@ -7,11 +7,19 @@ import type { OpencodeClient } from "../opencode/types.js"
 import type { CallbackReporter } from "../callback/reporter.js"
 import type { TaskGraphSyncer } from "../tasks/types.js"
 import type { LegacyTranslation } from "../orchestration/legacy/translation.js"
+import type { OrchestrationCommand } from "../orchestration/types.js"
+import type { CoordinatorResult } from "../orchestration/coordinator/types.js"
 import { registerHealthRoute } from "./routes/health.js"
 import { registerJobsRoute } from "./routes/jobs.js"
 import { registerReportRoute } from "./routes/report.js"
 import { registerTriggerRoute } from "./routes/trigger.js"
+import { registerOrchestrationRoutes } from "./routes/orchestration.js"
 import type { ShadowIngressMirror } from "./shadow.js"
+import type {
+  NotificationBus,
+  NotificationStore,
+  OrchestrationNotificationConsumer,
+} from "../notifications/index.js"
 
 export interface AppDependencies {
   config: BridgeConfig
@@ -26,6 +34,17 @@ export interface AppDependencies {
    * closed if the two disagree.
    */
   bearerToken: string | null
+  /**
+   * The operator credential, or `null` when none is configured.
+   *
+   * The shared bearer secret admits PEERS (machine-to-machine callers); it
+   * carries no per-caller identity, so on its own it cannot distinguish a human
+   * operator from a peer agent. User-kind `actor` claims (charter approval and
+   * direct revision authority) therefore rest on this second secret: an
+   * authenticated state, not a self-asserted payload field (ADR 0008 §4).
+   * `null` fail-closes the authority: no caller may claim `kind: "user"`.
+   */
+  operatorToken?: string | null
   jobManager: JobManager
   opencodeClient: OpencodeClient
   callbackReporter: CallbackReporter
@@ -42,8 +61,19 @@ export interface AppDependencies {
    * whether work was NAMED, never on whether work was silently dropped.
    */
   orchestration?: {
-    readonly translation: LegacyTranslation
+    readonly translation?: LegacyTranslation
+    readonly coordinator?: {
+      submit(
+        command: OrchestrationCommand,
+      ): Promise<CoordinatorResult<{ readonly events: readonly string[]; readonly duplicate: boolean }>> | CoordinatorResult<{ readonly events: readonly string[]; readonly duplicate: boolean }>
+      submitPrompt?(
+        command: Extract<OrchestrationCommand, { type: "session.prompt" }>,
+      ): Promise<CoordinatorResult<{ readonly events: readonly string[]; readonly duplicate: boolean }>>
+    }
   }
+  readonly notificationStore?: NotificationStore
+  readonly notificationBus?: NotificationBus
+  readonly notificationConsumer?: OrchestrationNotificationConsumer
 }
 
 export function createApp(dependencies: AppDependencies): FastifyInstance {
@@ -52,5 +82,6 @@ export function createApp(dependencies: AppDependencies): FastifyInstance {
   registerTriggerRoute(app, dependencies)
   registerJobsRoute(app, dependencies)
   registerReportRoute(app, dependencies)
+  registerOrchestrationRoutes(app, dependencies)
   return app
 }

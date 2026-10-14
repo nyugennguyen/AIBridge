@@ -2,7 +2,7 @@ import { mkdtemp } from "node:fs/promises"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
 import { describe, expect, it } from "vitest"
-import { JobManager } from "../../../src/jobs/manager.js"
+import { DEPENDENCY_RESOLUTION_WINDOW_MS, JobManager } from "../../../src/jobs/manager.js"
 import { JsonFileJobStore } from "../../../src/jobs/store.js"
 import { trigger, triggerWithDeps } from "./fixtures.js"
 
@@ -205,19 +205,206 @@ describe("JobManager", () => {
       expect(job.error).toContain("timed_out")
     })
 
-    it("keeps job blocked when dependency is missing (not in store)", async () => {
+    it("keeps job blocked inside resolution window when dependency is missing (not in store)", async () => {
       const jobs = await manager()
       const blocked = await jobs.createJob(
         triggerWithDeps(["nonexistent_dep"], { job_id: "blocked_missing" }),
         "2026-06-15T00:00:00.000Z",
       )
-      await jobs.markBlocked(blocked.id, ["nonexistent_dep"])
+      await jobs.markBlocked(blocked.id, ["nonexistent_dep"], "2026-06-15T00:00:00.000Z")
 
-      const unblocked = await jobs.unblockDependents("nonexistent_dep")
+      // Evaluated inside window via sweepExpiredJobs
+      const sweptInside = await jobs.sweepExpiredJobs("2026-06-15T00:00:10.000Z")
+      expect(sweptInside).toHaveLength(0)
+      expect((await jobs.getJob(blocked.id)).status).toBe("blocked")
+
+      // Evaluated inside window via unblockDependents of an unrelated job
+      const unrelated = await jobs.createJob(trigger({ job_id: "unrelated" }), "2026-06-15T00:00:00.000Z")
+      await jobs.markCompleted(unrelated.id, "2026-06-15T00:00:10.000Z")
+      const unblocked = await jobs.unblockDependents(unrelated.id, "2026-06-15T00:00:10.000Z")
       expect(unblocked).toHaveLength(0)
+      expect((await jobs.getJob(blocked.id)).status).toBe("blocked")
+    })
 
-      const job = await jobs.getJob(blocked.id)
-      expect(job.status).toBe("blocked")
+    it("fails job past resolution window via sweepExpiredJobs when dependency is missing", async () => {
+      const jobs = await manager()
+      const blocked = await jobs.createJob(
+        triggerWithDeps(["nonexistent_dep"], { job_id: "blocked_missing_sweep" }),
+        "2026-06-15T00:00:00.000Z",
+      )
+      await jobs.markBlocked(blocked.id, ["nonexistent_dep"], "2026-06-15T00:00:00.000Z")
+
+      // Past window: blockedAt (0s) + DEPENDENCY_RESOLUTION_WINDOW_MS (30s) + 1s = 31s
+      const pastWindowTime = new Date(Date.parse("2026-06-15T00:00:00.000Z") + DEPENDENCY_RESOLUTION_WINDOW_MS + 1000).toISOString()
+      const swept = await jobs.sweepExpiredJobs(pastWindowTime)
+
+      expect(swept).toHaveLength(1)
+      expect(swept[0].id).toBe(blocked.id)
+      expect(swept[0].status).toBe("failed")
+      expect(swept[0].error).toContain("missing")
+
+      const stored = await jobs.getJob(blocked.id)
+      expect(stored.status).toBe("failed")
+      expect(stored.error).toBe("Dependency nonexistent_dep missing")
+    })
+
+    it("fails job past resolution window via late recordRemoteReport when local dependency is missing", async () => {
+      const jobs = await manager()
+      const blocked = await jobs.createJob(
+        triggerWithDeps(["nonexistent_dep"], { job_id: "blocked_mixed_deps" }),
+        "2026-06-15T00:00:00.000Z",
+      )
+      await jobs.markBlocked(
+        blocked.id,
+        ["nonexistent_dep", { agent_id: "test-vps", job_id: "remote_1" }],
+        "2026-06-15T00:00:00.000Z",
+      )
+
+      const pastWindowTime = new Date(Date.parse("2026-06-15T00:00:00.000Z") + DEPENDENCY_RESOLUTION_WINDOW_MS + 5000).toISOString()
+      const unblocked = await jobs.recordRemoteReport(
+        {
+          source_agent_id: "test-vps",
+          job_id: "remote_1",
+          status: "completed",
+        },
+        pastWindowTime,
+      )
+
+      expect(unblocked).toHaveLength(0)
+      const stored = await jobs.getJob(blocked.id)
+      expect(stored.status).toBe("failed")
+      expect(stored.error).toBe("Dependency nonexistent_dep missing")
+    })
+
+    it("keeps job waiting when local dependency is genuinely pending (non-terminal)", async () => {
+      const jobs = await manager()
+      const dep = await jobs.createJob(trigger({ job_id: "pending_dep" }), "2026-06-15T00:00:00.000Z")
+      await jobs.markRunning(dep.id, "2026-06-15T00:00:01.000Z")
+
+      const blocked = await jobs.createJob(triggerWithDeps([dep.id], { job_id: "blocked_on_running" }), "2026-06-15T00:00:02.000Z")
+      await jobs.markBlocked(blocked.id, [dep.id], "2026-06-15T00:00:02.000Z")
+
+      // Even past the resolution window, a genuinely pending dep keeps the job waiting
+      const pastWindowTime = new Date(Date.parse("2026-06-15T00:00:02.000Z") + DEPENDENCY_RESOLUTION_WINDOW_MS + 10000).toISOString()
+      const swept = await jobs.sweepExpiredJobs(pastWindowTime)
+      expect(swept).toHaveLength(0)
+      expect((await jobs.getJob(blocked.id)).status).toBe("blocked")
+    })
+
+    it("fails blocked job via sweepExpiredJobs before its own timeout when local dependency has failed", async () => {
+      const jobs = await manager()
+      const dep = await jobs.createJob(trigger({ job_id: "dep_already_failed" }), "2026-06-15T00:00:00.000Z")
+      await jobs.markFailed(dep.id, "dep crashed", "2026-06-15T00:00:01.000Z")
+
+      // Job has 60s timeout; blocked on already-failed dep
+      const blocked = await jobs.createJob(
+        triggerWithDeps([dep.id], { job_id: "blocked_on_failed_dep", timeout_seconds: 60 }),
+        "2026-06-15T00:00:02.000Z",
+      )
+      await jobs.markBlocked(blocked.id, [dep.id], "2026-06-15T00:00:02.000Z")
+
+      // Swept at 10s: well before job's own 60s timeout (deadline: 02s + 60s = 62s)
+      const swept = await jobs.sweepExpiredJobs("2026-06-15T00:00:10.000Z")
+
+      expect(swept).toHaveLength(1)
+      expect(swept[0].id).toBe(blocked.id)
+      expect(swept[0].status).toBe("failed")
+      expect(swept[0].error).toBe("Dependency dep_already_failed failed")
+
+      const stored = await jobs.getJob(blocked.id)
+      expect(stored.status).toBe("failed")
+      expect(stored.error).toBe("Dependency dep_already_failed failed")
+    })
+
+    it("fails job with remote error message when remote dep has failed and local dep is missing inside window", async () => {
+      const jobs = await manager()
+      const blocked = await jobs.createJob(
+        triggerWithDeps(["nonexistent_dep"], { job_id: "blocked_remote_failed_in_window" }),
+        "2026-06-15T00:00:00.000Z",
+      )
+      await jobs.markBlocked(
+        blocked.id,
+        [
+          "nonexistent_dep",
+          { agent_id: "test-vps", job_id: "remote_failed" },
+        ],
+        "2026-06-15T00:00:00.000Z",
+      )
+
+      // Late remote report arrives INSIDE the window (5s < 30s) indicating remote dependency failed
+      const insideWindowTime = "2026-06-15T00:00:05.000Z"
+      const unblocked = await jobs.recordRemoteReport(
+        { source_agent_id: "test-vps", job_id: "remote_failed", status: "failed" },
+        insideWindowTime,
+      )
+
+      expect(unblocked).toHaveLength(0)
+      const stored = await jobs.getJob(blocked.id)
+      expect(stored.status).toBe("failed")
+      expect(stored.error).toBe("Remote dependency test-vps/remote_failed failed")
+    })
+
+    it("fails job with remote error message when remote dep has failed and local dep is missing past window", async () => {
+      const jobs = await manager()
+      const blocked = await jobs.createJob(
+        triggerWithDeps(["nonexistent_dep"], { job_id: "blocked_remote_failed_past_window" }),
+        "2026-06-15T00:00:00.000Z",
+      )
+      await jobs.markBlocked(
+        blocked.id,
+        [
+          "nonexistent_dep",
+          { agent_id: "test-vps", job_id: "remote_failed" },
+        ],
+        "2026-06-15T00:00:00.000Z",
+      )
+
+      // Late remote report arrives PAST the window (35s > 30s) indicating remote dependency failed
+      const pastWindowTime = "2026-06-15T00:00:35.000Z"
+      const unblocked = await jobs.recordRemoteReport(
+        { source_agent_id: "test-vps", job_id: "remote_failed", status: "failed" },
+        pastWindowTime,
+      )
+
+      expect(unblocked).toHaveLength(0)
+      const stored = await jobs.getJob(blocked.id)
+      expect(stored.status).toBe("failed")
+      expect(stored.error).toBe("Remote dependency test-vps/remote_failed failed")
+    })
+
+
+    it("cascades failure across dependency chain in a single sweep regardless of store order", async () => {
+      const jobs = await manager()
+      // Create B first so it precedes A in store.list()
+      const jobB = await jobs.createJob(
+        triggerWithDeps(["job_a"], { job_id: "job_b", timeout_seconds: 60 }),
+        "2026-06-15T00:00:00.000Z",
+      )
+      await jobs.markBlocked(jobB.id, ["job_a"], "2026-06-15T00:00:00.000Z")
+
+      // Create A after B; A depends on a nonexistent dep
+      const jobA = await jobs.createJob(
+        triggerWithDeps(["nonexistent_dep"], { job_id: "job_a", timeout_seconds: 60 }),
+        "2026-06-15T00:00:00.000Z",
+      )
+      await jobs.markBlocked(jobA.id, ["nonexistent_dep"], "2026-06-15T00:00:00.000Z")
+
+      // One sweep past the window
+      const pastWindowTime = new Date(Date.parse("2026-06-15T00:00:00.000Z") + DEPENDENCY_RESOLUTION_WINDOW_MS + 1000).toISOString()
+      const swept = await jobs.sweepExpiredJobs(pastWindowTime)
+
+      expect(swept).toHaveLength(2)
+      const sweptA = swept.find((j) => j.id === "job_a")
+      const sweptB = swept.find((j) => j.id === "job_b")
+      expect(sweptA?.status).toBe("failed")
+      expect(sweptA?.error).toBe("Dependency nonexistent_dep missing")
+      expect(sweptB?.status).toBe("failed")
+      expect(sweptB?.error).toBe("Dependency job_a failed")
+
+      const storedA = await jobs.getJob("job_a")
+      const storedB = await jobs.getJob("job_b")
+      expect(storedA.status).toBe("failed")
+      expect(storedB.status).toBe("failed")
     })
 
     it("returns empty array when no blocked jobs depend on completed job", async () => {

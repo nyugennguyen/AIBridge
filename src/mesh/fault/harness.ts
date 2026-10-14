@@ -476,6 +476,15 @@ function namedAggregatesOf(command: OrchestrationCommand): {
     case "session.interrupt":
     case "session.terminate":
       return { sessionId: command.payload.sessionId }
+    case "roundtable.open":
+    case "roundtable.post":
+    case "roundtable.inject_human":
+    case "roundtable.close":
+    case "charter.propose":
+    case "charter.approve":
+    case "charter.revise":
+    case "charter.reject":
+      return {}
   }
 }
 

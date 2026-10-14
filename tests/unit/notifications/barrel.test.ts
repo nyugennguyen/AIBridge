@@ -124,6 +124,12 @@ describe("the M6.9 surface is reachable through its barrel", () => {
     expect(typeof notifications.describeNotificationAudit).toBe("function")
     expect(typeof notifications.findSeededNotificationSecret).toBe("function")
   })
+  it("exports the orchestration event consumer and refusal translators", () => {
+    expect(typeof notifications.createOrchestrationNotificationConsumer).toBe("function")
+    expect(typeof notifications.orchestrationEventToNotification).toBe("function")
+    expect(typeof notifications.dispatchRefusalToNotification).toBe("function")
+  })
+
 
   it("exports the TUI adapter, the view model builder, the reducer, and the key routing", () => {
     expect(typeof notifications.createNotificationTuiAdapter).toBe("function")

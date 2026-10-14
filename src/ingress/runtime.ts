@@ -41,6 +41,14 @@ export interface RuntimeOptions {
    * either way, but only one of those looks like a bug in the log.
    */
   readonly bearerToken: string | null
+  /**
+   * The operator credential, or `null` when none is configured. Unlike the
+   * shared bearer secret (which admits peers and carries no per-caller identity),
+   * this secret is the sole basis for user-kind `actor` claims — charter approval
+   * and direct revision authority (ADR 0008 §4). `null` fail-closes that
+   * authority: no caller may claim `kind: "user"`.
+   */
+  readonly operatorToken?: string | null
   readonly environment: Record<string, string>
   readonly deps?: {
     readonly opencodeClient?: OpencodeClient

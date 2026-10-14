@@ -1,4 +1,5 @@
 import { z } from "zod"
+import { createContractError, type Result } from "./errors.js"
 import {
   APPROVAL_STATES,
   DISPATCH_STATES,
@@ -16,6 +17,7 @@ import {
   commandIdSchema,
   correlationIdSchema,
   digestSchema,
+  type Digest,
   dispatchIdSchema,
   epochSchema,
   eventIdSchema,
@@ -36,9 +38,10 @@ import {
   timestampSchema,
   userIdSchema,
 } from "./identifiers.js"
+import { digestJson } from "./digest.js"
 
 const SHORT_TEXT_MAX = 256
-const TEXT_MAX = 4_096
+export const TEXT_MAX = 4_096
 const LARGE_TEXT_MAX = 65_536
 const ARRAY_MAX = 128
 const TIMEOUT_MAX_SECONDS = 86_400
@@ -229,6 +232,7 @@ export const permissionEnvelopeSchema = z
         capabilities: capabilityListSchema,
       })
       .strict(),
+    compositionMode: z.enum(["intersection", "union"]).optional(),
   })
   .strict()
   .superRefine((permission, ctx) => {
@@ -245,6 +249,175 @@ export const permissionEnvelopeSchema = z
       }
     })
   })
+
+/**
+ * Determines whether a role's permission restrictions explicitly opt into union composition
+ * for multi-role capability envelope calculation. Default is false (intersection).
+ */
+export function isUnionOptIn(restrictions?: {
+  readonly compositionMode?: string
+  readonly [key: string]: unknown
+} | null): boolean {
+  return restrictions?.compositionMode === "union"
+}
+
+/**
+ * Error thrown when a role assignment set violates kernel invariants
+ * (e.g. primary role count, uniqueness).
+ */
+export class RoleAssignmentError extends Error {
+  readonly code = "role_assignment.invalid" as const
+  readonly category = "validation" as const
+
+  constructor(message: string) {
+    super(message)
+    this.name = "RoleAssignmentError"
+  }
+}
+
+/**
+ * Assignment of a role to an agent in a multi-role context (plan §6.2).
+ * Exactly one role in an agent's assignment set must be primary (`primary: true`).
+ * Secondary roles (`primary: false`) contribute bounded addenda instructions,
+ * not full prompt instructions.
+ */
+export const roleAssignmentSchema = z
+  .object({
+    roleId: roleIdSchema.or(shortTextSchema),
+    primary: z.boolean(),
+    addendum: z
+      .string()
+      .max(TEXT_MAX)
+      .refine(
+        (val) => Buffer.byteLength(val, "utf8") <= TEXT_MAX,
+        `Addendum must not exceed ${TEXT_MAX} bytes`,
+      )
+      .optional(),
+    version: positiveSafeIntegerSchema.optional(),
+    snapshotDigest: digestSchema.optional(),
+  })
+  .strict()
+  .superRefine((assignment, ctx) => {
+    if (assignment.primary && assignment.addendum !== undefined) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["addendum"],
+        message: "Primary role must not specify an addendum; secondary roles contribute addenda",
+      })
+    }
+  })
+
+/**
+ * Validates that an assignment set contains exactly one primary role.
+ * Throws `RoleAssignmentError` if zero or 2+ primaries are found.
+ */
+export function assertExactlyOnePrimaryRole(assignments: readonly RoleAssignment[]): void {
+  const primaryCount = assignments.filter((a) => a.primary).length
+  if (primaryCount !== 1) {
+    throw new RoleAssignmentError(
+      `Role assignments must contain exactly one primary role; found ${primaryCount}`,
+    )
+  }
+}
+
+/**
+ * Validates role assignments against all kernel invariants:
+ * - Exactly one primary role.
+ * - Unique role IDs within the assignment set.
+ */
+export function validateRoleAssignments(assignments: readonly RoleAssignment[]): Result<void> {
+  const primaryCount = assignments.filter((a) => a.primary).length
+  if (primaryCount !== 1) {
+    return {
+      ok: false,
+      error: createContractError(
+        "validation",
+        "role_assignment.invalid_primary_count",
+        `Role assignments must contain exactly one primary role; found ${primaryCount}`,
+      ),
+    }
+  }
+  const roleIds = assignments.map((a) => a.roleId)
+  if (new Set(roleIds).size !== roleIds.length) {
+    return {
+      ok: false,
+      error: createContractError(
+        "validation",
+        "role_assignment.duplicate_role_id",
+        "Role assignments must contain unique role IDs",
+      ),
+    }
+  }
+  return { ok: true, value: undefined }
+}
+
+/**
+ * Schema for an agent's complete role assignment set.
+ * Refines that:
+ * 1. Exactly one primary role is present (zero or 2+ are refused).
+ * 2. Role IDs are unique within the assignment set.
+ */
+export const roleAssignmentsSchema = z
+  .array(roleAssignmentSchema)
+  .max(ARRAY_MAX)
+  .superRefine((assignments, ctx) => {
+    const primaryCount = assignments.filter((a) => a.primary).length
+    if (primaryCount !== 1) {
+      ctx.addIssue({
+        code: "custom",
+        path: [],
+        message: `Role assignments must contain exactly one primary role; found ${primaryCount}`,
+      })
+    }
+    const roleIds = assignments.map((a) => a.roleId)
+    if (new Set(roleIds).size !== roleIds.length) {
+      ctx.addIssue({
+        code: "custom",
+        path: [],
+        message: "Role assignments must have unique role IDs",
+      })
+    }
+  })
+
+export const roleAssignmentSetSchema = roleAssignmentsSchema
+
+/**
+ * Canonicalizes role assignments into a stable, deterministically sorted list
+ * suitable for RoleBinder prompt stamping and digest calculation.
+ * Primary role is placed first, followed by secondaries sorted by roleId.
+ */
+export function canonicalizeRoleAssignments(assignments: readonly RoleAssignment[]): readonly {
+  readonly roleId: string
+  readonly primary: boolean
+  readonly version?: number
+  readonly snapshotDigest?: string
+  readonly addendum?: string
+}[] {
+  return [...assignments]
+    .sort((a, b) => {
+      if (a.primary && !b.primary) return -1
+      if (!a.primary && b.primary) return 1
+      return a.roleId.localeCompare(b.roleId)
+    })
+    .map((assignment) => ({
+      roleId: assignment.roleId,
+      primary: assignment.primary,
+      ...(assignment.version !== undefined ? { version: assignment.version } : {}),
+      ...(assignment.snapshotDigest !== undefined ? { snapshotDigest: assignment.snapshotDigest } : {}),
+      ...(assignment.addendum !== undefined ? { addendum: assignment.addendum } : {}),
+    }))
+}
+
+/**
+ * Computes a deterministic canonical digest for a role assignment set.
+ */
+export function computeRoleAssignmentsDigest(assignments: readonly RoleAssignment[]): Digest {
+  return digestJson(canonicalizeRoleAssignments(assignments))
+}
+
+export type RoleAssignment = z.infer<typeof roleAssignmentSchema>
+export type RoleAssignments = z.infer<typeof roleAssignmentsSchema>
+export type RoleAssignmentSet = RoleAssignments
 
 export const roleTemplateSchema = z
   .object({
@@ -374,6 +547,8 @@ export const dispatchEnvelopeSchema = z
     projectPathId: projectPathIdSchema,
     prompt: largeTextSchema,
     roleSnapshot: roleTemplateSchema,
+    roleSnapshots: z.array(roleTemplateSchema).max(ARRAY_MAX).optional(),
+    roleAssignments: roleAssignmentsSchema.optional(),
     ruleSnapshots: z.array(ruleSchema).max(ARRAY_MAX),
     contextManifest: contextManifestSchema,
     requestedCapabilities: capabilityListSchema,
@@ -382,11 +557,20 @@ export const dispatchEnvelopeSchema = z
     timeoutSeconds: z.number().int().positive().max(TIMEOUT_MAX_SECONDS).safe(),
     controllerEpoch: epochSchema,
     model: z.string().min(1).max(SHORT_TEXT_MAX).refine((value) => value === value.trim(), "Must not have surrounding whitespace").optional(),
+    fanOut: positiveSafeIntegerSchema.optional(),
+    parentDispatchId: dispatchIdSchema.optional(),
   })
   .strict()
   .superRefine((envelope, ctx) => {
     if (envelope.roleSnapshot.projectId !== envelope.projectId) {
       addMismatch(ctx, ["roleSnapshot", "projectId"], "Role project ID must match dispatch project")
+    }
+    if (envelope.roleSnapshots !== undefined) {
+      envelope.roleSnapshots.forEach((role, index) => {
+        if (role.projectId !== envelope.projectId) {
+          addMismatch(ctx, ["roleSnapshots", index, "projectId"], "Role project ID must match dispatch project")
+        }
+      })
     }
     envelope.ruleSnapshots.forEach((rule, index) => {
       if (rule.projectId !== envelope.projectId) {
@@ -625,6 +809,343 @@ export const controllerLeaseSchema = z
     message: "Lease expiry must be later than issue time",
   })
 
+/**
+ * Modes of discussion turn sequencing in a roundtable deliberation session.
+ */
+export const discussionModeSchema = z.enum([
+  "sequential",
+  "parallel",
+  "until_objections_resolved",
+])
+
+/**
+ * Structural kind of a post in a roundtable deliberation session.
+ */
+export const postKindSchema = z.enum([
+  "proposal",
+  "objection",
+  "question",
+  "answer",
+  "note",
+])
+
+/**
+ * Minimal membership record for a roundtable participant.
+ *
+ * Intentionally minimal: holds only `nodeId` and `roleId`.
+ * Additional state (e.g. joined timestamp, readiness, status) is deliberately
+ * excluded because roundtables are advisory deliberation sessions whose
+ * turn-taking order and voting are governed by the charter's communication policy,
+ * not by per-member session state machines.
+ */
+export const roundtableMemberSchema = z
+  .object({
+    nodeId: nodeIdSchema,
+    roleId: roleIdSchema.or(shortTextSchema),
+  })
+  .strict()
+
+/**
+ * Roundtable deliberation aggregate.
+ */
+export const roundtableSchema = z
+  .object({
+    id: shortTextSchema,
+    runId: runIdSchema,
+    taskId: taskIdSchema.optional(),
+    subject: shortTextSchema,
+    mode: discussionModeSchema,
+    chairNodeId: nodeIdSchema,
+    members: z.array(roundtableMemberSchema).max(ARRAY_MAX),
+    state: z.enum(["open", "closed"]),
+  })
+  .strict()
+
+/**
+ * Post record within a roundtable deliberation.
+ */
+export const postSchema = z
+  .object({
+    postId: shortTextSchema,
+    discussionId: shortTextSchema,
+    seq: nonnegativeSafeIntegerSchema,
+    authorNodeId: nodeIdSchema,
+    authorRoleId: roleIdSchema.or(shortTextSchema),
+    kind: postKindSchema,
+    replyTo: shortTextSchema.optional(),
+    body: largeTextSchema,
+    createdAt: timestampSchema,
+  })
+  .strict()
+
+/**
+ * Advisory deliberation outcome recorded at the conclusion of a roundtable.
+ *
+ * NOTE: ADVISORY ONLY.
+ * This outcome is NEVER a state-transition trigger. Per ADR 0009 and the
+ * orchestration design, a roundtable outcome provides recommendations and
+ * records addressed/unresolved objections for dispatch proposals or human review,
+ * but never directly triggers any kernel state transition or command execution.
+ */
+export const roundtableOutcomeSchema = z
+  .object({
+    summary: textSchema,
+    recommendation: textSchema,
+    addressedObjections: z.array(shortTextSchema).max(ARRAY_MAX),
+    unresolvedObjections: z.array(shortTextSchema).max(ARRAY_MAX),
+  })
+  .strict()
+// ============================================================================
+// Charter and Roundtable Schemas (Phase 0 / Milestone 6)
+// ============================================================================
+
+/**
+ * Error thrown when a charter carries an invalid version.
+ *
+ * `Charter.version` is the charter's REVISION counter — plan §7.4 lifecycle
+ * (`charter.revise` creates the next version) and DoD #3 ("running dispatches
+ * keep the old digest") — NOT a document-format enum. An earlier
+ * `SUPPORTED_CHARTER_VERSIONS = [1]` pinning was an over-read of "unknown
+ * versions refused" and made every revision above 1 unrepresentable. Version
+ * validity is now a structural bound (`charterVersionSchema`) plus
+ * repository-level refusal of versions not held (`charter/repository.ts`).
+ */
+export class UnsupportedCharterVersionError extends Error {
+  readonly code = "charter.unsupported_version" as const
+  readonly category = "validation" as const
+  readonly version: unknown
+
+  constructor(version: unknown, message?: string) {
+    const desc = typeof version === "number" || typeof version === "string" ? String(version) : typeof version
+    super(
+      message ??
+        `charter.unsupported_version: Invalid charter version '${desc}'. A charter version is a revision counter: a positive integer starting at 1.`,
+    )
+    this.name = "UnsupportedCharterVersionError"
+    this.version = version
+  }
+}
+
+/**
+ * Charter revision version: a positive safe integer.
+ *
+ * Revisions 2, 3, … are first-class (`charter.revise` bumps the counter). The
+ * bound is STRUCTURAL — it survives JSON Schema generation, so
+ * `contracts/v1/charter.schema.json` refuses exactly what the runtime parser
+ * refuses. The previous `.refine`-based version enum was silently dropped by
+ * zod-to-json-schema, leaving the wire contract wider than the runtime.
+ * Unknown REVISION numbers are refused at the repository layer, not here.
+ */
+export const charterVersionSchema = z.number().int().positive().safe()
+
+/**
+ * Charter author discriminator. Charters can be human-authored or proposed
+ * by autonomous agents through deliberation.
+ */
+export const charterAuthorSchema = z.enum(["human", "agent"])
+
+/**
+ * Reference to a role template in a charter's role catalog.
+ * Strict object pinning role identity and template version, with optional snapshot digest.
+ */
+export const charterRoleRefSchema = z
+  .object({
+    roleId: roleIdSchema.or(shortTextSchema),
+    version: positiveSafeIntegerSchema,
+    snapshotDigest: digestSchema.optional(),
+  })
+  .strict()
+
+/**
+ * Policy governing inter-agent deliberation turn-taking, required objection
+ * triggers, and verbosity bounds during orchestration execution.
+ */
+export const communicationPolicySchema = z
+  .object({
+    turnTaking: z.enum(["chair_ordered", "free_for_all"]),
+    objectionRequiredBefore: z.array(shortTextSchema).max(ARRAY_MAX),
+    verbosity: z.enum(["terse", "normal", "detailed"]),
+    mustStopAndAsk: z.array(shortTextSchema).max(ARRAY_MAX),
+    objectionMustContain: z.array(shortTextSchema).max(ARRAY_MAX),
+  })
+  .strict()
+
+/**
+ * Policy specifying escalation thresholds, round caps, and deadlock resolution paths.
+ */
+export const escalationPolicySchema = z
+  .object({
+    maxRounds: positiveSafeIntegerSchema,
+    onDeadlock: z.enum(["chair_decides", "human_decides", "fail_run"]),
+    budgetScope: z.enum(["shared", "per_member"]),
+  })
+  .strict()
+
+/**
+ * Charter aggregate defining the orchestration system prompt, immutable-core link,
+ * global rules, communication rules, escalation rules, and catalog of roles.
+ */
+export const charterSchema = z
+  .object({
+    charterId: shortTextSchema,
+    version: charterVersionSchema,
+    purpose: textSchema,
+    globalRules: z.array(textSchema).max(ARRAY_MAX),
+    communicationPolicy: communicationPolicySchema,
+    escalationPolicy: escalationPolicySchema,
+    roleCatalog: z.array(charterRoleRefSchema).max(ARRAY_MAX),
+    immutableCoreDigest: digestSchema,
+    snapshotDigest: digestSchema,
+    capturedAt: timestampSchema,
+    author: charterAuthorSchema,
+  })
+  .strict()
+
+/**
+ * Immutable-core change areas (plan §7.3 fixed list).
+ * Any proposal carrying an operation targeting one of these areas must be refused
+ * by kernel policy validation before becoming pending.
+ */
+export const CHARTER_CORE_CHANGE_AREAS = Object.freeze([
+  "policy.safety_floor",
+  "fencing.input_ownership",
+  "security.allowed_sources",
+  "security.project_allowlist",
+  "roundtable.advisory_only",
+  "budgets.ceilings",
+  "kernel.event_store_authority",
+] as const)
+
+/**
+ * Non-core sections of the charter document that can be legitimately proposed for revision.
+ */
+export const CHARTER_NON_CORE_CHANGE_AREAS = Object.freeze([
+  "charter.purpose",
+  "charter.global_rules",
+  "charter.communication_policy",
+  "charter.escalation_policy",
+  "charter.role_catalog",
+] as const)
+
+/**
+ * All recognized change areas for a charter revision proposal.
+ */
+export const CHARTER_CHANGE_AREAS = Object.freeze([
+  ...CHARTER_NON_CORE_CHANGE_AREAS,
+  ...CHARTER_CORE_CHANGE_AREAS,
+] as const)
+
+/**
+ * Strict Zod enum discriminating the structural area targeted by a charter change operation.
+ */
+export const charterChangeAreaSchema = z.enum(CHARTER_CHANGE_AREAS)
+
+/**
+ * Structural change operation identifying an area touched by a charter proposal.
+ *
+ * WHY THIS EXISTS:
+ * Per ADR 0009 and plan §7.3, a proposal that touches any of the immutable-core items
+ * must be mechanically refused before becoming pending. Free-text heuristic detection
+ * is deliberately out of scope because natural language cannot guarantee deterministic
+ * enforcement across agent proposals. By requiring proposals to declare their change
+ * targets structurally via `charterChangeAreaSchema`, kernel policy validators can
+ * mechanically assert whether an operation touches the immutable core (e.g. attempting
+ * to modify allowed_sources, safety floors, or budget ceilings). The human approval
+ * gate (human-only, per settled plan §15) remains the final backstop.
+ */
+export const charterChangeOpSchema = z
+  .object({
+    area: charterChangeAreaSchema,
+    note: shortTextSchema.optional(),
+  })
+  .strict()
+
+/**
+ * Agent- or operator-proposed revision to the active charter, carrying rationale,
+ * evidence references back to deliberation sessions, and structural change operations.
+ */
+export const charterProposalSchema = z
+  .object({
+    charter: charterSchema,
+    rationale: textSchema,
+    evidenceRefs: z.array(shortTextSchema).max(ARRAY_MAX),
+    changes: z.array(charterChangeOpSchema).max(ARRAY_MAX),
+  })
+  .strict()
+
+/**
+ * Computes the canonical snapshot digest of a charter document.
+ *
+ * Mirroring the snapshot digest convention in `src/orchestration/roles/repository.ts`:
+ * - Uses canonical JSON encoding to ensure byte-identical digests across runs and key ordering.
+ * - Excludes only its own `snapshotDigest` field so the digest covers all governed
+ *   content (including `immutableCoreDigest` and role catalog digests) while avoiding
+ *   circular self-reference.
+ */
+export function computeCharterSnapshotDigest(charter: {
+  readonly charterId: string
+  readonly version: number
+  readonly purpose: string
+  readonly globalRules: readonly string[]
+  readonly communicationPolicy: z.infer<typeof communicationPolicySchema>
+  readonly escalationPolicy: z.infer<typeof escalationPolicySchema>
+  readonly roleCatalog: readonly {
+    readonly roleId: string
+    readonly version: number
+    readonly snapshotDigest?: string
+  }[]
+  readonly capturedAt: string
+  readonly author: z.infer<typeof charterAuthorSchema>
+  readonly immutableCoreDigest: string
+  readonly snapshotDigest?: string
+}): Digest {
+  return digestJson({
+    author: charter.author,
+    capturedAt: charter.capturedAt,
+    charterId: charter.charterId,
+    communicationPolicy: charter.communicationPolicy,
+    escalationPolicy: charter.escalationPolicy,
+    globalRules: [...charter.globalRules],
+    immutableCoreDigest: charter.immutableCoreDigest,
+    purpose: charter.purpose,
+    roleCatalog: charter.roleCatalog.map((ref) => ({
+      roleId: ref.roleId,
+      version: ref.version,
+      ...(ref.snapshotDigest !== undefined ? { snapshotDigest: ref.snapshotDigest } : {}),
+    })),
+    version: charter.version,
+  })
+}
+
+/**
+ * Verifies that a charter document's `snapshotDigest` matches its computed
+ * canonical digest. Invalid digests return `false`.
+ */
+export function verifyCharterSnapshotDigest(charter: {
+  readonly charterId: string
+  readonly version: number
+  readonly purpose: string
+  readonly globalRules: readonly string[]
+  readonly communicationPolicy: z.infer<typeof communicationPolicySchema>
+  readonly escalationPolicy: z.infer<typeof escalationPolicySchema>
+  readonly roleCatalog: readonly {
+    readonly roleId: string
+    readonly version: number
+    readonly snapshotDigest?: string
+  }[]
+  readonly capturedAt: string
+  readonly author: z.infer<typeof charterAuthorSchema>
+  readonly immutableCoreDigest: string
+  readonly snapshotDigest: string
+}): boolean {
+  try {
+    const expected = computeCharterSnapshotDigest(charter)
+    return expected === charter.snapshotDigest
+  } catch {
+    return false
+  }
+}
+
 const causationSchema = z.union([
   z.null(),
   z.object({ kind: z.literal("command"), commandId: commandIdSchema }).strict(),
@@ -739,6 +1260,13 @@ export const orchestrationEventSchema = z
           .strict(),
       })
       .strict(),
+    z.object({ ...eventCommonShape, type: z.literal("roundtable.opened"), payload: z.object({ roundtable: roundtableSchema }).strict() }).strict(),
+    z.object({ ...eventCommonShape, type: z.literal("roundtable.posted"), payload: z.object({ post: postSchema }).strict() }).strict(),
+    z.object({ ...eventCommonShape, type: z.literal("roundtable.closed"), payload: z.object({ discussionId: shortTextSchema }).strict() }).strict(),
+    z.object({ ...eventCommonShape, type: z.literal("roundtable.outcome_recorded"), payload: z.object({ discussionId: shortTextSchema, outcome: roundtableOutcomeSchema }).strict() }).strict(),
+    z.object({ ...eventCommonShape, type: z.literal("charter.proposed"), payload: z.object({ proposal: charterProposalSchema, proposalId: shortTextSchema.optional() }).strict() }).strict(),
+    z.object({ ...eventCommonShape, type: z.literal("charter.revised"), payload: z.object({ charter: charterSchema, proposalId: shortTextSchema.optional() }).strict() }).strict(),
+    z.object({ ...eventCommonShape, type: z.literal("charter.rejected"), payload: z.object({ charterId: shortTextSchema, version: charterVersionSchema.optional(), proposalId: shortTextSchema.optional(), rationale: textSchema }).strict() }).strict(),
   ])
   .superRefine((event, ctx) => {
     if (event.commandId !== undefined && event.causation?.kind === "command" && event.commandId !== event.causation.commandId) {
@@ -802,6 +1330,19 @@ export const orchestrationEventSchema = z
         break
       case "dispatch.finished":
       case "legacy.imported":
+        break
+      case "roundtable.opened":
+        if (event.payload.roundtable.runId !== event.runId) {
+          addMismatch(ctx, ["payload", "roundtable", "runId"], "Roundtable run ID must match event")
+        }
+        break
+      case "roundtable.posted":
+      case "roundtable.closed":
+      case "roundtable.outcome_recorded":
+        break
+      case "charter.proposed":
+      case "charter.revised":
+      case "charter.rejected":
         break
     }
   })
@@ -894,7 +1435,14 @@ export const orchestrationCommandSchema = z
       .object({
         ...commandCommonShape,
         type: z.literal("session.prompt"),
-        payload: z.object({ sessionId: sessionIdSchema, prompt: largeTextSchema }).strict(),
+        payload: z
+          .object({
+            sessionId: sessionIdSchema,
+            prompt: largeTextSchema,
+            roleAssignments: roleAssignmentsSchema.optional(),
+            roleSnapshot: roleTemplateSchema.optional(),
+          })
+          .strict(),
       })
       .strict(),
     z
@@ -914,6 +1462,14 @@ export const orchestrationCommandSchema = z
     z.object({ ...commandCommonShape, type: z.literal("session.interrupt"), payload: z.object({ sessionId: sessionIdSchema, reason: textSchema }).strict() }).strict(),
     z.object({ ...commandCommonShape, type: z.literal("session.terminate"), payload: z.object({ sessionId: sessionIdSchema, reason: textSchema }).strict() }).strict(),
     z.object({ ...commandCommonShape, type: z.literal("run.cancel"), payload: z.object({ reason: textSchema }).strict() }).strict(),
+    z.object({ ...commandCommonShape, type: z.literal("roundtable.open"), payload: z.object({ roundtable: roundtableSchema }).strict() }).strict(),
+    z.object({ ...commandCommonShape, type: z.literal("roundtable.post"), payload: z.object({ post: postSchema }).strict() }).strict(),
+    z.object({ ...commandCommonShape, type: z.literal("roundtable.inject_human"), payload: z.object({ post: postSchema }).strict() }).strict(),
+    z.object({ ...commandCommonShape, type: z.literal("roundtable.close"), payload: z.object({ discussionId: shortTextSchema, outcome: roundtableOutcomeSchema }).strict() }).strict(),
+    z.object({ ...commandCommonShape, type: z.literal("charter.propose"), payload: z.object({ proposal: charterProposalSchema, proposalId: shortTextSchema.optional() }).strict() }).strict(),
+    z.object({ ...commandCommonShape, type: z.literal("charter.approve"), payload: z.object({ charterId: shortTextSchema, version: charterVersionSchema.optional(), proposalId: shortTextSchema.optional(), comment: textSchema.optional() }).strict() }).strict(),
+    z.object({ ...commandCommonShape, type: z.literal("charter.revise"), payload: z.object({ charter: charterSchema, proposalId: shortTextSchema.optional(), rationale: textSchema.optional() }).strict() }).strict(),
+    z.object({ ...commandCommonShape, type: z.literal("charter.reject"), payload: z.object({ charterId: shortTextSchema, version: charterVersionSchema.optional(), proposalId: shortTextSchema.optional(), rationale: textSchema }).strict() }).strict(),
   ])
   .superRefine((command, ctx) => {
     if (!timestampAfter(command.expiresAt, command.issuedAt)) {
@@ -965,4 +1521,39 @@ export const orchestrationCommandSchema = z
         addMismatch(ctx, ["payload", "dispatch", "envelope", "attempt"], "A retry must use a strictly greater attempt number")
       }
     }
+    if (command.type === "roundtable.open") {
+      const { roundtable } = command.payload
+      if (roundtable.runId !== command.runId) {
+        addMismatch(ctx, ["payload", "roundtable", "runId"], "Roundtable run ID must match command")
+      }
+      if (roundtable.state !== "open") {
+        addMismatch(ctx, ["payload", "roundtable", "state"], "Roundtable must be opened in 'open' state")
+      }
+    }
+
+    if (command.type === "roundtable.inject_human") {
+      const { post } = command.payload
+      if (post.authorRoleId !== "human") {
+        addMismatch(ctx, ["payload", "post", "authorRoleId"], "Author role ID for inject_human must be 'human'")
+      }
+    }
   })
+
+
+export type {
+  Charter,
+  CommunicationPolicy,
+  EscalationPolicy,
+  CharterRoleRef,
+  CharterAuthor,
+  Roundtable,
+  RoundtableMember,
+  Post,
+  PostKind,
+  DiscussionMode,
+  RoundtableOutcome,
+  CharterChangeArea,
+  CharterCoreChangeArea,
+  CharterChangeOp,
+  CharterProposal,
+} from "./charter/types.js"

@@ -72,7 +72,7 @@ The bridge keeps the design ready for a future N-machine mesh through explicit r
 ### Core Design Invariants
 1. **Two-Tier Validation:** The router is a structural gate, never an authorization authority. The worker independently re-parses and enforces all semantic permissions, allowlists, and approvals.
 2. **Commit Before 202 (`SF-08`):** An admission response (`HTTP 202 Accepted`) is emitted **only** after the work has been durably committed to SQLite disk storage (`synchronous=FULL`). No in-memory queues or fallback drop-paths exist.
-3. **Decoupled Interactive TUI:** The terminal interface (`aibr tui`) runs independently of running background agents and daemons. Disconnecting or closing the UI never disrupts active agent runs.
+3. **Decoupled Interactive Interface:** The operator UI (Herdr + `aibr-manager` plugin) interacts with the kernel over HTTP and SSE. Closing or disconnecting the interface never disrupts running background agents.
 4. **Append-Only Immutability:** Authoritative event logs are immutable. Repair and maintenance tools never rewrite or delete history.
 5. **Terminal Outbox Rows are Evidence:** Errored or failed outbox records are preserved as permanent audit evidence with error taxonomy codes and attempt counters. They are never purged to "clear a backlog."
 6. **Automated Secret Redaction:** Prompts, transcripts, raw memory, bearer tokens, and private paths are scrubbed by default across all logs, telemetry, and diagnostics support bundles.
@@ -415,40 +415,27 @@ aibr <command> [options]
 | `aibr serve` | Runs the bridge HTTP server directly (engine or shadow mode). | **Yes** |
 | `aibr status` | Checks process health, queue depth, and probe connectivity. | **Yes** |
 | `aibr discover` | Lists tailnet peers and probes each peer's `/health`. Read-only; enrols nothing. | Optional |
-| `aibr tui` | Opens the full-screen interactive agent orchestrator TUI (Rust `ratatui` client over the local IPC bus). | **Yes** |
+| `aibr tui` | Links and configures the AIBridge Manager plugin inside Herdr. | **Yes** |
 | `aibr bundle` | Generates a redacted diagnostic support bundle. | **Yes** |
 
 ### Global Options
 - `--profile, -p <name>`: Profile name (required for start/serve/worker/status/tui).
 - `--preview`: Preview support bundle without exporting raw JSON.
 - `--shadow-mode`: Runs engine in shadow mode, mirroring traffic to the router.
-- `--ipc-publish`: Serve the local IPC bus for the TUI (`worker` only).
+- `--ipc-publish`: Serve the local IPC bus (`worker` only).
 - `--help, -h`: Displays help output.
 - `--version, -v`: Displays version.
 
-### TUI keybindings
+### Manager Plugin Integration (Herdr)
 
-`aibr tui` has two keybinding profiles. **Profile A (Modern)** is the default and needs no prefix key:
+AIBridge uses Herdr as its presentation substrate with the `aibr-manager` plugin:
 
-| Action | Binding |
-|---|---|
-| Focus pane | `Alt+H` / `Alt+J` / `Alt+K` / `Alt+L`, or `Alt+Arrows` |
-| Split vertical / horizontal | `Alt+V` / `Alt+S` |
-| Zoom / maximize pane | `Alt+Z` |
-| Close focused pane | `Alt+W` |
-| Switch workspace tab | `Alt+1` … `Alt+9` |
-| Jump to pending HITL card | `Alt+A` |
-| Toggle inspector sidebar | `Alt+B` |
-| Command palette (fuzzy) | `Ctrl+K` |
-| Keymap & profile switcher | `?` or `F1` |
-| Detach (exit 0) | `Alt+Q` |
+```bash
+# Ensure Herdr is installed, then link the manager plugin:
+aibr tui -p <profile>
+```
 
-**Profile B (Tmux Classic)** arms a `Ctrl+B` prefix with a 2000 ms window, preserving `,` `%` `z` `c` `n` `p` `q`. The window is deliberately longer than tmux's 1000 ms because this client is commonly used over SSH, where one delayed packet loses the second key of a two-key sequence.
-
-Detaching leaves the daemon and all agent PTYs running. Re-running `aibr tui` re-attaches and re-hydrates from the same daemon.
-
-> **Two things the TUI does not yet do.** `approve_plan` / `reject_plan` reach the daemon and are answered `accepted: false`, because the engine's plan-review path sits behind the job manager — the HITL card renders and the frame is sent, but no approval takes effect yet. And the PTY host is not wired to the listener, so pane commands from a real client are answered `not_allowed`. No real `opencode` has run through the bus end to end.
-
+`aibr tui` links the plugin via `herdr plugin link` and provides instructions for launching or opening the manager view inside Herdr.
 ---
 
 ## Two-Host Configuration

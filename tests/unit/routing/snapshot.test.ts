@@ -10,7 +10,7 @@
 import { describe, expect, it } from "vitest"
 import { MAX_HEARTBEAT_AGE_MS } from "../../../src/mesh/protocol/bounds.js"
 import { meshIdSchema, nodeIdSchema } from "../../../src/orchestration/identifiers.js"
-import { buildRoutingSnapshot, buildRoutingSnapshotForNode } from "../../../src/routing/index.js"
+import { buildRoutingSnapshot, buildRoutingSnapshotForNode, createSnapshotMeshNodeProvider } from "../../../src/routing/index.js"
 import type { RoutingRegistryPort } from "../../../src/routing/index.js"
 import {
   aContext,
@@ -318,5 +318,49 @@ describe("the routing snapshot adapter projects the registry without extending i
     if (!result.ok) throw new Error("unreachable")
     expect(result.value).toEqual([])
     expect(MESH_ID).toBe("mesh-release")
+  })
+
+  it("createSnapshotMeshNodeProvider exposes only live, healthy, non-revoked nodes", async () => {
+    const clock = new TestClock()
+    const { registry, store } = inMemoryRegistry(clock)
+    await enroll(store, { nodeId: "node-alpha" })
+    await enroll(store, { nodeId: "node-beta" })
+    await enroll(store, { nodeId: "node-gamma" })
+
+    // node-beta heartbeated in the past (now stale)
+    await heartbeat(registry, { nodeId: "node-beta", capabilities: ["gpu.cuda"], observedAt: at(0) })
+
+    // node-alpha heartbeated recently (live)
+    const now = at(MAX_HEARTBEAT_AGE_MS + 100)
+    clock.set(now)
+    await heartbeat(registry, { nodeId: "node-alpha", capabilities: ["fs.read", "shell.exec"], observedAt: now })
+
+    // node-gamma is revoked
+    await heartbeat(registry, { nodeId: "node-gamma", capabilities: ["db.query"], observedAt: now })
+    await revoke(registry, "node-gamma")
+
+    const result = await buildRoutingSnapshot(
+      registry,
+      aRequest({ now }),
+      aContext({
+        authorizedProjectIds: {
+          ...authorizedFor("node-alpha"),
+          ...authorizedFor("node-beta"),
+          ...authorizedFor("node-gamma"),
+        },
+      }),
+    )
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) throw new Error("unreachable")
+
+    const provider = createSnapshotMeshNodeProvider(result.value)
+    const liveNodes = provider.getLiveNodes()
+
+    expect(liveNodes).toHaveLength(1)
+    expect(liveNodes[0]!.nodeId).toBe("node-alpha")
+    expect(liveNodes[0]!.capabilities).toEqual(["fs.read", "shell.exec"])
+    expect(liveNodes[0]!.reachability).toBe("live")
+    expect(liveNodes[0]!.healthy).toBe(true)
   })
 })

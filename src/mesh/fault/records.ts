@@ -43,8 +43,11 @@ import {
   dispatchSchema,
   orchestrationCommandSchema,
   sessionSchema,
+  postSchema,
+  roundtableSchema,
 } from "../../orchestration/schemas.js"
 import type { Actor, Dispatch, OrchestrationCommand, Session } from "../../orchestration/types.js"
+import type { Post, Roundtable } from "../../orchestration/roundtable/index.js"
 import { mintMeshCommand } from "../protocol/command.js"
 import { mintMeshEvent, type MeshEvent } from "../protocol/event.js"
 import { meshAckSchema, type MeshAck } from "../protocol/ack.js"
@@ -536,6 +539,38 @@ export function aLegacyJob(overrides: Record<string, unknown> = {}): unknown {
     updatedAt: "2026-09-28T00:00:01.000Z",
     ...overrides,
   }
+}
+
+// --- Roundtable deliberation records ----------------------------------------
+
+export function aRoundtable(overrides: Partial<Roundtable> = {}): Roundtable {
+  return roundtableSchema.parse({
+    id: "disc-fault-1",
+    runId: FAULT_RUN,
+    subject: "Deliberation under fault",
+    mode: "parallel",
+    chairNodeId: nodeIdSchema.parse("node-fault-controller"),
+    members: [
+      { nodeId: nodeIdSchema.parse("node-fault-controller"), roleId: "chair-role" },
+      { nodeId: nodeIdSchema.parse("node-enr-fault-worker"), roleId: "worker-role" },
+    ],
+    state: "open",
+    ...overrides,
+  })
+}
+
+export function aRoundtablePost(overrides: Partial<Post> = {}): Post {
+  return postSchema.parse({
+    postId: "post-fault-1",
+    discussionId: "disc-fault-1",
+    seq: 0,
+    authorNodeId: nodeIdSchema.parse("node-fault-controller"),
+    authorRoleId: "chair-role",
+    kind: "proposal",
+    body: "Fault harness deliberation post body",
+    createdAt: "2026-09-28T00:00:10.000Z",
+    ...overrides,
+  })
 }
 
 export { nodeIdSchema, taskIdSchema, commandIdSchema, sessionIdSchema }

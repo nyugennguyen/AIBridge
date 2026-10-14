@@ -143,6 +143,30 @@ export const COMMAND_MATRIX: Readonly<Record<CommandType, CommandStateRule>> = {
     allowedRunStates: ["draft", "active"],
     allowedSessionStates: ["launching", "running", "idle"],
   },
+  "roundtable.open": {
+    allowedRunStates: ["draft", "active"],
+  },
+  "roundtable.post": {
+    allowedRunStates: ["draft", "active"],
+  },
+  "roundtable.inject_human": {
+    allowedRunStates: ["draft", "active"],
+  },
+  "roundtable.close": {
+    allowedRunStates: ["draft", "active"],
+  },
+  "charter.propose": {
+    allowedRunStates: ["draft", "active"],
+  },
+  "charter.approve": {
+    allowedRunStates: ["draft", "active"],
+  },
+  "charter.revise": {
+    allowedRunStates: ["draft", "active"],
+  },
+  "charter.reject": {
+    allowedRunStates: ["draft", "active"],
+  },
 }
 
 // --- Command Matrix Validation ---

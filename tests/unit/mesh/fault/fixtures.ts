@@ -28,8 +28,9 @@ import {
 } from "../../../../src/mesh/fault/records.js"
 import type { MeshEvent } from "../../../../src/mesh/protocol/event.js"
 import { commandIdSchema, correlationIdSchema, epochSchema, leaseIdSchema, type CommandId, type LeaseId } from "../../../../src/orchestration/identifiers.js"
-import { actorSchema, orchestrationCommandSchema, runSchema, taskSchema } from "../../../../src/orchestration/schemas.js"
+import { actorSchema, orchestrationCommandSchema, postSchema, roundtableSchema, runSchema, taskSchema } from "../../../../src/orchestration/schemas.js"
 import type { Approval, Dispatch, OrchestrationCommand, Run, Task } from "../../../../src/orchestration/types.js"
+import type { Post, Roundtable } from "../../../../src/orchestration/roundtable/index.js"
 
 /** The lease every epoch-1 command in this file is minted under. */
 export const FAULT_LEASE_ID: LeaseId = leaseIdSchema.parse("lease-run-fault-1-e1")
@@ -92,6 +93,10 @@ export interface FaultScenario {
   reportFor(index: number, sessionId?: string): MeshEvent
   /** The `mesh.event` ENVELOPE for {@link reportFor}. */
   reportEnvelopeFor(index: number, sessionId?: string): Record<string, unknown>
+  /** A `roundtable.open` command at `epoch`. */
+  openRoundtableCommand(epoch: number, overrides?: Partial<Roundtable>): OrchestrationCommand
+  /** A `roundtable.post` command at `epoch`. */
+  postRoundtableCommand(epoch: number, postOverrides?: Partial<Post>, cmdOverrides?: Record<string, unknown>): Extract<OrchestrationCommand, { type: "roundtable.post" }>
 }
 
 /**
@@ -191,6 +196,54 @@ export async function aFaultScenario(options: BuildFaultMeshOptions = {}): Promi
         ...(sessionId === undefined ? {} : { sessionId }),
       }),
     reportEnvelopeFor: (index, sessionId) => eventEnvelope(scenario.reportFor(index, sessionId), mesh.controllerNodeId),
+    openRoundtableCommand: (epoch, overrides) =>
+      controllerCommand({
+        commandId: "cmd-fault-roundtable-open",
+        controllerEpoch: epochSchema.parse(epoch),
+        leaseId: leaseIdFor(epoch),
+        issuedAt: stampAt(10),
+        expiresAt: stampAt(40),
+        type: "roundtable.open",
+        payload: {
+          roundtable: roundtableSchema.parse({
+            id: "disc-fault-1",
+            runId: FAULT_RUN,
+            subject: "Deliberation under fault",
+            mode: "parallel",
+            chairNodeId: mesh.controllerNodeId,
+            members: [
+              { nodeId: mesh.controllerNodeId, roleId: "chair-role" },
+              { nodeId: mesh.workerNodeId, roleId: "reviewer-role" },
+            ],
+            state: "open",
+            ...overrides,
+          }),
+        },
+      }),
+    postRoundtableCommand: (epoch, postOverrides, cmdOverrides) => {
+      const postId = (postOverrides?.postId as string | undefined) ?? "post-fault-1"
+      const post = postSchema.parse({
+        postId,
+        discussionId: "disc-fault-1",
+        seq: 0,
+        authorNodeId: mesh.controllerNodeId,
+        authorRoleId: "chair-role",
+        kind: "proposal",
+        body: "Fault harness deliberation post body",
+        createdAt: stampAt(11),
+        ...postOverrides,
+      })
+      return controllerCommand({
+        commandId: `cmd-fault-post-${postId}`,
+        controllerEpoch: epochSchema.parse(epoch),
+        leaseId: leaseIdFor(epoch),
+        issuedAt: stampAt(11),
+        expiresAt: stampAt(40),
+        type: "roundtable.post",
+        payload: { post },
+        ...cmdOverrides,
+      }) as Extract<OrchestrationCommand, { type: "roundtable.post" }>
+    },
   }
   return scenario
 }

@@ -5,13 +5,15 @@ import {
   correlationIdSchema,
   epochSchema,
   leaseIdSchema,
+  installationIdSchema,
   nodeIdSchema,
   projectIdSchema,
   runIdSchema,
+  sessionIdSchema,
   taskIdSchema,
 } from "../../../src/orchestration/identifiers.js"
 import { dispatchEnvelopeSchema } from "../../../src/orchestration/schemas.js"
-import type { Approval, Dispatch, OrchestrationCommand, Run, Task } from "../../../src/orchestration/types.js"
+import type { Approval, Dispatch, OrchestrationCommand, Run, Task, Session } from "../../../src/orchestration/types.js"
 import { reduceEvent } from "../../../src/orchestration/projections/index.js"
 import type { RunProjectionState } from "../../../src/orchestration/projections/types.js"
 import {
@@ -21,7 +23,11 @@ import {
   type CommandLog,
   type CoordinatorDependencies,
   type EffectBoundary,
+  type OpencodePromptClient,
+  type SessionMonitor,
+  type PromptCompiler,
 } from "../../../src/orchestration/coordinator/index.js"
+import { RoleBinder } from "../../../src/runtime/binder.js"
 import type { EventInput, OutboxRecordInput } from "../../../src/orchestration/event-store/types.js"
 
 const PROJECT = projectIdSchema.parse("proj-1")
@@ -76,7 +82,11 @@ function makeEnvelope(overrides: Record<string, unknown> = {}) {
   })
 }
 
-function baseCommand(type: OrchestrationCommand["type"], payload: unknown, commandId = `cmd-${type}-1`): OrchestrationCommand {
+function baseCommand<T extends OrchestrationCommand["type"] = OrchestrationCommand["type"]>(
+  type: T,
+  payload: unknown,
+  commandId = `cmd-${type}-1`,
+): Extract<OrchestrationCommand, { type: T }> {
   return {
     schemaVersion: 1,
     commandId: commandIdSchema.parse(commandId),
@@ -92,7 +102,7 @@ function baseCommand(type: OrchestrationCommand["type"], payload: unknown, comma
     correlationId: correlationIdSchema.parse("corr-1"),
     causation: null,
     payload,
-  } as unknown as OrchestrationCommand
+  } as unknown as Extract<OrchestrationCommand, { type: T }>
 }
 
 function makeRun(state: Run["state"] = "active"): Run {
@@ -177,7 +187,16 @@ function makeLog() {
   return { log, calls, byCommandId }
 }
 
-function makeHarness(options: { boundary?: EffectBoundary; seed?: RunProjectionState } = {}) {
+function makeHarness(
+  options: {
+    boundary?: EffectBoundary
+    seed?: RunProjectionState
+    opencodeClient?: OpencodePromptClient
+    sessionMonitor?: SessionMonitor
+    resolveProjectDir?: (sessionId: string, session?: unknown, dispatch?: unknown) => string | undefined
+    compilePrompt?: PromptCompiler
+  } = {},
+) {
   const { log, calls, byCommandId } = makeLog()
   let eventSeq = 0
   let projection: RunProjectionState = options.seed ?? (null as unknown as RunProjectionState)
@@ -187,10 +206,15 @@ function makeHarness(options: { boundary?: EffectBoundary; seed?: RunProjectionS
     newEventId: () => `evt-${++eventSeq}`,
     readRun: (runId) => (projection === null ? undefined : projection.run.runId === runId ? projection : undefined),
     ...(options.boundary === undefined ? {} : { boundary: options.boundary }),
+    ...(options.opencodeClient === undefined ? {} : { opencodeClient: options.opencodeClient }),
+    ...(options.sessionMonitor === undefined ? {} : { sessionMonitor: options.sessionMonitor }),
+    ...(options.resolveProjectDir === undefined ? {} : { resolveProjectDir: options.resolveProjectDir }),
+    compilePrompt: "compilePrompt" in options ? options.compilePrompt : ((opts) => RoleBinder.compile(opts)),
   }
   const coordinator = new DispatchCoordinator(deps)
   return {
     coordinator,
+    deps,
     calls,
     byCommandId,
     getProjection: () => projection,
@@ -249,6 +273,39 @@ function withApprovedDispatch(): RunProjectionState {
 /** A run with a proposed dispatch but no approval yet. */
 function withProposedDispatch(): RunProjectionState {
   return reduceEvent(withRun(), seedEvent("dispatch.proposed", { dispatch: makeDispatch() }, 3))
+}
+
+class FakeOpencodeClient implements OpencodePromptClient {
+  readonly prompts: { sessionId: string; prompt: string; directory: string }[] = []
+  async sendPromptAsync(sessionId: string, prompt: string, directory: string): Promise<void> {
+    this.prompts.push({ sessionId, prompt, directory })
+  }
+}
+
+class FakeSessionMonitor {
+  readonly monitored: { session: Session; directory: string }[] = []
+  async waitForIdle(session: Session, directory: string): Promise<void> {
+    this.monitored.push({ session, directory })
+  }
+}
+
+function withIdleSession(sessionId = "sess-1"): RunProjectionState {
+  let projection = withApprovedDispatch()
+  const session: Session = {
+    schemaVersion: 1,
+    sessionId: sessionIdSchema.parse(sessionId),
+    projectId: PROJECT,
+    runId: RUN,
+    taskId: taskIdSchema.parse("task-1"),
+    dispatchId: "disp-1" as never,
+    nodeId: nodeIdSchema.parse("node-1"),
+    installationId: installationIdSchema.parse("inst-1"),
+    runtimeKind: "opencode",
+    lifecycleState: "idle",
+    observedState: "idle",
+  }
+  projection = reduceEvent(projection, seedEvent("dispatch.started", { session }, 5))
+  return projection
 }
 
 describe("Command and event are bound together", () => {
@@ -555,5 +612,471 @@ describe("Cancel is a recorded fact", () => {
     const result = h.coordinator.submit(baseCommand("run.cancel", { reason: "too late" }))
     expect(result.ok).toBe(true)
     if (result.ok) expect(result.value.events).toEqual([])
+  })
+})
+
+describe("session.prompt (Phase 1 primary agent-prompt path)", () => {
+  it("fails closed when session.prompt is submitted via synchronous submit()", () => {
+    const h = makeHarness({ seed: withIdleSession("sess-1") })
+    const cmd = baseCommand("session.prompt", { sessionId: "sess-1", prompt: "Hello" }) as unknown as OrchestrationCommand
+    const result = h.coordinator.submit(cmd)
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.error.category).toBe("validation")
+      expect(result.error.code).toBe("coordinator.prompt_use_submit_prompt")
+    }
+  })
+
+  it("strictly performs durable append BEFORE sendPromptAsync effect runs (FIX 2 crash consistency)", async () => {
+    const trace: string[] = []
+    const fakeClient: OpencodePromptClient = {
+      async sendPromptAsync() {
+        trace.push("client.sendPromptAsync")
+      },
+    }
+    const fakeMonitor: SessionMonitor = {
+      async waitForIdle() {
+        trace.push("monitor.waitForIdle")
+      },
+    }
+
+    const { log } = makeLog()
+    let eventSeq = 0
+    const projection = withIdleSession("sess-1")
+    const trackingLog: CommandLog = {
+      append(options) {
+        trace.push("log.append")
+        return log.append(options)
+      },
+    }
+
+    const coordinator = new DispatchCoordinator({
+      log: trackingLog,
+      now: () => NOW,
+      newEventId: () => `evt-${++eventSeq}`,
+      readRun: (runId) => (projection.run.runId === runId ? projection : undefined),
+      opencodeClient: fakeClient,
+      sessionMonitor: fakeMonitor,
+    })
+
+    const cmd = baseCommand("session.prompt", { sessionId: "sess-1", prompt: "ordering test" })
+    const result = await coordinator.submitPrompt(cmd)
+    expect(result.ok).toBe(true)
+
+    // Stated invariant: the row was durable BEFORE the effect ran
+    expect(trace).toEqual(["log.append", "client.sendPromptAsync", "monitor.waitForIdle"])
+    expect(trace.indexOf("log.append")).toBeLessThan(trace.indexOf("client.sendPromptAsync"))
+  })
+
+  it("allowlist for session.prompt is non-empty and exactly matches emitted events (allowlist ⊇ emitted and emitted ⊇ allowlist)", async () => {
+    const allowed = COMMAND_EVENT_ALLOWLIST["session.prompt"]
+    expect(allowed).toBeDefined()
+    expect(allowed.length).toBeGreaterThan(0)
+
+    const fakeClient = new FakeOpencodeClient()
+    const fakeMonitor = new FakeSessionMonitor()
+    const h = makeHarness({
+      seed: withIdleSession("sess-1"),
+      opencodeClient: fakeClient,
+      sessionMonitor: fakeMonitor,
+    })
+
+    const cmd = baseCommand("session.prompt", { sessionId: "sess-1", prompt: "Perform inspection" })
+    const result = await h.coordinator.submitPrompt(cmd)
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      const emitted = result.value.events
+      expect(emitted.length).toBeGreaterThan(0)
+      // allowlist ⊇ emitted
+      for (const ev of emitted) {
+        expect(allowed).toContain(ev)
+      }
+      // emitted ⊇ allowlist
+      for (const al of allowed) {
+        expect(emitted).toContain(al)
+      }
+    }
+  })
+
+  it("drives sendPromptAsync with the right sessionId, prompt, and projectDir", async () => {
+    const fakeClient = new FakeOpencodeClient()
+    const fakeMonitor = new FakeSessionMonitor()
+    const h = makeHarness({
+      seed: withIdleSession("sess-1"),
+      opencodeClient: fakeClient,
+      sessionMonitor: fakeMonitor,
+      resolveProjectDir: () => "/srv/repo/workspace",
+    })
+
+    const cmd = baseCommand("session.prompt", { sessionId: "sess-1", prompt: "Refactor core logic" })
+    const result = await h.coordinator.submitPrompt(cmd)
+    expect(result.ok).toBe(true)
+    expect(fakeClient.prompts).toHaveLength(1)
+    expect(fakeClient.prompts[0]).toEqual({
+      sessionId: "sess-1",
+      prompt: "Refactor core logic",
+      directory: "/srv/repo/workspace",
+    })
+  })
+
+  it("hands the session to the monitor and tracks to idle (exercises idle/observed transition)", async () => {
+    const seed = withIdleSession("sess-1")
+    const fakeClient = new FakeOpencodeClient()
+    const fakeMonitor = new FakeSessionMonitor()
+    const h = makeHarness({
+      seed,
+      opencodeClient: fakeClient,
+      sessionMonitor: fakeMonitor,
+    })
+
+    const cmd = baseCommand("session.prompt", { sessionId: "sess-1", prompt: "Execute task" })
+    const result = await h.coordinator.submitPrompt(cmd)
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.value.events).toEqual(["session.observed", "session.observed"])
+    }
+
+    // Handed to monitor with active working state
+    expect(fakeMonitor.monitored).toHaveLength(1)
+    expect(fakeMonitor.monitored[0].session.sessionId).toBe("sess-1")
+    expect(fakeMonitor.monitored[0].session.lifecycleState).toBe("running")
+    expect(fakeMonitor.monitored[0].session.observedState).toBe("working")
+
+    // Idle/observed transition exercised in replay projection
+    const replayed = h.replay()
+    expect(replayed.sessions["sess-1"].state).toBe("idle")
+    expect(replayed.sessions["sess-1"].observedState).toBe("idle")
+  })
+
+  it("accepts functional session monitor as alternative monitor seam", async () => {
+    const fakeClient = new FakeOpencodeClient()
+    const monitored: { session: Session; directory: string }[] = []
+    const monitorFn = async (session: Session, directory: string) => {
+      monitored.push({ session, directory })
+    }
+
+    const h = makeHarness({
+      seed: withIdleSession("sess-1"),
+      opencodeClient: fakeClient,
+      sessionMonitor: monitorFn,
+    })
+
+    const cmd = baseCommand("session.prompt", { sessionId: "sess-1", prompt: "Check diagnostics" })
+    const result = await h.coordinator.submitPrompt(cmd)
+    expect(result.ok).toBe(true)
+    expect(monitored).toHaveLength(1)
+    expect(monitored[0].session.sessionId).toBe("sess-1")
+  })
+
+  it("refuses session.prompt for unknown session with coordinator.session_unknown", async () => {
+    const fakeClient = new FakeOpencodeClient()
+    const fakeMonitor = new FakeSessionMonitor()
+    const h = makeHarness({
+      seed: withIdleSession("sess-1"),
+      opencodeClient: fakeClient,
+      sessionMonitor: fakeMonitor,
+    })
+
+    const cmd = baseCommand("session.prompt", { sessionId: "sess-unknown", prompt: "Hello" })
+    const result = await h.coordinator.submitPrompt(cmd)
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.error.category).toBe("validation")
+      expect(result.error.code).toBe("coordinator.session_unknown")
+    }
+    expect(fakeClient.prompts).toHaveLength(0)
+    expect(fakeMonitor.monitored).toHaveLength(0)
+    expect(h.calls).toHaveLength(0)
+  })
+
+  it("refuses session.prompt when session is not in idle state", async () => {
+    let seed = withIdleSession("sess-1")
+    seed = reduceEvent(
+      seed,
+      seedEvent(
+        "session.observed",
+        {
+          session: {
+            schemaVersion: 1,
+            sessionId: "sess-1",
+            projectId: PROJECT,
+            runId: RUN,
+            taskId: "task-1",
+            dispatchId: "disp-1",
+            nodeId: "node-1",
+            installationId: "inst-1",
+            runtimeKind: "opencode",
+            lifecycleState: "running",
+            observedState: "working",
+          },
+        },
+        6,
+      ),
+    )
+
+    const fakeClient = new FakeOpencodeClient()
+    const fakeMonitor = new FakeSessionMonitor()
+    const h = makeHarness({
+      seed,
+      opencodeClient: fakeClient,
+      sessionMonitor: fakeMonitor,
+    })
+
+    const cmd = baseCommand("session.prompt", { sessionId: "sess-1", prompt: "Hello" })
+    const result = await h.coordinator.submitPrompt(cmd)
+    expect(result.ok).toBe(false)
+    expect(fakeClient.prompts).toHaveLength(0)
+    expect(fakeMonitor.monitored).toHaveLength(0)
+    expect(h.calls).toHaveLength(0)
+  })
+
+  it("fails command with coordinator.prompt_rejected when sendPromptAsync rejects", async () => {
+    const rejectingClient: OpencodePromptClient = {
+      async sendPromptAsync() {
+        throw new Error("Opencode runtime refused prompt connection")
+      },
+    }
+    const fakeMonitor = new FakeSessionMonitor()
+    const h = makeHarness({
+      seed: withIdleSession("sess-1"),
+      opencodeClient: rejectingClient,
+      sessionMonitor: fakeMonitor,
+    })
+
+    const cmd = baseCommand("session.prompt", { sessionId: "sess-1", prompt: "Do something" })
+    const result = await h.coordinator.submitPrompt(cmd)
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.error.category).toBe("transient_transport")
+      expect(result.error.code).toBe("coordinator.prompt_rejected")
+      expect(result.error.message).toContain("Opencode runtime refused prompt connection")
+    }
+    expect(fakeMonitor.monitored).toHaveLength(0)
+    expect(h.calls).toHaveLength(1) // Appended durable record before effect
+  })
+
+  it("fails command with coordinator.session_monitor_failed when session monitor fails", async () => {
+    const fakeClient = new FakeOpencodeClient()
+    const failingMonitor: SessionMonitor = {
+      async waitForIdle() {
+        throw new Error("Timeout: session never became idle")
+      },
+    }
+    const h = makeHarness({
+      seed: withIdleSession("sess-1"),
+      opencodeClient: fakeClient,
+      sessionMonitor: failingMonitor,
+    })
+
+    const cmd = baseCommand("session.prompt", { sessionId: "sess-1", prompt: "Do something" })
+    const result = await h.coordinator.submitPrompt(cmd)
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.error.category).toBe("runtime_failure")
+      expect(result.error.code).toBe("coordinator.session_monitor_failed")
+      expect(result.error.message).toContain("Timeout: session never became idle")
+    }
+    expect(fakeClient.prompts).toHaveLength(1)
+    expect(h.calls).toHaveLength(1) // Appended durable record before effect
+  })
+
+  it("fails command when opencodeClient is not configured", async () => {
+    const fakeMonitor = new FakeSessionMonitor()
+    const h = makeHarness({
+      seed: withIdleSession("sess-1"),
+      sessionMonitor: fakeMonitor,
+    })
+
+    const cmd = baseCommand("session.prompt", { sessionId: "sess-1", prompt: "Hello" })
+    const result = await h.coordinator.submitPrompt(cmd)
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.error.code).toBe("coordinator.client_not_configured")
+    }
+  })
+
+  it("fails command when session monitor is not configured", async () => {
+    const fakeClient = new FakeOpencodeClient()
+    const h = makeHarness({
+      seed: withIdleSession("sess-1"),
+      opencodeClient: fakeClient,
+    })
+
+    const cmd = baseCommand("session.prompt", { sessionId: "sess-1", prompt: "Hello" })
+    const result = await h.coordinator.submitPrompt(cmd)
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.error.code).toBe("coordinator.monitor_not_configured")
+    }
+  })
+
+  it("is idempotent: duplicate commandId executes prompt effect only once and appends nothing second time", async () => {
+    const fakeClient = new FakeOpencodeClient()
+    const fakeMonitor = new FakeSessionMonitor()
+    const h = makeHarness({
+      seed: withIdleSession("sess-1"),
+      opencodeClient: fakeClient,
+      sessionMonitor: fakeMonitor,
+    })
+
+    const cmd = baseCommand("session.prompt", { sessionId: "sess-1", prompt: "Hello idempotent" }, "cmd-prompt-idemp")
+    const first = await h.coordinator.submitPrompt(cmd)
+    expect(first.ok).toBe(true)
+    if (first.ok) {
+      expect(first.value.duplicate).toBe(false)
+      expect(first.value.events).toEqual(["session.observed", "session.observed"])
+    }
+    expect(fakeClient.prompts).toHaveLength(1)
+
+    // Repeat with identical commandId
+    const second = await h.coordinator.submitPrompt(cmd)
+    expect(second.ok).toBe(true)
+    if (second.ok) {
+      expect(second.value.duplicate).toBe(true)
+      expect(second.value.events).toEqual([])
+    }
+    expect(fakeClient.prompts).toHaveLength(1) // Still 1!
+    expect(h.calls).toHaveLength(1)
+  })
+
+  it("(a) outbox record is named inside the append transaction, effect is performed once, and retry does not double-prompt", async () => {
+    const fakeClient = new FakeOpencodeClient()
+    const fakeMonitor = new FakeSessionMonitor()
+    const h = makeHarness({
+      seed: withIdleSession("sess-1"),
+      opencodeClient: fakeClient,
+      sessionMonitor: fakeMonitor,
+    })
+
+    const cmd = baseCommand("session.prompt", { sessionId: "sess-1", prompt: "Inspect system health" }, "cmd-prompt-outbox-named")
+    const result = await h.coordinator.submitPrompt(cmd)
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.value.duplicate).toBe(false)
+      expect(result.value.events).toEqual(["session.observed", "session.observed"])
+    }
+
+    // Outbox record named inside the append transaction
+    expect(h.calls).toHaveLength(1)
+    const outbox = h.calls[0].outboxRecords
+    expect(outbox).toHaveLength(1)
+    expect(outbox[0].outboxId).toBe("obx-cmd-prompt-outbox-named")
+    expect(outbox[0].destination).toBe(RUNTIME_DESTINATION)
+    expect(outbox[0].status).toBe("pending")
+    expect(outbox[0].payload).toMatchObject({
+      commandId: "cmd-prompt-outbox-named",
+      type: "session.prompt",
+      sessionId: "sess-1",
+      prompt: "Inspect system health",
+    })
+
+    // Effect performed once
+    expect(fakeClient.prompts).toHaveLength(1)
+    expect(fakeClient.prompts[0].prompt).toBe("Inspect system health")
+
+    // Retry does not double-prompt
+    const retry = await h.coordinator.submitPrompt(cmd)
+    expect(retry.ok).toBe(true)
+    if (retry.ok) {
+      expect(retry.value.duplicate).toBe(true)
+      expect(retry.value.events).toEqual([])
+    }
+    expect(fakeClient.prompts).toHaveLength(1) // Still 1!
+    expect(h.calls).toHaveLength(1) // No second append!
+  })
+
+  it("(b) role payload: compiled prompt text and stamped digests reflect the new role and instructions", async () => {
+    const fakeClient = new FakeOpencodeClient()
+    const fakeMonitor = new FakeSessionMonitor()
+    const h = makeHarness({
+      seed: withIdleSession("sess-1"),
+      opencodeClient: fakeClient,
+      sessionMonitor: fakeMonitor,
+    })
+
+    const newRole = {
+      schemaVersion: 1 as const,
+      roleId: "specialist-auditor",
+      templateVersion: 1,
+      projectId: PROJECT,
+      name: "SpecialistAuditor",
+      purpose: "Deep security analysis",
+      instructions: "ENFORCE STRICT AUDIT POLICY: inspect all memory buffers and cryptographic primitives.",
+      capabilities: ["filesystem.read"],
+      requiredCapabilities: ["filesystem.read"],
+      preferredRuntimeKinds: ["opencode"],
+      author: ACTOR,
+      createdAt: NOW,
+    }
+
+    const cmd = baseCommand(
+      "session.prompt",
+      {
+        sessionId: "sess-1",
+        prompt: "Review crypto/signature.ts implementation",
+        roleSnapshot: newRole,
+        roleAssignments: [
+          { roleId: "specialist-auditor", primary: true },
+          { roleId: "timing-reviewer", primary: false, addendum: "Focus on timing side-channels" },
+        ],
+      },
+      "cmd-prompt-role-compile",
+    )
+
+    const result = await h.coordinator.submitPrompt(cmd)
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.value.duplicate).toBe(false)
+    }
+
+    // Effect delivered the COMPILED prompt text containing the new role's instructions
+    expect(fakeClient.prompts).toHaveLength(1)
+    const deliveredPrompt = fakeClient.prompts[0].prompt
+    expect(deliveredPrompt).toContain("ENFORCE STRICT AUDIT POLICY: inspect all memory buffers and cryptographic primitives.")
+    expect(deliveredPrompt).toContain("Focus on timing side-channels")
+    expect(deliveredPrompt).toContain("Review crypto/signature.ts implementation")
+
+    // Outbox record carries compiled prompt and stamped digests reflecting the new role
+    const outbox = h.calls[0].outboxRecords[0]
+    expect(outbox).toBeDefined()
+    expect(outbox.destination).toBe(RUNTIME_DESTINATION)
+    const payload = outbox.payload as Record<string, unknown>
+    expect(payload.prompt).toBe(deliveredPrompt)
+    expect(payload.compiledPrompt).toBe(deliveredPrompt)
+    expect(payload.promptDigest).toBeDefined()
+    expect(payload.compositeDigest).toBeDefined()
+    expect(payload.roleDigests).toBeDefined()
+    expect(outbox.payloadDigest).toBe(payload.compositeDigest)
+  })
+
+  it("(c) no-role path sends the raw prompt unchanged without compilation", async () => {
+    const fakeClient = new FakeOpencodeClient()
+    const fakeMonitor = new FakeSessionMonitor()
+    const h = makeHarness({
+      seed: withIdleSession("sess-1"),
+      opencodeClient: fakeClient,
+      sessionMonitor: fakeMonitor,
+    })
+
+    const rawPromptText = "Execute raw task prompt without compilation"
+    const cmd = baseCommand(
+      "session.prompt",
+      {
+        sessionId: "sess-1",
+        prompt: rawPromptText,
+      },
+      "cmd-prompt-raw-path",
+    )
+
+    const result = await h.coordinator.submitPrompt(cmd)
+    expect(result.ok).toBe(true)
+    expect(fakeClient.prompts).toHaveLength(1)
+    expect(fakeClient.prompts[0].prompt).toBe(rawPromptText)
+
+    const outbox = h.calls[0].outboxRecords[0]
+    expect(outbox).toBeDefined()
+    const payload = outbox.payload as Record<string, unknown>
+    expect(payload.prompt).toBe(rawPromptText)
+    expect(payload.compiledPrompt).toBeUndefined()
   })
 })

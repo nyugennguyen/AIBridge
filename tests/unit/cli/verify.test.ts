@@ -9,13 +9,22 @@ function makeFakeProcessRunner(params?: {
   tailscaleInstalled?: boolean
   tailscaleIp?: string
   tailscaleBackend?: string
+  herdrInstalled?: boolean
+  herdrPath?: string
+  herdrSchemaStdout?: string
+  herdrSchemaStderr?: string
+  herdrSchemaExitCode?: number
 }): ProcessRunner {
   const tmux = params?.tmuxInstalled ?? true
   const opencode = params?.opencodeInstalled ?? true
   const tailscale = params?.tailscaleInstalled ?? true
   const tsIp = params?.tailscaleIp ?? "100.64.0.1"
   const tsBackend = params?.tailscaleBackend ?? "Running"
-
+  const herdr = params?.herdrInstalled ?? false
+  const herdrPath = params?.herdrPath ?? "/usr/local/bin/herdr"
+  const herdrSchemaStdout = params?.herdrSchemaStdout ?? ""
+  const herdrSchemaStderr = params?.herdrSchemaStderr ?? ""
+  const herdrSchemaExitCode = params?.herdrSchemaExitCode ?? 0
   return {
     async exec(argv) {
       const cmd = argv.join(" ")
@@ -27,6 +36,12 @@ function makeFakeProcessRunner(params?: {
       }
       if (cmd === "which tailscale") {
         return { exitCode: tailscale ? 0 : 1, stdout: tailscale ? "/usr/bin/tailscale" : "", stderr: "" }
+      }
+      if (cmd === "which herdr") {
+        return { exitCode: herdr ? 0 : 1, stdout: herdr ? herdrPath : "", stderr: herdr ? "" : "herdr not found" }
+      }
+      if (cmd === "herdr api schema" || cmd === "herdr api schema --json") {
+        return { exitCode: herdrSchemaExitCode, stdout: herdrSchemaStdout, stderr: herdrSchemaStderr }
       }
       if (cmd === "tailscale status --json") {
         if (!tailscale) {
@@ -620,5 +635,168 @@ describe("runVerify", () => {
     expect(report.summary.indexOf("Bearer token secret not found")).toBeLessThan(
       report.summary.indexOf("Tailnet discovery"),
     )
+  })
+
+  // ── Herdr workspace backend checks (informational) ─────────────────
+  describe("Herdr workspace backend checks (informational)", () => {
+    const forkSchema = {
+      $schema: "http://json-schema.org/draft-07/schema#",
+      title: "Herdr IPC API (fork)",
+      definitions: {
+        "pane.claim_input": { type: "object" },
+        "pane.release_input": { type: "object" },
+        Pane: {
+          type: "object",
+          properties: {
+            id: { type: "string" },
+            role: { type: "string" },
+          },
+        },
+      },
+    }
+
+    const stockSchema = {
+      $schema: "http://json-schema.org/draft-07/schema#",
+      title: "Herdr IPC API (stock)",
+      definitions: {
+        "pane.split": { type: "object" },
+        Pane: {
+          type: "object",
+          properties: {
+            id: { type: "string" },
+          },
+        },
+      },
+    }
+
+    it("reports herdr: not found when Herdr binary is absent", async () => {
+      const report = await runVerify("test-profile", {
+        processRunner: makeFakeProcessRunner({ herdrInstalled: false }),
+        platformInspector: makeFakePlatformInspector(),
+        fileOps: makeFakeFileOps(),
+        env,
+        bunVersion: "1.3.14",
+      })
+
+      const check = report.checks.find((c) => c.name === "herdr")
+      expect(check).toBeDefined()
+      expect(check!.status).toBe("pass")
+      expect(check!.message).toBe("herdr: not found")
+      expect(report.summary).toContain("herdr: not found")
+      expect(report.ok).toBe(true)
+    })
+
+    it("reports both flags yes when Herdr exposes fork capabilities in schema", async () => {
+      const report = await runVerify("test-profile", {
+        processRunner: makeFakeProcessRunner({
+          herdrInstalled: true,
+          herdrSchemaStdout: JSON.stringify(forkSchema),
+        }),
+        platformInspector: makeFakePlatformInspector(),
+        fileOps: makeFakeFileOps(),
+        env,
+        bunVersion: "1.3.14",
+      })
+
+      const check = report.checks.find((c) => c.name === "herdr")
+      expect(check).toBeDefined()
+      expect(check!.status).toBe("pass")
+      expect(check!.message).toBe("herdr: found (fork capabilities: input-fencing=yes, first-class-role=yes)")
+      expect(report.summary).toContain("herdr: found (fork capabilities: input-fencing=yes, first-class-role=yes)")
+      expect(report.ok).toBe(true)
+    })
+
+    it("reports both flags no for stock Herdr without fork capabilities", async () => {
+      const report = await runVerify("test-profile", {
+        processRunner: makeFakeProcessRunner({
+          herdrInstalled: true,
+          herdrSchemaStdout: JSON.stringify(stockSchema),
+        }),
+        platformInspector: makeFakePlatformInspector(),
+        fileOps: makeFakeFileOps(),
+        env,
+        bunVersion: "1.3.14",
+      })
+
+      const check = report.checks.find((c) => c.name === "herdr")
+      expect(check).toBeDefined()
+      expect(check!.status).toBe("pass")
+      expect(check!.message).toBe("herdr: found (fork capabilities: input-fencing=no, first-class-role=no)")
+      expect(report.summary).toContain("herdr: found (fork capabilities: input-fencing=no, first-class-role=no)")
+      expect(report.ok).toBe(true)
+    })
+
+    it("reports flags unknown when herdr api schema output is malformed", async () => {
+      const report = await runVerify("test-profile", {
+        processRunner: makeFakeProcessRunner({
+          herdrInstalled: true,
+          herdrSchemaStdout: "{ malformed json",
+        }),
+        platformInspector: makeFakePlatformInspector(),
+        fileOps: makeFakeFileOps(),
+        env,
+        bunVersion: "1.3.14",
+      })
+
+      const check = report.checks.find((c) => c.name === "herdr")
+      expect(check).toBeDefined()
+      expect(check!.status).toBe("pass")
+      expect(check!.message).toBe("herdr: found (fork capabilities: input-fencing=unknown, first-class-role=unknown)")
+      expect(report.summary).toContain("herdr: found (fork capabilities: input-fencing=unknown, first-class-role=unknown)")
+      expect(report.ok).toBe(true)
+    })
+
+    it("reports flags unknown when herdr api schema exits with nonzero code", async () => {
+      const report = await runVerify("test-profile", {
+        processRunner: makeFakeProcessRunner({
+          herdrInstalled: true,
+          herdrSchemaExitCode: 1,
+          herdrSchemaStderr: "daemon connection refused",
+        }),
+        platformInspector: makeFakePlatformInspector(),
+        fileOps: makeFakeFileOps(),
+        env,
+        bunVersion: "1.3.14",
+      })
+
+      const check = report.checks.find((c) => c.name === "herdr")
+      expect(check).toBeDefined()
+      expect(check!.status).toBe("pass")
+      expect(check!.message).toBe("herdr: found (fork capabilities: input-fencing=unknown, first-class-role=unknown)")
+      expect(report.summary).toContain("herdr: found (fork capabilities: input-fencing=unknown, first-class-role=unknown)")
+      expect(report.ok).toBe(true)
+    })
+
+    it("reports partial fork capability flags (input-fencing=yes, first-class-role=no)", async () => {
+      const fencingOnlySchema = {
+        $schema: "http://json-schema.org/draft-07/schema#",
+        definitions: {
+          "pane.claim_input": { type: "object" },
+          "pane.release_input": { type: "object" },
+          Pane: {
+            type: "object",
+            properties: { id: { type: "string" } },
+          },
+        },
+      }
+
+      const report = await runVerify("test-profile", {
+        processRunner: makeFakeProcessRunner({
+          herdrInstalled: true,
+          herdrSchemaStdout: JSON.stringify(fencingOnlySchema),
+        }),
+        platformInspector: makeFakePlatformInspector(),
+        fileOps: makeFakeFileOps(),
+        env,
+        bunVersion: "1.3.14",
+      })
+
+      const check = report.checks.find((c) => c.name === "herdr")
+      expect(check).toBeDefined()
+      expect(check!.status).toBe("pass")
+      expect(check!.message).toBe("herdr: found (fork capabilities: input-fencing=yes, first-class-role=no)")
+      expect(report.summary).toContain("herdr: found (fork capabilities: input-fencing=yes, first-class-role=no)")
+      expect(report.ok).toBe(true)
+    })
   })
 })

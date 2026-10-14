@@ -67,7 +67,6 @@ const UPWARD_FORBIDDEN: readonly string[] = [
   "server",
   "tasks",
   "terminal",
-  "tui",
   "workflows",
 ]
 
@@ -77,7 +76,6 @@ const DOWNWARD_FORBIDDEN: readonly string[] = [
   "orchestration",
   "routing",
   "rules",
-  "tui",
   "workflows",
 ]
 

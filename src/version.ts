@@ -9,4 +9,4 @@
  * match `package.json`, which catches the mismatch in the one direction that
  * matters.
  */
-export const CLI_VERSION = "2.2.0"
+export const CLI_VERSION = "3.0.0"

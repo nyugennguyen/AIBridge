@@ -4,12 +4,8 @@
 #
 # Before this file, `router/Cargo.toml` was BOTH the workspace manifest and the
 # `aibr-router` package manifest, and ADR 0008 §4 amended the polyglot guardrail
-# to permit Rust in `router/` only. The TUI/daemon modernization plan
-# (`Docs/implementation-plans/AIBridge_TUI_and_Daemon_Modernization_Plan.md`)
-# adds Rust outside `router/`: the IPC bus, the PTY host and the Ratatui client.
-# Cargo refuses a member that is not hierarchically below its workspace root, so
-# those crates could not be siblings of `router/` while `router/` was the root.
-# The root is here instead.
+# The root Cargo workspace manages router and crates (crates/aibr-ipc, crates/aibr-pty).
+# The legacy client crate was retired in Phase 6.
 #
 # THE GUARDRAIL IS NOT LOOSENED. Rust is still confined to `router/` and
 # `crates/`, `src/` remains TypeScript-only, and `crates/` holds no business
@@ -32,7 +28,6 @@ members = [
     "router/contract-gen",
     "crates/aibr-ipc",
     "crates/aibr-pty",
-    "crates/aibr-tui",
 ]
 # The `contract-gen` exclusion is load-bearing; see the module comment above.
 # The shipped components ARE in here, so `cargo test` at the root is the whole
@@ -40,7 +35,7 @@ members = [
 # is in `default-members` for the same reason as the other two: it is the process
 # supervisor Phase 2 puts between the daemon and an agent, and a supervisor that
 # only compiles only when explicitly named is a supervisor nothing builds.
-default-members = ["router", "crates/aibr-ipc", "crates/aibr-pty", "crates/aibr-tui"]
+default-members = ["router", "crates/aibr-ipc", "crates/aibr-pty"]
 
 # Moved verbatim from `router/Cargo.toml`.
 #

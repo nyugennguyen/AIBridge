@@ -609,15 +609,6 @@ describe("M6.9 the notice is shaped for TuiUiState.notice without importing src/
     }
   })
 
-  it("agrees with src/tui on the shape of the notice field, by reading both declarations", () => {
-    // The compatibility is asserted against the real declaration rather than against
-    // a local copy of it, so a change to `TuiUiState.notice` breaks this test instead
-    // of silently invalidating the M6.8 integration.
-    const tuiTypes = join(REPOSITORY_ROOT, "src/tui/types.ts")
-    expect(existsSync(tuiTypes)).toBe(true)
-    const source = readFileSync(tuiTypes, "utf8")
-    expect(source).toContain("readonly notice: string | null")
-  })
 })
 
 describe("M6.9 the acknowledgement write path is the caller's, in one function", () => {

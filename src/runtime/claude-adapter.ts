@@ -31,6 +31,7 @@ import {
 import type { Readable, Writable } from "node:stream"
 import { LineStreamSplitter, safeParseJsonLine } from "./stream-parser.js"
 import type { AgentRuntimeAdapter } from "./types.js"
+import { RoleBinder } from "./binder.js"
 
 export interface ProcessHandle {
   readonly pid?: number
@@ -475,8 +476,9 @@ export class ClaudeCodeRuntimeAdapter implements AgentRuntimeAdapter {
       args.push("--model", request.dispatchEnvelope.model)
     }
 
-    if (request.dispatchEnvelope.roleSnapshot.instructions) {
-      args.push("--system-prompt", request.dispatchEnvelope.roleSnapshot.instructions)
+    const { systemPrompt } = RoleBinder.compileForClaude(request)
+    if (systemPrompt) {
+      args.push("--system-prompt", systemPrompt)
     }
 
     const sanitizedEnv = sanitizeChildProcessEnv(this.#env, ["ANTHROPIC_API_KEY"])

@@ -2,6 +2,9 @@ import { createContractError, type ContractError, type Result } from "../../orch
 import { eventIdSchema, type EventId, type NodeId } from "../../orchestration/identifiers.js"
 import { EventSequenceTracker, nextLocalSequence, type LocalSequenceVerdict } from "../protocol/event.js"
 import type { MeshEvent } from "../protocol/event.js"
+import { CURRENT_MESH_PROTOCOL_VERSION } from "../protocol/negotiation.js"
+import type { Post } from "../../orchestration/roundtable/types.js"
+import type { OrchestrationEvent } from "../../orchestration/types.js"
 
 /**
  * Controller-side ingestion of a `mesh.event`. Idempotent on `eventId`.
@@ -52,19 +55,27 @@ export type EventIngestOutcome =
       readonly error: ContractError
     }
 
+export interface ControllerRoundtableRelay {
+  relay(event: MeshEvent): Promise<Result<readonly NodeId[]>>
+}
+
 export interface EventIngestorDependencies {
   readonly store: EventIngestStore
   /** Injected so a restart can be modelled, and so nothing here reads a clock. */
   readonly trackers?: Map<string, EventSequenceTracker>
+  /** Optional relay handler when ingest runs on the controller. */
+  readonly relay?: ControllerRoundtableRelay
 }
 
 export class MeshEventIngestor {
   readonly #store: EventIngestStore
   readonly #trackers: Map<string, EventSequenceTracker>
+  readonly #relay?: ControllerRoundtableRelay
 
   constructor(dependencies: EventIngestorDependencies) {
     this.#store = dependencies.store
     this.#trackers = dependencies.trackers ?? new Map()
+    this.#relay = dependencies.relay
   }
 
   /**
@@ -141,6 +152,10 @@ export class MeshEventIngestor {
     // still advanced would turn a retryable storage fault into a permanent hole
     // the controller would then refuse to continue across.
     tracker.evaluate(event.localSequence)
+    if (this.#relay && event.eventType === "roundtable.posted") {
+      const relayed = await this.#relay.relay(event)
+      if (!relayed.ok) return relayed
+    }
     return { ok: true, value: { status: "applied", eventId, localSequence: event.localSequence } }
   }
 
@@ -184,4 +199,111 @@ export function gapRefusal(sourceNodeId: NodeId, from: number, to: number): Cont
     "mesh.event_sequence_gap",
     `Events ${from}-${to} from node '${sourceNodeId}' were never seen. The stream is not continued across the hole: a projection built over a missing 'dispatch.started' reports a running session as un-run, and the remedy an operator reaches for — retry — is the duplicate this mesh exists to prevent. Request the missing range.`,
   )
+}
+
+/**
+ * Controller-side relay for roundtable discussion posts.
+ * Relays incoming member posts to all other members, excluding the sender node.
+ */
+export class DefaultRoundtablePostRelay implements ControllerRoundtableRelay {
+  readonly #roundtables: {
+    get(discussionId: string): {
+      readonly roundtable: { readonly members: readonly { readonly nodeId: NodeId }[] }
+      readonly posts?: readonly Post[]
+    } | undefined
+    post?(
+      postInput: Omit<Post, "seq"> & { readonly seq?: number },
+      isHumanInjection?: boolean,
+    ): Result<{ readonly nextState: unknown; readonly post: Post }>
+  }
+  readonly #transport: { deliver(record: { readonly destination: NodeId; readonly event: MeshEvent }): Promise<void> }
+  readonly #controllerNodeId?: NodeId
+  readonly #deriveEventId: boolean
+
+  constructor(dependencies: {
+    readonly roundtables: {
+      get(discussionId: string): {
+        readonly roundtable: { readonly members: readonly { readonly nodeId: NodeId }[] }
+        readonly posts?: readonly Post[]
+      } | undefined
+      post?(
+        postInput: Omit<Post, "seq"> & { readonly seq?: number },
+        isHumanInjection?: boolean,
+      ): Result<{ readonly nextState: unknown; readonly post: Post }>
+    }
+    readonly transport: { deliver(record: { readonly destination: NodeId; readonly event: MeshEvent }): Promise<void> }
+    readonly controllerNodeId?: NodeId
+    readonly deriveEventId?: boolean
+  }) {
+    this.#roundtables = dependencies.roundtables
+    this.#transport = dependencies.transport
+    this.#controllerNodeId = dependencies.controllerNodeId
+    this.#deriveEventId = dependencies.deriveEventId ?? false
+  }
+
+  async relay(event: MeshEvent): Promise<Result<readonly NodeId[]>> {
+    if (event.event.type !== "roundtable.posted") {
+      return { ok: true, value: [] }
+    }
+    const post = event.event.payload.post
+    const discussion = this.#roundtables.get(post.discussionId)
+    if (!discussion) {
+      return {
+        ok: false,
+        error: createContractError("validation", "relay.discussion_unknown", `Discussion '${post.discussionId}' is unknown`),
+      }
+    }
+
+    // Controller assigns monotonic seq if discussion aggregate repository is available and post is not yet recorded
+    let finalPost: Post = post
+    if (typeof this.#roundtables.post === "function") {
+      const posts: readonly Post[] = discussion.posts ?? []
+      const existing = posts.find((p) => p.postId === post.postId)
+      if (existing) {
+        finalPost = existing
+      } else {
+        const posted = this.#roundtables.post(post, post.authorRoleId === "human")
+        if (posted.ok && posted.value?.post) {
+          finalPost = posted.value.post
+        }
+      }
+    }
+
+    const recipients = Array.from(
+      new Set(
+        discussion.roundtable.members
+          .map((m) => m.nodeId)
+          .filter((nodeId) => nodeId !== event.sourceNodeId && (!this.#controllerNodeId || nodeId !== this.#controllerNodeId)),
+      ),
+    )
+
+    const finalEvent: OrchestrationEvent = {
+      ...event.event,
+      payload: {
+        ...event.event.payload,
+        post: finalPost,
+      },
+    } as OrchestrationEvent
+
+    for (const recipient of recipients) {
+      const eventId = this.#deriveEventId
+        ? eventIdSchema.parse(`mevt-relay-${event.eventId}-${recipient}`)
+        : event.eventId
+
+      const relayedEvent: MeshEvent = {
+        meshProtocolVersion: CURRENT_MESH_PROTOCOL_VERSION,
+        eventId,
+        sourceNodeId: event.sourceNodeId,
+        commandCorrelation: event.commandCorrelation,
+        localSequence: event.localSequence,
+        observedAt: event.observedAt,
+        runProjectScope: event.runProjectScope,
+        eventType: "roundtable.posted",
+        event: finalEvent,
+      }
+      await this.#transport.deliver({ destination: recipient, event: relayedEvent })
+    }
+
+    return { ok: true, value: recipients }
+  }
 }

@@ -32,7 +32,7 @@ SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 # substring is the fallback. `aibridge-dev` matches `bun run dev`, which is the
 # documented way to run the bridge; `src/index.ts` covers a direct
 # `bun src/index.ts`, which is what an ad-hoc capture tends to use.
-THREE_PROCESS_SLOTS="aibr-router|aibr-router|aibr/target/release/aibr-router,aibr-worker|aibr worker|aibr serve|src/index.ts|aibridge-dev,aibr-tui|aibr tui|aibr-tui"
+THREE_PROCESS_SLOTS="aibr-router|aibr-router|aibr/target/release/aibr-router,aibr-worker|aibr worker|aibr serve|src/index.ts|aibridge-dev"
 
 HEADLINE_WARNING="router-only figures are not a host-level result; opencode serve, the ~20 MiB Bun runtime floor, and @opentui/core are untouched. The primary number is the per-tick SUM across the processes that were alive; per-process figures are secondary."
 

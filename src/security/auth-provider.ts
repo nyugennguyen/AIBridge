@@ -39,6 +39,26 @@ export class OpenAuthProvider implements AuthProvider {
 }
 
 /**
+ * Constant-time comparison of a request's bearer credential against one specific
+ * secret, without selecting an auth mode.
+ *
+ * The orchestration seam asks a DIFFERENT question than `AuthProvider.validate`:
+ * not "is this caller admitted?" (the provider answers that) but "does this
+ * caller hold the OPERATOR credential?" — the sole authority for user-kind
+ * `actor` claims. ADR 0008 §4: authorization must rest on authenticated state,
+ * never on self-asserted payload fields. The shared bearer secret admits peers
+ * and carries no per-caller identity, so a payload claiming `kind: "user"` is
+ * only as trustworthy as the credential checked here.
+ */
+export function bearerTokenMatches(authorizationHeader: string | undefined, token: string | null): boolean {
+  if (token === null || token.length === 0) return false
+  if (!authorizationHeader?.startsWith("Bearer ")) return false
+  const received = Buffer.from(authorizationHeader.slice("Bearer ".length))
+  const expected = Buffer.from(token)
+  return received.length === expected.length && timingSafeEqual(received, expected)
+}
+
+/**
  * Selects the auth provider for a config's auth mode.
  *
  * FAILS CLOSED rather than defaulting. `auth_mode: "bearer-token"` with no token

@@ -1,8 +1,19 @@
 import type { Timestamp } from "../identifiers.js"
 import type { OrchestrationCommand, OrchestrationEvent } from "../types.js"
 import type { EventInput, OutboxRecordInput } from "../event-store/types.js"
-import type { Dispatch, Run, Session, Task, Approval } from "../types.js"
-import type { RunProjectionState } from "../projections/types.js"
+import type { Dispatch, Run, Session, Task, Approval, RoleTemplate } from "../types.js"
+import type { DispatchProjection, RunProjectionState, SessionProjection } from "../projections/types.js"
+import type { BudgetLedgerPort } from "../scheduler/types.js"
+import type { RoundtableRepository } from "../roundtable/repository.js"
+import type { CharterRepository } from "../charter/repository.js"
+import type { CharterProposalRepository } from "../charter/proposal.js"
+import type { SafetyFloor } from "../policy/types.js"
+import type { Digest } from "../identifiers.js"
+import type { RoleSnapshot, RoleTemplate as CatalogRoleTemplate } from "../roles/types.js"
+import type { RoleAssignment } from "../schemas.js"
+import type { Charter } from "../charter/types.js"
+import type { MemoryRepository } from "../../memory/ports.js"
+import type { OutboxStore } from "../event-store/outbox-store.js"
 
 /**
  * The transport contract a coordinator depends on: the subset of
@@ -61,6 +72,49 @@ export interface Plan {
   readonly result?: unknown
 }
 
+/**
+ * Port for sending prompts to an execution runtime (e.g. OpenCode daemon).
+ */
+export interface OpencodePromptClient {
+  sendPromptAsync(sessionId: string, prompt: string, directory: string): Promise<void>
+}
+
+/**
+ * Functional monitor that observes a session until it reaches an idle state.
+ */
+export type SessionMonitorFn = (session: Session, directory: string) => Promise<void>
+
+/**
+ * Object port that observes a session until it reaches an idle state.
+ */
+export interface SessionMonitorPort {
+  waitForIdle(session: Session, directory: string): Promise<void>
+}
+
+export type SessionMonitor = SessionMonitorFn | SessionMonitorPort
+
+/**
+ * Stamped result of compiling an effective prompt with role templates and charter.
+ */
+export interface PromptCompilationResult {
+  readonly systemPrompt: string
+  readonly promptDigest?: Digest
+  readonly compositeDigest?: Digest
+  readonly roleDigests?: readonly Digest[]
+}
+
+/**
+ * Injected prompt compiler function for compiling prompts with role assignments / snapshots.
+ * Preserves the M4/M5 module boundary: coordinator does not import runtime/binder directly.
+ */
+export type PromptCompiler = (options: {
+  readonly primaryRole: RoleTemplate | RoleSnapshot | CatalogRoleTemplate
+  readonly secondaryRoles?: readonly (RoleTemplate | RoleSnapshot | CatalogRoleTemplate)[]
+  readonly roleAssignments?: readonly RoleAssignment[]
+  readonly charter?: Charter
+  readonly taskPrompt?: string
+}) => PromptCompilationResult
+
 export interface CoordinatorDependencies {
   readonly log: CommandLog
   readonly now: () => Timestamp
@@ -68,6 +122,38 @@ export interface CoordinatorDependencies {
   readonly boundary?: EffectBoundary
   /** The current run projection, used for state preconditions. */
   readonly readRun: (runId: string) => RunProjectionState | undefined
+  /** OpenCode client for delivering prompts. */
+  readonly opencodeClient?: OpencodePromptClient
+  /** Monitor that tracks session execution until idle. */
+  readonly sessionMonitor?: SessionMonitor
+  /** Alias for sessionMonitor matching ingress/runtime convention. */
+  readonly monitorSession?: SessionMonitor
+  /** Optional directory resolver for the target session. */
+  readonly resolveProjectDir?: (
+    sessionId: string,
+    session?: SessionProjection,
+    dispatch?: DispatchProjection,
+  ) => string | undefined
+  /** Budget ledger port for fan-out and concurrency capacity checks. */
+  readonly budgetLedger?: BudgetLedgerPort
+  /** Roundtable repository for deliberation sessions. */
+  readonly roundtables?: RoundtableRepository
+  /** Transport for delivering outbox runtime effects. */
+  readonly effectTransport?: EffectTransport
+  /** Active charter document for policy evaluation (plan §7, §10 row 1). */
+  readonly charter?: Charter
+  /** Charter repository storing versioned charter snapshots. */
+  readonly charters?: CharterRepository
+  /** Proposal repository/lifecycle manager for agent- or human-authored charter proposals. */
+  readonly charterProposals?: CharterProposalRepository
+  /** Safety floor for evaluating immutable core constraints. */
+  readonly safetyFloor?: SafetyFloor
+  /** Prompt compiler for compiling prompts with role assignments / snapshots (plan §7.1, §10). */
+  readonly compilePrompt?: PromptCompiler
+  /** Memory repository for writing back deliberation outcomes (plan §7, §10 row 3). */
+  readonly memoryRepository?: MemoryRepository
+  /** Durable outbox store backing event store outbox rows. */
+  readonly outboxStore?: OutboxStore
 }
 
 export type CoordinatorError = {
@@ -99,12 +185,22 @@ export const COMMAND_EVENT_ALLOWLIST: Readonly<Record<string, readonly string[]>
   "dispatch.retry": ["dispatch.proposed", "approval.invalidated"],
   "dispatch.timeout.request": ["dispatch.timeout.requested"],
   "dispatch.execute": ["dispatch.started"],
-  "session.prompt": [],
+  "session.prompt": ["session.observed"],
   "session.respond": [],
   "session.interrupt": [],
   "session.terminate": [],
+  "roundtable.open": ["roundtable.opened"],
+  "roundtable.post": ["roundtable.posted"],
+  "roundtable.inject_human": ["roundtable.posted"],
+  "roundtable.close": ["roundtable.outcome_recorded"],
+  "charter.propose": ["charter.proposed"],
+  "charter.approve": ["charter.revised"],
+  "charter.revise": ["charter.revised"],
+  "charter.reject": ["charter.rejected"],
 }
 
 export const RUNTIME_DESTINATION = "runtime.dispatch.execute"
+export const MEMORY_WRITEBACK_DESTINATION = "memory.write_back"
+
 
 export type { Approval, Dispatch, Run, Session, Task }

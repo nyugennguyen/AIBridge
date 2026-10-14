@@ -298,3 +298,42 @@ export async function buildRoutingSnapshotForNode(
   if (!all.ok) return all
   return { ok: true, value: all.value.find((snapshot) => snapshot.nodeId === nodeId) ?? null }
 }
+
+/**
+ * A projection of a routing node snapshot suitable for live mesh node consumers.
+ *
+ * Exposes the live-node view so downstream capability routers and agent registries
+ * can resolve candidates against verified live mesh nodes without reaching into
+ * storage or live mesh singletons.
+ */
+export interface SnapshotLiveMeshNode {
+  readonly nodeId: string
+  readonly capabilities: readonly string[]
+  readonly reachability: "live" | "stale" | "revoked" | "never-seen"
+  readonly healthy: boolean
+}
+
+/**
+ * Creates a mesh node provider from routing snapshots.
+ *
+ * Makes the snapshot array's live-node view available to downstream consumers
+ * (such as AgentRegistry or CapabilityRouter) under the dependency-injection
+ * discipline. Only healthy, non-revoked nodes in the "live" state are exposed
+ * as live candidates.
+ */
+export function createSnapshotMeshNodeProvider(
+  snapshots: readonly RoutingNodeSnapshot[],
+): { readonly getLiveNodes: () => readonly SnapshotLiveMeshNode[] } {
+  return {
+    getLiveNodes(): readonly SnapshotLiveMeshNode[] {
+      return snapshots
+        .filter((snapshot) => snapshot.healthy && snapshot.livenessState === "live" && !snapshot.revoked)
+        .map((snapshot) => ({
+          nodeId: snapshot.nodeId,
+          capabilities: snapshot.capabilities,
+          reachability: snapshot.livenessState,
+          healthy: snapshot.healthy,
+        }))
+    },
+  }
+}

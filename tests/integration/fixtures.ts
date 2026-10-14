@@ -35,6 +35,7 @@ export function testConfig(): BridgeConfig {
   return {
     agent_id: "test-vps",
     bridge: { host: "0.0.0.0", port: 8787, public_url: "http://test-vps.tailnet:8787", ingress_mode: "engine" },
+    terminal: { backend: "tmux" },
     opencode: { base_url: "http://127.0.0.1:4096", server_port: 4096, username: "opencode", password_env: "OPENCODE_SERVER_PASSWORD" },
     security: {
       auth_mode: "bearer-token",
@@ -128,6 +129,11 @@ export interface BuildTestAppOverrides {
    */
   bearerToken?: string | null
   /**
+   * The operator credential presented by human-authority callers. `null`
+   * (the default) fail-closes user-kind `actor` claims at the seam.
+   */
+  operatorToken?: string | null
+  /**
    * Attaches the orchestration kernel to the legacy routes. Omitted by default
    * so the pre-existing suites keep exercising the RELEASED behaviour; the
    * compatibility suite passes one to prove the contract is identical either way.
@@ -143,6 +149,7 @@ export async function buildTestApp(overrides: BuildTestAppOverrides = {}) {
   const app = createApp({
     config,
     bearerToken: overrides.bearerToken ?? "secret",
+    operatorToken: overrides.operatorToken ?? null,
     jobManager,
     opencodeClient: opencode,
     callbackReporter: new CallbackReporter({ attempts: 1, baseDelayMs: 1, fetcher: async () => new Response(null, { status: 200 }) }),

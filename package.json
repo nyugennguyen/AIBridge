@@ -1,6 +1,6 @@
 {
   "name": "@nyugennguyen/aibridge",
-  "version": "2.2.0",
+  "version": "3.0.0",
   "description": "Private Tailscale bridge for OpenCode agents",
   "license": "MIT",
   "type": "module",
@@ -9,7 +9,6 @@
   },
   "bin": {
     "aibr": "./dist/cli.js",
-    "aibr-tui": "./bin/aibr-tui",
     "aibr-router": "./bin/aibr-router"
   },
   "files": [

@@ -40,6 +40,12 @@ export const projectConfigSchema = z.object({
   capabilities: z.array(z.string().min(1)),
 })
 
+/** Terminal backend selection. Default "tmux" for headless safety. */
+export const terminalBackendSchema = z.enum(["tmux", "herdr"])
+export const terminalConfigSchema = z.object({
+  backend: terminalBackendSchema.default("tmux"),
+})
+
 export const bridgeConfigSchema = z.object({
   agent_id: z.string().min(1),
   bridge: z.object({
@@ -48,6 +54,7 @@ export const bridgeConfigSchema = z.object({
     public_url: z.url(),
     ingress_mode: z.enum(["engine", "router"]).default("engine"),
   }),
+  terminal: terminalConfigSchema.default({ backend: "tmux" }),
   opencode: z.object({
     base_url: z.url(),
     server_port: z.number().int().positive(),

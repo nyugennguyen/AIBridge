@@ -104,6 +104,7 @@ export interface OutboxRecordInput {
 }
 
 export interface OutboxFilter {
+  readonly outboxId?: string
   readonly projectId?: string
   readonly runId?: string
   readonly destination?: string

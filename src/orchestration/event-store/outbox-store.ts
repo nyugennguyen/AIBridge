@@ -59,6 +59,10 @@ export function mapOutboxRow(row: OutboxRecordRow): OutboxRecord {
 function buildFilterSql(filter: OutboxFilter | undefined): { sql: string, params: unknown[] } {
   const clauses: string[] = []
   const params: unknown[] = []
+  if (filter?.outboxId !== undefined) {
+    clauses.push("outbox_id = ?")
+    params.push(filter.outboxId)
+  }
   if (filter?.projectId !== undefined) {
     clauses.push("project_id = ?")
     params.push(filter.projectId)

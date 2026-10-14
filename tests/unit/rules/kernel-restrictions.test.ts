@@ -530,3 +530,107 @@ describe("a dispatch approval demanded by a rule is not clearable by a pre-appro
     expect(decision.outstandingApprovals).toContain("capability:fs.write")
   })
 })
+
+// ===========================================================================
+// Plan §7.3 — Immutable core matching test
+// ===========================================================================
+
+describe("Plan §7.3: immutable core matching test (the rule engine enforces safety floor immutability)", () => {
+  it("cannot relax or widen the safety floor through any rule configuration, matching assertCharterDoesNotRelaxCore", () => {
+    // Plan §7.3: "the rule language gains a matching test so this is enforced the same way every other invariant is"
+    // Just as assertCharterDoesNotRelaxCore guarantees that charter proposals cannot touch the safety floor,
+    // the rule composition pipeline guarantees that no rule configuration can widen the safety floor.
+    const set = compiledSet([
+      rawPreApprovalDocument({
+        ruleId: "rule-widening-attempt",
+        actions: [
+          {
+            kind: "pre_approve_within_bounds",
+            approvedCapabilities: ["fs.read", "net.fetch"],
+            maximumTimeoutSeconds: 900,
+            allowDestructiveEffects: false,
+            allowExternalEffects: false,
+            maximumSensitivity: "restricted",
+          },
+        ],
+      }),
+      rawRuleDocument({
+        ruleId: "rule-attempt-bypass",
+        actions: [
+          {
+            kind: "add_restrictions",
+            deniedCapabilities: [],
+            allowDestructiveEffects: false,
+            allowExternalEffects: false,
+          },
+        ],
+      }),
+    ])
+
+    const evaluation = evaluateRules(set, validContext({ requestedCapabilities: ["fs.read"] }))
+    const decision = decisionOf(
+      evaluateWithKernel(
+        {
+          envelope: dispatchEnvelope(),
+          taskTitle: "production dispatch",
+          ruleRestrictions: {
+            allowedCapabilities: null,
+            deniedCapabilities: [],
+            requireApprovalForDispatch: false,
+            requireApprovalForCapabilities: [],
+            requireApprovalForDestructiveEffects: false,
+            requireApprovalForExternalEffects: false,
+            allowDestructiveEffects: true,
+            allowExternalEffects: true,
+            maximumTimeoutSeconds: 999_999,
+            unprojected: [],
+          },
+        },
+        set,
+        evaluation.kernelRules,
+      ),
+    )
+
+    // Immutable core item 1 (SAFETY_FLOOR) is preserved:
+    expect(decision.effective.allowDestructiveEffects).toBe(false)
+    expect(decision.effective.allowExternalEffects).toBe(false)
+    expect(decision.effective.maximumTimeoutSeconds).toBeLessThan(999_999)
+  })
+
+  it("refuses to clear a capability removed by the role or security perimeter, preserving the immutable core security perimeter", () => {
+    // Immutable core item 3 (security perimeter): A pre-approval cannot clear a capability the role removed
+    const set = compiledSet([
+      rawPreApprovalDocument({
+        ruleId: "rule-pre-approve-perimeter",
+        actions: [
+          {
+            kind: "pre_approve_within_bounds",
+            approvedCapabilities: ["net.fetch", "fs.write"],
+            maximumTimeoutSeconds: 900,
+            allowDestructiveEffects: false,
+            allowExternalEffects: false,
+            maximumSensitivity: "restricted",
+          },
+        ],
+      }),
+    ])
+
+    const evaluation = evaluateRules(set, validContext({ requestedCapabilities: ["net.fetch", "fs.write"] }))
+    const decision = decisionOf(
+      evaluateWithKernel(
+        {
+          envelope: dispatchEnvelope({}, ["net.fetch", "fs.write"], ["fs.write"]),
+          taskTitle: "fetch and write",
+          ruleRestrictions: evaluation.restrictions,
+        },
+        set,
+        evaluation.kernelRules,
+      ),
+    )
+
+    // The kernel denies the capability outright; rule pre-approval cannot clear it
+    expect(decision.decision).toBe("deny")
+    expect(decision.denials.map((d) => d.code)).toContain("policy.capability_denied")
+    expect(decision.preApprovalBasis).toBeNull()
+  })
+})

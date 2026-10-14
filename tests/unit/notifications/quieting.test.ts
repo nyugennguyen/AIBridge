@@ -73,14 +73,14 @@ describe("M6.9 quieting by category silences that category at every severity", (
     for (const category of ALL_NOTIFICATION_CATEGORIES) {
       await bus.emit(notificationRequest({ dedupeKey: `k:${category}`, category: category as NotificationCategory }))
     }
-    // Five delivered — every category except the muted one — and the `run_blocked`
+    // Delivered: every category except the muted one — and the `run_blocked`
     // entry is present but muted, so the difference is visible in the inbox rather
     // than being an absence the user cannot interpret.
-    expect(tui.size()).toBe(5)
+    expect(tui.size()).toBe(ALL_NOTIFICATION_CATEGORIES.length - 1)
     expect(tui.list().some((envelope) => envelope.category === "run_blocked")).toBe(false)
-    expect(store.entries()).toHaveLength(6)
+    expect(store.entries()).toHaveLength(ALL_NOTIFICATION_CATEGORIES.length)
     expect(store.entries().filter((entry) => entry.disposition === "muted")).toHaveLength(1)
-    expect(store.pendingCount()).toBe(5)
+    expect(store.pendingCount()).toBe(ALL_NOTIFICATION_CATEGORIES.length - 1)
   })
 
   it("records which axis muted the entry", async () => {

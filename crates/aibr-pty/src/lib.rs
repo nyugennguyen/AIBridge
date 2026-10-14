@@ -2,7 +2,7 @@
 //!
 //! # The one property this crate is shaped around
 //!
-//! **A PTY outlives the client that was watching it.** `aibr tui` can be killed
+//! **A PTY outlives the client that was watching it.** A client can be killed
 //! mid-frame, its socket can close, an operator can close the terminal window --
 //! and the agent keeps running with its scrollback intact, because reattaching
 //! re-hydrates from a fresh [`contracts::StateSnapshot`] rather than from a

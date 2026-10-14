@@ -172,6 +172,7 @@ import {
   type BudgetScope,
   type ReservationDraft,
   type ReservationId,
+  type ReserveRequest,
   type ReservationState,
   type ReservationTransition,
 } from "./types.js"
@@ -277,11 +278,12 @@ function emptyLedgerState(): LedgerState {
  * disagree with it would be a second source of truth. The map is kept for
  * O(1) reporting and is asserted equal to this sum by the invariant test.
  */
-function sumHeldUnits(state: LedgerState, projectId: string, scope: BudgetScope): number {
+function sumHeldUnits(state: LedgerState, projectId: string, scope: BudgetScope, subScope?: string): number {
   let total = 0
   for (const reservation of state.reservations.values()) {
     if (reservation.projectId !== projectId) continue
     if (reservation.scope !== scope) continue
+    if (reservation.subScope !== subScope) continue
     if (!occupiesCapacity(reservation.state)) continue
     total += reservation.units
   }
@@ -307,7 +309,7 @@ function withReservation(
   const heldUnits = new Map(state.heldUnits)
   reservations.set(reservation.reservationId, reservation)
   reservationIdByDispatch.set(reservation.dispatchId, reservation.reservationId)
-  const key = budgetScopeKey(reservation.projectId, reservation.scope)
+  const key = budgetScopeKey(reservation.projectId, reservation.scope, reservation.subScope)
   heldUnits.set(key, Math.max(0, (state.heldUnits.get(key) ?? 0) + deltaUnits))
   return { reservations, heldUnits, reservationIdByDispatch }
 }
@@ -320,7 +322,7 @@ function withReplacedReservation(
   const reservations = new Map(state.reservations)
   const heldUnits = new Map(state.heldUnits)
   reservations.set(reservation.reservationId, reservation)
-  const key = budgetScopeKey(reservation.projectId, reservation.scope)
+  const key = budgetScopeKey(reservation.projectId, reservation.scope, reservation.subScope)
   heldUnits.set(key, Math.max(0, (state.heldUnits.get(key) ?? 0) - releasedUnits))
   return { reservations, heldUnits, reservationIdByDispatch: state.reservationIdByDispatch }
 }
@@ -358,8 +360,8 @@ export class InMemoryBudgetLedgerStore implements BudgetLedgerStore {
     this.#inCriticalSection = true
     try {
       // ---- critical section: synchronous from here to the assignment ----
-      const key = budgetScopeKey(draft.projectId, draft.scope)
-      const held = sumHeldUnits(this.#state, draft.projectId, draft.scope)
+      const key = budgetScopeKey(draft.projectId, draft.scope, draft.subScope)
+      const held = sumHeldUnits(this.#state, draft.projectId, draft.scope, draft.subScope)
 
       if (this.#state.reservations.has(draft.reservationId)) {
         return budgetRefuse(
@@ -396,6 +398,7 @@ export class InMemoryBudgetLedgerStore implements BudgetLedgerStore {
         leaseExpiresAt: draft.leaseExpiresAt,
         createdAt: draft.now,
         updatedAt: draft.now,
+        ...(draft.subScope !== undefined ? { subScope: draft.subScope } : {}),
       })
       this.#state = withReservation(this.#state, reservation, reservation.units)
       // ---- critical section over ----
@@ -493,8 +496,8 @@ export class InMemoryBudgetLedgerStore implements BudgetLedgerStore {
    * second source of truth. The index is kept in step by `withReservation` and is
    * cross-checked by the invariant test.
    */
-  heldUnitsFor(projectId: string, scope: BudgetScope): number {
-    return sumHeldUnits(this.#state, projectId, scope)
+  heldUnitsFor(projectId: string, scope: BudgetScope, subScope?: string): number {
+    return sumHeldUnits(this.#state, projectId, scope, subScope)
   }
 
   /** The maintained index, exposed so the invariant test can cross-check it. */
@@ -595,7 +598,10 @@ export class BudgetLedger {
    * hit, the units already held, and the units requested. `eligible` becomes true
    * for this dispatch at the moment this returns `ok`, and at no moment before.
    */
-  async reserve(request: Parameters<typeof reserveRequestSchema.parse>[0]): Promise<BudgetResult<BudgetReservation>> {
+  #validateReserveDraft(request: unknown): BudgetResult<{
+    readonly draft: ReserveRequest
+    readonly leaseSeconds: number
+  }> {
     const parsed = reserveRequestSchema.safeParse(request)
     if (!parsed.success) {
       return budgetRefuse(
@@ -607,9 +613,6 @@ export class BudgetLedger {
     }
     const draft = parsed.data
 
-    // L3: a unit count that cannot be added is refused BEFORE any state is read,
-    // so there is no path by which a zero-unit reservation makes a dispatch
-    // eligible without consuming capacity.
     if (!Number.isSafeInteger(draft.units) || draft.units < 1) {
       return budgetRefuse(
         "budget.units_invalid",
@@ -627,25 +630,20 @@ export class BudgetLedger {
       )
     }
 
-    // ---- the one await, and it is OUTSIDE the transaction (L9) ----
-    const composed = composeBudgets(await this.#resolveLimits(draft.projectId))
-    const ceiling = scopeCeiling(composed.limits, draft.scope)
-    if (ceiling === null) {
-      // L8: no budget declared is not an infinite budget.
-      return budgetRefuse(
-        "budget.scope_unbounded",
-        `budget.scope_unbounded: the composed budget for project '${draft.projectId}' declares no maximum for the '${draft.scope}' scope, so nothing may be reserved against it; 'no budget' is not 'unlimited budget'`,
-        { scope: draft.scope, limit: null, heldUnits: null, requestedUnits: draft.units },
-      )
-    }
+    return { ok: true, value: { draft, leaseSeconds } }
+  }
 
+  #commitReserveTransaction(
+    draft: ReserveRequest,
+    ceiling: number,
+    leaseSeconds: number,
+  ): BudgetResult<BudgetReservation> {
     const withLease: ReservationDraft = {
       ...draft,
       units: draft.units,
       leaseExpiresAt: addBudgetSeconds(draft.now, leaseSeconds),
     }
 
-    // ---- the compare-and-set. One synchronous frame. (types.ts docblock) ----
     return this.#store.reserveInTransaction(withLease, ceiling, (held) => {
       const saturated = (message: string): ReservationAdmission => ({
         admitted: false,
@@ -671,6 +669,63 @@ export class BudgetLedger {
       }
       return { admitted: true }
     })
+  }
+
+  async reserve(request: unknown): Promise<BudgetResult<BudgetReservation>> {
+    const validated = this.#validateReserveDraft(request)
+    if (!validated.ok) return validated
+
+    const { draft, leaseSeconds } = validated.value
+    const composed = composeBudgets(await this.#resolveLimits(draft.projectId))
+    const ceiling = scopeCeiling(composed.limits, draft.scope)
+    if (ceiling === null) {
+      return budgetRefuse(
+        "budget.scope_unbounded",
+        `budget.scope_unbounded: the composed budget for project '${draft.projectId}' declares no maximum for the '${draft.scope}' scope, so nothing may be reserved against it; 'no budget' is not 'unlimited budget'`,
+        { scope: draft.scope, limit: null, heldUnits: null, requestedUnits: draft.units },
+      )
+    }
+
+    return this.#commitReserveTransaction(draft, ceiling, leaseSeconds)
+  }
+
+  /**
+   * Synchronously reserve capacity for a dispatch when limits are already known
+   * or the injected resolver is synchronous.
+   */
+  reserveSync(
+    request: unknown,
+    limits?: BudgetLimits,
+  ): BudgetResult<BudgetReservation> {
+    const validated = this.#validateReserveDraft(request)
+    if (!validated.ok) return validated
+
+    const { draft, leaseSeconds } = validated.value
+    let effectiveLimits: BudgetLimits
+    if (limits !== undefined) {
+      effectiveLimits = limits
+    } else {
+      const resolved = this.#resolveLimits(draft.projectId)
+      if (resolved instanceof Promise) {
+        throw new InvariantViolationError(
+          "budget.sync_resolver_required",
+          `reserveSync called for project '${draft.projectId}' but the limit resolver returned a Promise. Pass explicit limits or use reserve().`,
+        )
+      }
+      effectiveLimits = resolved
+    }
+
+    const composed = composeBudgets(effectiveLimits)
+    const ceiling = scopeCeiling(composed.limits, draft.scope)
+    if (ceiling === null) {
+      return budgetRefuse(
+        "budget.scope_unbounded",
+        `budget.scope_unbounded: the composed budget for project '${draft.projectId}' declares no maximum for the '${draft.scope}' scope, so nothing may be reserved against it; 'no budget' is not 'unlimited budget'`,
+        { scope: draft.scope, limit: null, heldUnits: null, requestedUnits: draft.units },
+      )
+    }
+
+    return this.#commitReserveTransaction(draft, ceiling, leaseSeconds)
   }
 
   /** The state of the reservation a dispatch holds, or `null` if it holds none. */
@@ -750,8 +805,16 @@ export class BudgetLedger {
   }
 
   /** Units occupying `(projectId, scope)`. Zero for a store without the capability. */
-  heldUnits(projectId: string, scope: BudgetScope): number {
-    return this.#store.heldUnitsFor?.(projectId, scope) ?? 0
+  heldUnits(projectId: string, scope: BudgetScope, subScope?: string): number {
+    return this.#store.heldUnitsFor?.(projectId, scope, subScope) ?? 0
+  }
+
+  heldUnitsFor(projectId: string, scope: BudgetScope, subScope?: string): number {
+    return this.#store.heldUnitsFor?.(projectId, scope, subScope) ?? 0
+  }
+
+  indexedHeldUnits(): ReadonlyMap<string, number> {
+    return this.#store.indexedHeldUnits?.() ?? new Map()
   }
 
   /** Every reservation, code-unit sorted. */

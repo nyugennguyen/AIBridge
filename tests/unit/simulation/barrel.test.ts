@@ -70,7 +70,6 @@ const FORBIDDEN_IMPORTERS = [
   "workflows",
   "budgets",
   "application",
-  "tui",
   "context",
   "memory",
   "mesh",

@@ -132,6 +132,7 @@ const CATEGORY_TITLES: Readonly<Record<NotificationCategory, string>> = Object.f
   budget_exhausted: "Budget exhausted",
   rule_conflict: "Rule conflict",
   pre_approval_pending: "Pre-approval pending",
+  roundtable_outcome: "Roundtable outcome",
 })
 
 /** One-line markers for the closed severity enum. */

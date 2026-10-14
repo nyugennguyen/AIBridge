@@ -161,4 +161,47 @@ describe("AIBridge schemas", () => {
       ).toThrow()
     })
   })
+
+  describe("terminal backend selection", () => {
+    const baseConfig = {
+      agent_id: "test-vps",
+      bridge: { host: "0.0.0.0", port: 8787, public_url: "http://test-vps.tailnet:8787" },
+      opencode: { base_url: "http://127.0.0.1:4096", server_port: 4096, username: "opencode", password_env: "OPENCODE_SERVER_PASSWORD" },
+      security: {
+        auth_mode: "bearer-token",
+        allowed_sources: [{ source_agent_id: "dev-main", capabilities: ["testing"], requires_plan_approval: ["deployment"] }],
+      },
+      permissions: { default_response: "reject", allow_tools: ["read"], require_plan_approval_for_tools: ["bash"] },
+      projects: [{ id: "app", path: "/srv/apps/app", capabilities: ["testing"] }],
+      agents: [{ id: "dev-main", url: "http://dev-main.tailnet:8787", capabilities: ["development"] }],
+      timeouts: { default_job_seconds: 1800, callback_retry_attempts: 3 },
+      planning: { plan_annotator_enabled: true, require_approval_for: ["deployment"] },
+    }
+
+    it("defaults terminal.backend to tmux when terminal is omitted", () => {
+      const parsed = bridgeConfigSchema.parse(baseConfig)
+      expect(parsed.terminal.backend).toBe("tmux")
+    })
+
+    it("defaults terminal.backend to tmux when empty terminal object is passed", () => {
+      const parsed = bridgeConfigSchema.parse({ ...baseConfig, terminal: {} })
+      expect(parsed.terminal.backend).toBe("tmux")
+    })
+
+    it("accepts explicit herdr terminal backend selection", () => {
+      const parsed = bridgeConfigSchema.parse({ ...baseConfig, terminal: { backend: "herdr" } })
+      expect(parsed.terminal.backend).toBe("herdr")
+    })
+
+    it("accepts explicit tmux terminal backend selection", () => {
+      const parsed = bridgeConfigSchema.parse({ ...baseConfig, terminal: { backend: "tmux" } })
+      expect(parsed.terminal.backend).toBe("tmux")
+    })
+
+    it("rejects invalid terminal backend values", () => {
+      expect(() =>
+        bridgeConfigSchema.parse({ ...baseConfig, terminal: { backend: "invalid-backend" } }),
+      ).toThrow()
+    })
+  })
 })

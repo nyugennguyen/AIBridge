@@ -19,7 +19,7 @@
 //!
 //! The four invariants the rest of the system leans on:
 //!
-//! 1. **A client is replaceable.** `aibr tui` holds no authoritative state. It
+//! 1. **A client is replaceable.** An attached client holds no authoritative state. It
 //!    renders a [`contracts::StateSnapshot`] and applies [`contracts::StateDiff`]
 //!    frames, and a fresh process can do the same from nothing. Anything that
 //!    survives a client detaching is owned by the daemon.

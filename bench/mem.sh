@@ -95,7 +95,7 @@ done
 # section 2.1 excludes it from the three-process total -- it is reported, never
 # summed into the headline.
 if [ "$USE_ALL" = "true" ]; then
-  PID_LIST="aibr-router|aibr-router,aibr-worker|aibr worker|aibr serve|aibridge-dev,aibr-tui|aibr tui|aibr-tui,opencode-serve|opencode serve"
+  PID_LIST="aibr-router|aibr-router,aibr-worker|aibr worker|aibr serve|aibridge-dev,opencode-serve|opencode serve"
 fi
 
 if [ -z "$PID_LIST" ]; then

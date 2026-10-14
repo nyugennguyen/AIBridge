@@ -1,8 +1,8 @@
 /**
- * Native binary discovery for AIBridge Rust components (`aibr-tui` and `aibr-router`).
+ * Native binary discovery for AIBridge Rust components (`aibr-router`).
  *
  * This module resolves the compiled Rust binaries across:
- * 1. Environment variable overrides (`AIBRIDGE_TUI_BIN`, `AIBRIDGE_ROUTER_BIN`).
+ * 1. Environment variable overrides (`AIBRIDGE_ROUTER_BIN`).
  * 2. Installed per-platform optional dependency packages (`@nyugennguyen/aibridge-<platform>`).
  * 3. Package-bundled prebuilt binaries (`bin/<name>`).
  * 4. Local workspace checkouts (`target/{release,debug}/<name>`).
@@ -13,7 +13,7 @@ import { createRequire } from "node:module"
 import { delimiter, dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
-export type NativeBinaryName = "aibr-tui" | "aibr-router"
+export type NativeBinaryName = "aibr-router"
 
 /**
  * Supported platform package identifiers for prebuilt optionalDependencies.
@@ -215,7 +215,7 @@ export function resolveNativeBinary(
   const roots = options?.roots ?? getModuleRoots()
 
   // 1. Explicit environment variable override
-  const envVar = name === "aibr-tui" ? env.AIBRIDGE_TUI_BIN : env.AIBRIDGE_ROUTER_BIN
+  const envVar = env.AIBRIDGE_ROUTER_BIN
   if (envVar !== undefined && envVar !== "") {
     if (isExecutable(envVar, platform)) {
       return envVar
@@ -293,13 +293,6 @@ export function resolveNativeBinary(
   }
 
   return null
-}
-
-/**
- * Locate the `aibr-tui` binary. Returns null if unavailable.
- */
-export function findTuiBinary(env?: Record<string, string | undefined>): string | null {
-  return resolveNativeBinary("aibr-tui", env ? { env } : undefined)
 }
 
 /**

@@ -6,7 +6,6 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import {
   detectIsMusl,
   findRouterBinary,
-  findTuiBinary,
   getCandidatePlatformPackages,
   resolveNativeBinary,
   SUPPORTED_PLATFORM_PACKAGES,
@@ -106,13 +105,13 @@ describe("Native binary discovery & platform packages", () => {
   })
 
   describe("resolveNativeBinary", () => {
-    it("respects AIBRIDGE_TUI_BIN environment variable override", () => {
-      const customBin = join(tempDir, "custom-tui")
+    it("respects AIBRIDGE_ROUTER_BIN environment variable override", () => {
+      const customBin = join(tempDir, "custom-router")
       writeFileSync(customBin, "#!/bin/sh\nexit 0\n")
       chmodSync(customBin, 0o755)
 
-      const result = resolveNativeBinary("aibr-tui", {
-        env: { AIBRIDGE_TUI_BIN: customBin },
+      const result = resolveNativeBinary("aibr-router", {
+        env: { AIBRIDGE_ROUTER_BIN: customBin },
         roots: [tempDir],
       })
 
@@ -135,8 +134,8 @@ describe("Native binary discovery & platform packages", () => {
     it("ignores non-executable or nonexistent environment variable path", () => {
       const missingBin = join(tempDir, "nonexistent")
 
-      const result = resolveNativeBinary("aibr-tui", {
-        env: { AIBRIDGE_TUI_BIN: missingBin, PATH: "" },
+      const result = resolveNativeBinary("aibr-router", {
+        env: { AIBRIDGE_ROUTER_BIN: missingBin, PATH: "" },
         roots: [tempDir],
         platform: "unsupported",
       })
@@ -147,11 +146,11 @@ describe("Native binary discovery & platform packages", () => {
     it("finds binary in optionalDependency platform package node_modules directory", () => {
       const pkgBinDir = join(tempDir, "node_modules", "@nyugennguyen", "aibridge-darwin-arm64", "bin")
       mkdirSync(pkgBinDir, { recursive: true })
-      const binaryPath = join(pkgBinDir, "aibr-tui")
+      const binaryPath = join(pkgBinDir, "aibr-router")
       writeFileSync(binaryPath, "#!/bin/sh\nexit 0\n")
       chmodSync(binaryPath, 0o755)
 
-      const result = resolveNativeBinary("aibr-tui", {
+      const result = resolveNativeBinary("aibr-router", {
         env: {},
         roots: [tempDir],
         platform: "darwin",
@@ -182,11 +181,11 @@ describe("Native binary discovery & platform packages", () => {
     it("finds binary in bundled bin/ directory", () => {
       const binDir = join(tempDir, "bin")
       mkdirSync(binDir, { recursive: true })
-      const binaryPath = join(binDir, "aibr-tui")
+      const binaryPath = join(binDir, "aibr-router")
       writeFileSync(binaryPath, "#!/bin/sh\nexit 0\n")
       chmodSync(binaryPath, 0o755)
 
-      const result = resolveNativeBinary("aibr-tui", {
+      const result = resolveNativeBinary("aibr-router", {
         env: {},
         roots: [tempDir],
         platform: "darwin",
@@ -199,11 +198,11 @@ describe("Native binary discovery & platform packages", () => {
     it("finds binary in development workspace target/release/ directory", () => {
       const targetDir = join(tempDir, "target", "release")
       mkdirSync(targetDir, { recursive: true })
-      const binaryPath = join(targetDir, "aibr-tui")
+      const binaryPath = join(targetDir, "aibr-router")
       writeFileSync(binaryPath, "#!/bin/sh\nexit 0\n")
       chmodSync(binaryPath, 0o755)
 
-      const result = resolveNativeBinary("aibr-tui", {
+      const result = resolveNativeBinary("aibr-router", {
         env: {},
         roots: [tempDir],
         platform: "darwin",
@@ -214,7 +213,7 @@ describe("Native binary discovery & platform packages", () => {
     })
 
     it("returns null when binary cannot be located", () => {
-      const result = resolveNativeBinary("aibr-tui", {
+      const result = resolveNativeBinary("aibr-router", {
         env: { PATH: "" },
         roots: [tempDir],
         platform: "unknown",
@@ -225,13 +224,13 @@ describe("Native binary discovery & platform packages", () => {
     it("rejects Mach-O binary on Linux environment to prevent ENOEXEC", () => {
       const bundledDir = join(tempDir, "bin")
       mkdirSync(bundledDir, { recursive: true })
-      const binaryPath = join(bundledDir, "aibr-tui")
+      const binaryPath = join(bundledDir, "aibr-router")
       // Mach-O 64-bit LE header: 0xCF, 0xFA, 0xED, 0xFE
       const machOBuffer = Buffer.from([0xcf, 0xfa, 0xed, 0xfe, 0x07, 0x00, 0x00, 0x01])
       writeFileSync(binaryPath, machOBuffer)
       chmodSync(binaryPath, 0o755)
 
-      const result = resolveNativeBinary("aibr-tui", {
+      const result = resolveNativeBinary("aibr-router", {
         env: { PATH: "" },
         roots: [tempDir],
         platform: "linux",
@@ -244,13 +243,13 @@ describe("Native binary discovery & platform packages", () => {
     it("accepts valid ELF binary on Linux environment", () => {
       const bundledDir = join(tempDir, "bin")
       mkdirSync(bundledDir, { recursive: true })
-      const binaryPath = join(bundledDir, "aibr-tui")
+      const binaryPath = join(bundledDir, "aibr-router")
       // ELF 64-bit header: 0x7F, 'E', 'L', 'F'
       const elfBuffer = Buffer.from([0x7f, 0x45, 0x4c, 0x46, 0x02, 0x01, 0x01, 0x00])
       writeFileSync(binaryPath, elfBuffer)
       chmodSync(binaryPath, 0o755)
 
-      const result = resolveNativeBinary("aibr-tui", {
+      const result = resolveNativeBinary("aibr-router", {
         env: { PATH: "" },
         roots: [tempDir],
         platform: "linux",
@@ -261,15 +260,7 @@ describe("Native binary discovery & platform packages", () => {
     })
   })
 
-  describe("findTuiBinary and findRouterBinary helpers", () => {
-    it("findTuiBinary respects AIBRIDGE_TUI_BIN", () => {
-      const customBin = join(tempDir, "aibr-tui-helper")
-      writeFileSync(customBin, "#!/bin/sh\nexit 0\n")
-      chmodSync(customBin, 0o755)
-
-      expect(findTuiBinary({ AIBRIDGE_TUI_BIN: customBin })).toBe(customBin)
-    })
-
+  describe("findRouterBinary helper", () => {
     it("findRouterBinary respects AIBRIDGE_ROUTER_BIN", () => {
       const customBin = join(tempDir, "aibr-router-helper")
       writeFileSync(customBin, "#!/bin/sh\nexit 0\n")

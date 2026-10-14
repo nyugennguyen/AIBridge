@@ -592,6 +592,7 @@ export const ALL_NOTIFICATION_CATEGORIES: readonly NotificationCategory[] = Obje
   "budget_exhausted",
   "rule_conflict",
   "pre_approval_pending",
+  "roundtable_outcome",
 ])
 
 /** Every severity. */

@@ -12,6 +12,8 @@
  */
 
 import { describe, expect, it } from "vitest"
+import { durable, reopen } from "../mesh/outbox/helpers.js"
+import { SqliteEventStore } from "../../../src/orchestration/event-store/index.js"
 import { InMemoryMemoryRepository } from "../../../src/memory/in-memory-repository.js"
 import type { AppendMemoryInput, AppendMemoryResult, MemoryRepository } from "../../../src/memory/ports.js"
 import { isMemoryRecordV2 } from "../../../src/memory/record.js"
@@ -765,5 +767,326 @@ describe("P5 row 3: Memory Write-Back from Outcomes", () => {
     // Invariant: Exactly one memory record was appended; no duplicate write-back occurred
     const stored = await harness.memoryRepository.listProjectUnscoped(PROJECT)
     expect(stored).toHaveLength(1)
+  })
+
+  describe("Restart Safety & Durable Outbox Discipline (real-File SQLite)", () => {
+    it("append roundtable.close -> new coordinator instance over same store/driver -> sweepMemoryWriteBacks delivers exactly once, second sweep is silent", async () => {
+      const db = durable("writeback-restart-clean")
+      try {
+        const store1 = new SqliteEventStore(db.driver)
+        let seq1 = 0
+        const coordinator1 = new DispatchCoordinator({
+          log: store1,
+          now: () => NOW,
+          newEventId: () => `evt-res-${++seq1}`,
+          readRun: (runId) => (runId === RUN ? makeRunProjection() : undefined),
+          roundtables: new RoundtableRepository(),
+          memoryRepository: undefined,
+        })
+
+        const roundtable = makeSampleRoundtable({ id: "disc-restart-1" })
+        const openRes = coordinator1.submit(
+          baseCommand("roundtable.open", { roundtable }, "cmd-open-restart-1"),
+        )
+        expect(openRes.ok).toBe(true)
+
+        const postRes = coordinator1.submit(
+          baseCommand(
+            "roundtable.post",
+            {
+              post: {
+                postId: "post-restart-1",
+                discussionId: roundtable.id,
+                seq: 1,
+                authorNodeId: CHAIR_NODE,
+                authorRoleId: "chair",
+                kind: "proposal",
+                body: "Durable write-back restart post",
+                createdAt: NOW,
+              },
+            },
+            "cmd-post-restart-1",
+          ),
+        )
+        expect(postRes.ok).toBe(true)
+
+        const outcome = makeSampleOutcome()
+        const outboxId = "obx-cmd-close-restart-1-memory"
+        const closeCmd: OrchestrationCommand = baseCommand(
+          "roundtable.close",
+          { discussionId: roundtable.id, outcome },
+          "cmd-close-restart-1",
+        )
+        const closeRes = coordinator1.submit(closeCmd)
+        expect(closeRes.ok).toBe(true)
+
+        // Durable row is committed in SQLite with status 'pending'
+        const committedRow = store1.getOutboxRecord(outboxId)
+        expect(committedRow).toBeDefined()
+        expect(committedRow?.destination).toBe(MEMORY_WRITEBACK_DESTINATION)
+        expect(committedRow?.status).toBe("pending")
+        expect(committedRow?.attempts).toBe(0)
+
+        // Shutdown / crash process 1
+        db.close()
+
+        // Restart process: reopen existing database file (not :memory:)
+        const reopened = reopen(db.path)
+        try {
+          const store2 = new SqliteEventStore(reopened.driver)
+          const memoryRepo = new InMemoryMemoryRepository({ now: () => NOW })
+          let seq2 = 0
+          const coordinator2 = new DispatchCoordinator({
+            log: store2,
+            now: () => NOW,
+            newEventId: () => `evt-res-${++seq2}`,
+            readRun: (runId) => (runId === RUN ? makeRunProjection() : undefined),
+            roundtables: new RoundtableRepository(),
+            memoryRepository: memoryRepo,
+          })
+
+          // In-memory map is initially empty, but durable store has row
+          expect(await memoryRepo.listProjectUnscoped(PROJECT)).toHaveLength(0)
+          const durableRow = coordinator2.getMemoryWriteBack(outboxId)
+          expect(durableRow).toBeDefined()
+          expect(durableRow?.status).toBe("pending")
+
+          // Sweep delivers the committed outbox row
+          const sweepResults1 = await coordinator2.sweepMemoryWriteBacks()
+          expect(sweepResults1).toHaveLength(1)
+          expect(sweepResults1[0]).toEqual({
+            outboxId,
+            status: "delivered",
+            attempts: 1,
+          })
+
+          // Exactly one memory record was delivered with correct provenance
+          const storedRecords = await memoryRepo.listProjectUnscoped(PROJECT)
+          expect(storedRecords).toHaveLength(1)
+          const rec = storedRecords[0]
+          if (!isMemoryRecordV2(rec)) throw new Error("Expected MemoryRecordV2")
+          expect(rec.trust).toBe("proposed")
+          expect(rec.sourceReferences).toContainEqual({
+            namespace: "postId",
+            id: "post-restart-1",
+          })
+
+          // Row in SQLite is now acknowledged
+          const acknowledgedRow = store2.getOutboxRecord(outboxId)
+          expect(acknowledgedRow?.status).toBe("acknowledged")
+
+          // Second sweep delivers nothing (silent)
+          const sweepResults2 = await coordinator2.sweepMemoryWriteBacks()
+          expect(sweepResults2).toHaveLength(0)
+
+          // Still exactly one memory record (no double-write)
+          expect(await memoryRepo.listProjectUnscoped(PROJECT)).toHaveLength(1)
+        } finally {
+          reopened.remove()
+        }
+      } finally {
+        db.remove()
+      }
+    })
+
+    it("failure in process 1 preserves attempts and lastError on durable row across restart; new coordinator sweep delivers exactly once", async () => {
+      const db = durable("writeback-restart-fail")
+      try {
+        const store1 = new SqliteEventStore(db.driver)
+        const flakyRepo = new FlakyMemoryRepository({ now: () => NOW })
+        flakyRepo.shouldFail = true
+        flakyRepo.failMode = "throw"
+
+        let seq1 = 0
+        const coordinator1 = new DispatchCoordinator({
+          log: store1,
+          now: () => NOW,
+          newEventId: () => `evt-fail-${++seq1}`,
+          readRun: (runId) => (runId === RUN ? makeRunProjection() : undefined),
+          roundtables: new RoundtableRepository(),
+          memoryRepository: flakyRepo,
+        })
+
+        const roundtable = makeSampleRoundtable({ id: "disc-restart-fail-1" })
+        coordinator1.submit(baseCommand("roundtable.open", { roundtable }, "cmd-open-fail-1"))
+        coordinator1.submit(
+          baseCommand(
+            "roundtable.post",
+            {
+              post: {
+                postId: "post-fail-1",
+                discussionId: roundtable.id,
+                seq: 1,
+                authorNodeId: CHAIR_NODE,
+                authorRoleId: "chair",
+                kind: "proposal",
+                body: "Failure test post",
+                createdAt: NOW,
+              },
+            },
+            "cmd-post-fail-1",
+          ),
+        )
+
+        const outcome = makeSampleOutcome()
+        const outboxId = "obx-cmd-close-fail-1-memory"
+        const closeCmd = baseCommand(
+          "roundtable.close",
+          { discussionId: roundtable.id, outcome },
+          "cmd-close-fail-1",
+        ) as Extract<OrchestrationCommand, { type: "roundtable.close" }>
+
+        const closeRes = await coordinator1.submitClose(closeCmd)
+        expect(closeRes.ok).toBe(true)
+
+        // Attempt 1 failed; failure and attempt count are committed on durable row
+        const rowInStore1 = store1.getOutboxRecord(outboxId)
+        expect(rowInStore1).toBeDefined()
+        expect(rowInStore1?.status).toBe("pending")
+        expect(rowInStore1?.attempts).toBe(1)
+        expect(rowInStore1?.lastError).toContain("Memory disk buffer I/O failure")
+        expect(await flakyRepo.listProjectUnscoped(PROJECT)).toHaveLength(0)
+
+        // Crash/close process 1
+        db.close()
+
+        // Restart process: reopen existing SQLite file
+        const reopened = reopen(db.path)
+        try {
+          const store2 = new SqliteEventStore(reopened.driver)
+          const workingRepo = new InMemoryMemoryRepository({ now: () => NOW })
+          let seq2 = 0
+          const coordinator2 = new DispatchCoordinator({
+            log: store2,
+            now: () => NOW,
+            newEventId: () => `evt-fail-${++seq2}`,
+            readRun: (runId) => (runId === RUN ? makeRunProjection() : undefined),
+            roundtables: new RoundtableRepository(),
+            memoryRepository: workingRepo,
+          })
+
+          // Durable state survived restart
+          const beforeSweep = coordinator2.getMemoryWriteBack(outboxId)
+          expect(beforeSweep).toBeDefined()
+          expect(beforeSweep?.status).toBe("pending")
+          expect(beforeSweep?.attempts).toBe(1)
+          expect(beforeSweep?.lastError).toContain("Memory disk buffer I/O failure")
+
+          // Sweep delivers; attempts increments to 2
+          const sweepResults1 = await coordinator2.sweepMemoryWriteBacks()
+          expect(sweepResults1).toHaveLength(1)
+          expect(sweepResults1[0]).toEqual({
+            outboxId,
+            status: "delivered",
+            attempts: 2,
+          })
+
+          // Exactly one memory record delivered
+          const records = await workingRepo.listProjectUnscoped(PROJECT)
+          expect(records).toHaveLength(1)
+
+          // Row in SQLite is now acknowledged
+          expect(store2.getOutboxRecord(outboxId)?.status).toBe("acknowledged")
+
+          // Second sweep delivers nothing
+          const sweepResults2 = await coordinator2.sweepMemoryWriteBacks()
+          expect(sweepResults2).toHaveLength(0)
+          expect(await workingRepo.listProjectUnscoped(PROJECT)).toHaveLength(1)
+        } finally {
+          reopened.remove()
+        }
+      } finally {
+        db.remove()
+      }
+    })
+
+    it("duplicate convergence across restart: record already in memory store converges idempotently (duplicate_id), exactly one record", async () => {
+      const db = durable("writeback-restart-dup")
+      try {
+        const store1 = new SqliteEventStore(db.driver)
+        const memoryRepo = new InMemoryMemoryRepository({ now: () => NOW })
+        let seq1 = 0
+        const coordinator1 = new DispatchCoordinator({
+          log: store1,
+          now: () => NOW,
+          newEventId: () => `evt-dup-${++seq1}`,
+          readRun: (runId) => (runId === RUN ? makeRunProjection() : undefined),
+          roundtables: new RoundtableRepository(),
+          memoryRepository: memoryRepo,
+        })
+
+        const roundtable = makeSampleRoundtable({ id: "disc-restart-dup-1" })
+        coordinator1.submit(baseCommand("roundtable.open", { roundtable }, "cmd-open-dup-1"))
+        coordinator1.submit(
+          baseCommand(
+            "roundtable.post",
+            {
+              post: {
+                postId: "post-dup-1",
+                discussionId: roundtable.id,
+                seq: 1,
+                authorNodeId: CHAIR_NODE,
+                authorRoleId: "chair",
+                kind: "proposal",
+                body: "Dup test post",
+                createdAt: NOW,
+              },
+            },
+            "cmd-post-dup-1",
+          ),
+        )
+
+        const outcome = makeSampleOutcome()
+        const outboxId = "obx-cmd-close-dup-1-memory"
+        const closeCmd = baseCommand(
+          "roundtable.close",
+          { discussionId: roundtable.id, outcome },
+          "cmd-close-dup-1",
+        ) as Extract<OrchestrationCommand, { type: "roundtable.close" }>
+
+        await coordinator1.submitClose(closeCmd)
+        expect(await memoryRepo.listProjectUnscoped(PROJECT)).toHaveLength(1)
+
+        // Simulate ambiguous crash window: record is durable in memory repo, but outbox row reverted to pending
+        db.driver.run(
+          "UPDATE outbox_records SET status = 'pending', acknowledged_at = NULL WHERE outbox_id = ?",
+          outboxId,
+        )
+
+        db.close()
+
+        // Restart process
+        const reopened = reopen(db.path)
+        try {
+          const store2 = new SqliteEventStore(reopened.driver)
+          let seq2 = 0
+          const coordinator2 = new DispatchCoordinator({
+            log: store2,
+            now: () => NOW,
+            newEventId: () => `evt-dup-${++seq2}`,
+            readRun: (runId) => (runId === RUN ? makeRunProjection() : undefined),
+            roundtables: new RoundtableRepository(),
+            memoryRepository: memoryRepo,
+          })
+
+          // Sweep encounters memory.duplicate_id, converges, marks delivered
+          const sweepResults1 = await coordinator2.sweepMemoryWriteBacks()
+          expect(sweepResults1).toHaveLength(1)
+          expect(sweepResults1[0].status).toBe("delivered")
+
+          // Still exactly one memory record in store (no double write)
+          expect(await memoryRepo.listProjectUnscoped(PROJECT)).toHaveLength(1)
+
+          // Second sweep delivers nothing
+          const sweepResults2 = await coordinator2.sweepMemoryWriteBacks()
+          expect(sweepResults2).toHaveLength(0)
+          expect(await memoryRepo.listProjectUnscoped(PROJECT)).toHaveLength(1)
+        } finally {
+          reopened.remove()
+        }
+      } finally {
+        db.remove()
+      }
+    })
   })
 })

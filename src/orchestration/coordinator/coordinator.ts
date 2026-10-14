@@ -16,6 +16,9 @@ import { validateCommandStateByType, type AggregateStateContext } from "../invar
 import { canTransitionDispatch, canTransitionRun, isRunTerminal, isDispatchTerminal, isApprovalTerminal, type RunState, type DispatchState } from "../transitions.js"
 import type { Approval, Dispatch, OrchestrationCommand, OrchestrationEvent, Run, Session, Task, MemoryRecord } from "../types.js"
 import type { EventInput, OutboxRecordInput } from "../event-store/types.js"
+import { OutboxStore } from "../event-store/outbox-store.js"
+import type { OutboxRecord } from "../event-store/types.js"
+import type { SqliteDriver } from "../event-store/sqlite-driver.js"
 import type { ProjectionDispatchState } from "../projections/types.js"
 import {
   COMMAND_EVENT_ALLOWLIST,
@@ -31,6 +34,60 @@ import { createRoundtableOutcomeMemoryRecord } from "../roundtable/index.js"
 import type { MemoryRepository, AppendMemoryInput, AppendMemoryResult } from "../../memory/ports.js"
 import { evaluateRoundtableGate } from "../policy/evaluate.js"
 import type { BudgetReserveParams, BudgetReservationResult } from "../scheduler/types.js"
+
+function toAppendInput(payload: {
+  readonly memory?: MemoryRecord
+  readonly commandId?: string
+}): AppendMemoryInput {
+  const m = payload.memory!
+  return {
+    projectId: m.projectId,
+    kind: m.kind as AppendMemoryInput["kind"],
+    scope: m.scope as AppendMemoryInput["scope"],
+    author: m.author,
+    createdAt: m.createdAt,
+    content: m.content,
+    sensitivity: m.sensitivity as AppendMemoryInput["sensitivity"],
+    retention: m.retention as AppendMemoryInput["retention"],
+    sourceReferences: m.sourceReferences,
+    trust: (m.trustState ?? "proposed") as AppendMemoryInput["trust"],
+    correlationId: payload.commandId,
+  }
+}
+
+interface LogOutboxHooks {
+  markOutboxAcknowledged?(id: string, now: Timestamp): void
+  markOutboxFailed?(id: string, error: unknown, options: { now: Timestamp }): void
+}
+
+function hasLogOutboxHooks(log: unknown): log is LogOutboxHooks {
+  return typeof log === "object" && log !== null
+}
+
+interface LogWithOutboxDriver {
+  readonly outbox?: OutboxStore
+  readonly outboxStore?: OutboxStore
+  readonly driver?: SqliteDriver
+}
+
+function resolveOutboxStore(
+  explicit?: OutboxStore,
+  log?: unknown,
+): OutboxStore | undefined {
+  if (explicit) return explicit
+  if (!log || typeof log !== "object") return undefined
+  const candidate = log as LogWithOutboxDriver
+  if (candidate.outbox instanceof OutboxStore) {
+    return candidate.outbox
+  }
+  if (candidate.outboxStore instanceof OutboxStore) {
+    return candidate.outboxStore
+  }
+  if (candidate.driver && typeof candidate.driver === "object" && "exec" in candidate.driver) {
+    return new OutboxStore(candidate.driver)
+  }
+  return undefined
+}
 
 function ok<T>(value: T): CoordinatorResult<T> {
   return { ok: true, value }
@@ -125,6 +182,7 @@ export class DispatchCoordinator {
   readonly #memoryRepository?: MemoryRepository
   readonly #pendingWriteBacks = new Set<Promise<unknown>>()
   readonly #memoryWriteBacks = new Map<string, MemoryWriteBackRecord>()
+  readonly #outboxStore?: OutboxStore
 
   constructor(dependencies: CoordinatorDependencies) {
     this.#deps = dependencies
@@ -133,6 +191,7 @@ export class DispatchCoordinator {
     this.#proposals = dependencies.charterProposals ?? new CharterProposalLifecycle({ safetyFloor: dependencies.safetyFloor ?? SAFETY_FLOOR })
     this.#safetyFloor = dependencies.safetyFloor ?? SAFETY_FLOOR
     this.#memoryRepository = dependencies.memoryRepository
+    this.#outboxStore = resolveOutboxStore(dependencies.outboxStore, dependencies.log)
   }
 
   /**
@@ -1472,6 +1531,7 @@ export class DispatchCoordinator {
           commandId: command.commandId,
           discussionId,
           memory: memoryRecord,
+          appendInput,
         },
         payloadDigest: memoryRecord.contentDigest,
         status: "pending",
@@ -1863,8 +1923,26 @@ export class DispatchCoordinator {
   #executeMemoryWriteBack(entry: MemoryWriteBackRecord): void {
     if (!this.#memoryRepository || entry.status === "delivered") return
 
-    entry.attempts += 1
-    entry.lastAttemptedAt = this.#deps.now()
+    let claimToken: string | undefined
+    if (this.#outboxStore) {
+      const claim = this.#outboxStore.claimPendingOutbox({
+        outboxId: entry.outboxId,
+        destination: MEMORY_WRITEBACK_DESTINATION,
+        now: this.#deps.now(),
+        leaseMs: 30_000,
+      })
+      if (claim.records.length > 0) {
+        claimToken = claim.token
+        entry.attempts = claim.records[0].attempts
+        entry.lastAttemptedAt = claim.records[0].lastAttemptedAt
+      } else {
+        entry.attempts += 1
+        entry.lastAttemptedAt = this.#deps.now()
+      }
+    } else {
+      entry.attempts += 1
+      entry.lastAttemptedAt = this.#deps.now()
+    }
 
     try {
       const pending = this.#memoryRepository.append(entry.appendInput)
@@ -1875,10 +1953,20 @@ export class DispatchCoordinator {
               entry.status = "delivered"
               entry.deliveredAt = this.#deps.now()
               entry.lastError = undefined
+              if (this.#outboxStore) {
+                this.#outboxStore.markOutboxAcknowledged(entry.outboxId, this.#deps.now())
+              }
               this.#notifyLogOutboxAcknowledged(entry.outboxId)
             } else {
               entry.status = "pending"
               entry.lastError = res.error.message
+              if (this.#outboxStore) {
+                this.#outboxStore.markOutboxFailed(entry.outboxId, res.error, {
+                  claimToken,
+                  now: this.#deps.now(),
+                  nextAttemptAt: this.#deps.now(),
+                })
+              }
               this.#notifyLogOutboxFailed(entry.outboxId, res.error)
             }
           })
@@ -1887,6 +1975,13 @@ export class DispatchCoordinator {
             // Row remains PENDING with error recorded for redelivery.
             entry.status = "pending"
             entry.lastError = err instanceof Error ? err.message : String(err)
+            if (this.#outboxStore) {
+              this.#outboxStore.markOutboxFailed(entry.outboxId, err, {
+                claimToken,
+                now: this.#deps.now(),
+                nextAttemptAt: this.#deps.now(),
+              })
+            }
             this.#notifyLogOutboxFailed(entry.outboxId, err)
           })
           .finally(() => {
@@ -1899,10 +1994,20 @@ export class DispatchCoordinator {
           entry.status = "delivered"
           entry.deliveredAt = this.#deps.now()
           entry.lastError = undefined
+          if (this.#outboxStore) {
+            this.#outboxStore.markOutboxAcknowledged(entry.outboxId, this.#deps.now())
+          }
           this.#notifyLogOutboxAcknowledged(entry.outboxId)
         } else if (res && !res.ok) {
           entry.status = "pending"
           entry.lastError = res.error.message
+          if (this.#outboxStore) {
+            this.#outboxStore.markOutboxFailed(entry.outboxId, res.error, {
+              claimToken,
+              now: this.#deps.now(),
+              nextAttemptAt: this.#deps.now(),
+            })
+          }
           this.#notifyLogOutboxFailed(entry.outboxId, res.error)
         }
       }
@@ -1910,33 +2015,83 @@ export class DispatchCoordinator {
       // Synchronous failure leaves row PENDING with lastError recorded
       entry.status = "pending"
       entry.lastError = err instanceof Error ? err.message : String(err)
+      if (this.#outboxStore) {
+        this.#outboxStore.markOutboxFailed(entry.outboxId, err, {
+          claimToken,
+          now: this.#deps.now(),
+          nextAttemptAt: this.#deps.now(),
+        })
+      }
       this.#notifyLogOutboxFailed(entry.outboxId, err)
     }
   }
 
   #notifyLogOutboxAcknowledged(outboxId: string): void {
-    const log = this.#deps.log as unknown as {
-      markOutboxAcknowledged?: (id: string, now: Timestamp) => void
-    }
-    if (typeof log?.markOutboxAcknowledged === "function") {
-      try {
-        log.markOutboxAcknowledged(outboxId, this.#deps.now())
-      } catch {
-        // Notification failure is non-fatal
+    const log = this.#deps.log
+    if (typeof log === "object" && log !== null) {
+      const hooks = log as LogOutboxHooks
+      if (typeof hooks.markOutboxAcknowledged === "function") {
+        try {
+          hooks.markOutboxAcknowledged(outboxId, this.#deps.now())
+        } catch {
+          // Notification failure is non-fatal
+        }
       }
     }
   }
 
   #notifyLogOutboxFailed(outboxId: string, error: unknown): void {
-    const log = this.#deps.log as unknown as {
-      markOutboxFailed?: (id: string, error: unknown, options: { now: Timestamp }) => void
-    }
-    if (typeof log?.markOutboxFailed === "function") {
-      try {
-        log.markOutboxFailed(outboxId, error, { now: this.#deps.now() })
-      } catch {
-        // Notification failure is non-fatal
+    const log = this.#deps.log
+    if (typeof log === "object" && log !== null) {
+      const hooks = log as LogOutboxHooks
+      if (typeof hooks.markOutboxFailed === "function") {
+        try {
+          hooks.markOutboxFailed(outboxId, error, { now: this.#deps.now() })
+        } catch {
+          // Notification failure is non-fatal
+        }
       }
+    }
+  }
+
+  #mapOutboxRecordToMemoryWriteBack(record: OutboxRecord): MemoryWriteBackRecord | undefined {
+    try {
+      const payload = JSON.parse(record.payloadJson) as {
+        readonly commandId?: string
+        readonly discussionId?: string
+        readonly memory?: MemoryRecord
+        readonly appendInput?: AppendMemoryInput
+      }
+      if (!payload.memory || !payload.discussionId) return undefined
+
+      const memoryRecord = payload.memory
+      const commandId = record.commandId ?? payload.commandId ?? ""
+      const discussionId = payload.discussionId
+      const appendInput =
+        payload.appendInput ??
+        toAppendInput({ memory: payload.memory, commandId })
+
+      const status: "pending" | "delivered" | "failed" =
+        record.status === "acknowledged"
+          ? "delivered"
+          : record.status === "failed"
+            ? "failed"
+            : "pending"
+
+      return {
+        outboxId: record.outboxId,
+        commandId,
+        discussionId,
+        appendInput,
+        memoryRecord,
+        status,
+        attempts: record.attempts,
+        lastError: record.lastError,
+        lastAttemptedAt: record.lastAttemptedAt,
+        deliveredAt: record.acknowledgedAt,
+      }
+    } catch {
+      return undefined
     }
   }
 
@@ -1945,10 +2100,45 @@ export class DispatchCoordinator {
   }
 
   getMemoryWriteBack(outboxId: string): MemoryWriteBackRecord | undefined {
-    return this.#memoryWriteBacks.get(outboxId)
+    const existing = this.#memoryWriteBacks.get(outboxId)
+    if (existing) return existing
+
+    if (this.#outboxStore) {
+      const record = this.#outboxStore.getOutboxRecord(outboxId)
+      if (record && record.destination === MEMORY_WRITEBACK_DESTINATION) {
+        const mapped = this.#mapOutboxRecordToMemoryWriteBack(record)
+        if (mapped) {
+          this.#memoryWriteBacks.set(outboxId, mapped)
+          return mapped
+        }
+      }
+    }
+
+    return undefined
   }
 
   listMemoryWriteBacks(filter?: { status?: "pending" | "delivered" | "failed" }): readonly MemoryWriteBackRecord[] {
+    if (this.#outboxStore) {
+      const outboxStatus =
+        filter?.status === "delivered"
+          ? "acknowledged"
+          : filter?.status === "pending"
+            ? "pending"
+            : filter?.status === "failed"
+              ? "failed"
+              : undefined
+      const outboxRecords = this.#outboxStore.listOutbox({
+        destination: MEMORY_WRITEBACK_DESTINATION,
+        ...(outboxStatus ? { status: outboxStatus } : {}),
+      })
+      for (const rec of outboxRecords) {
+        const mapped = this.#mapOutboxRecordToMemoryWriteBack(rec)
+        if (mapped) {
+          this.#memoryWriteBacks.set(rec.outboxId, mapped)
+        }
+      }
+    }
+
     const records = Array.from(this.#memoryWriteBacks.values())
     if (!filter?.status) return records
     return records.filter((r) => r.status === filter.status)
@@ -1958,10 +2148,10 @@ export class DispatchCoordinator {
    * Sweeps and redelivers all pending memory write-backs.
    *
    * Exactly-once redelivery discipline (§10 Phase 5 row 3):
-   * Retries each pending write-back keyed by `outboxId`. If an outboxId has already
-   * been marked delivered, it is skipped (never double-delivered). If the memory
-   * repository already contains the record (returns `memory.duplicate_id`), it converges
-   * onto the stored record and marks the outbox row delivered.
+   * Sources pending rows from the durable outbox store when available (deliverer/drainer discipline)
+   * or from the in-memory map. Retries each pending write-back keyed by `outboxId`.
+   * If the memory repository already contains the record (returns `memory.duplicate_id`),
+   * it converges onto the stored record and marks the outbox row delivered.
    */
   async sweepMemoryWriteBacks(): Promise<readonly MemoryWriteBackSweepResult[]> {
     if (!this.#memoryRepository) {
@@ -1970,6 +2160,122 @@ export class DispatchCoordinator {
 
     const results: MemoryWriteBackSweepResult[] = []
 
+    if (this.#outboxStore) {
+      const now = this.#deps.now()
+      this.#outboxStore.recoverStaleOutbox({
+        destination: MEMORY_WRITEBACK_DESTINATION,
+        now,
+      })
+
+      const claim = this.#outboxStore.claimPendingOutbox({
+        destination: MEMORY_WRITEBACK_DESTINATION,
+        now,
+        leaseMs: 30_000,
+      })
+
+      for (const record of claim.records) {
+        let appendInput: AppendMemoryInput | undefined
+        let memoryRecord: MemoryRecord | undefined
+        let commandId = record.commandId ?? ""
+        let discussionId = ""
+
+        try {
+          const payload = JSON.parse(record.payloadJson) as {
+            readonly commandId?: string
+            readonly discussionId?: string
+            readonly memory?: MemoryRecord
+            readonly appendInput?: AppendMemoryInput
+          }
+          commandId = payload.commandId ?? commandId
+          discussionId = payload.discussionId ?? ""
+          memoryRecord = payload.memory
+          appendInput =
+            payload.appendInput ??
+            (payload.memory ? toAppendInput({ memory: payload.memory, commandId }) : undefined)
+        } catch {
+          continue
+        }
+
+        if (!appendInput) continue
+
+        let entry = this.#memoryWriteBacks.get(record.outboxId)
+        if (!entry && memoryRecord) {
+          entry = {
+            outboxId: record.outboxId,
+            commandId,
+            discussionId,
+            appendInput,
+            memoryRecord,
+            status: "pending",
+            attempts: record.attempts,
+            lastAttemptedAt: record.lastAttemptedAt,
+          }
+          this.#memoryWriteBacks.set(record.outboxId, entry)
+        }
+
+        if (entry) {
+          entry.attempts = record.attempts
+          entry.lastAttemptedAt = record.lastAttemptedAt ?? now
+        }
+
+        try {
+          const appendResult = await this.#memoryRepository.append(appendInput)
+          if (appendResult.ok || appendResult.error.code === "memory.duplicate_id") {
+            if (entry) {
+              entry.status = "delivered"
+              entry.deliveredAt = now
+              entry.lastError = undefined
+            }
+            this.#outboxStore.markOutboxAcknowledged(record.outboxId, now)
+            this.#notifyLogOutboxAcknowledged(record.outboxId)
+            results.push({
+              outboxId: record.outboxId,
+              status: "delivered",
+              attempts: record.attempts,
+            })
+          } else {
+            if (entry) {
+              entry.status = "pending"
+              entry.lastError = appendResult.error.message
+            }
+            this.#outboxStore.markOutboxFailed(record.outboxId, appendResult.error, {
+              claimToken: claim.token,
+              now,
+              nextAttemptAt: now,
+            })
+            this.#notifyLogOutboxFailed(record.outboxId, appendResult.error)
+            results.push({
+              outboxId: record.outboxId,
+              status: "failed",
+              attempts: record.attempts,
+              error: appendResult.error.message,
+            })
+          }
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err)
+          if (entry) {
+            entry.status = "pending"
+            entry.lastError = message
+          }
+          this.#outboxStore.markOutboxFailed(record.outboxId, err, {
+            claimToken: claim.token,
+            now,
+            nextAttemptAt: now,
+          })
+          this.#notifyLogOutboxFailed(record.outboxId, err)
+          results.push({
+            outboxId: record.outboxId,
+            status: "failed",
+            attempts: record.attempts,
+            error: message,
+          })
+        }
+      }
+
+      return results
+    }
+
+    // In-memory fallback (when running without an OutboxStore)
     for (const record of this.#memoryWriteBacks.values()) {
       if (record.status !== "pending") {
         continue
@@ -2016,10 +2322,6 @@ export class DispatchCoordinator {
     }
 
     return results
-  }
-
-  async redeliverPendingMemoryWriteBacks(): Promise<readonly MemoryWriteBackSweepResult[]> {
-    return this.sweepMemoryWriteBacks()
   }
 
   /**

@@ -13,6 +13,7 @@ import type { RoleSnapshot, RoleTemplate as CatalogRoleTemplate } from "../roles
 import type { RoleAssignment } from "../schemas.js"
 import type { Charter } from "../charter/types.js"
 import type { MemoryRepository } from "../../memory/ports.js"
+import type { OutboxStore } from "../event-store/outbox-store.js"
 
 /**
  * The transport contract a coordinator depends on: the subset of
@@ -151,6 +152,8 @@ export interface CoordinatorDependencies {
   readonly compilePrompt?: PromptCompiler
   /** Memory repository for writing back deliberation outcomes (plan §7, §10 row 3). */
   readonly memoryRepository?: MemoryRepository
+  /** Durable outbox store backing event store outbox rows. */
+  readonly outboxStore?: OutboxStore
 }
 
 export type CoordinatorError = {

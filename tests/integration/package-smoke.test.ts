@@ -4,7 +4,7 @@ import { promisify } from "node:util"
 import { resolve } from "node:path"
 import { beforeAll, describe, expect, it } from "vitest"
 
-import { findRouterBinary, findTuiBinary } from "../../src/host/binaries.js"
+import { findRouterBinary } from "../../src/host/binaries.js"
 
 const execAsync = promisify(exec)
 
@@ -163,7 +163,6 @@ describe("package smoke — pack manifest", () => {
     const { stdout, stderr } = await run("bun pm pack --dry-run")
     const files = parsePackFiles(stdout, stderr)
 
-    expect(files).toContain("bin/aibr-tui")
     expect(files).toContain("bin/aibr-router")
   })
 })
@@ -230,7 +229,6 @@ describe("package smoke — manifest contract", () => {
     const manifest = JSON.parse(await readFile(resolve(ROOT, "package.json"), "utf8"))
 
     expect(manifest.bin?.aibr).toBe("./dist/cli.js")
-    expect(manifest.bin?.["aibr-tui"]).toBe("./bin/aibr-tui")
     expect(manifest.bin?.["aibr-router"]).toBe("./bin/aibr-router")
   })
 
@@ -253,15 +251,6 @@ describe("package smoke — manifest contract", () => {
 })
 
 describe("package smoke — native binaries discovery", () => {
-  it("findTuiBinary resolves to a path ending in aibr-tui or null when unbuilt", () => {
-    const tuiPath = findTuiBinary()
-    if (tuiPath !== null) {
-      expect(typeof tuiPath).toBe("string")
-      expect(tuiPath).toMatch(/aibr-tui$/)
-    } else {
-      expect(tuiPath).toBeNull()
-    }
-  })
 
   it("findRouterBinary resolves to a path ending in aibr-router or null when unbuilt", () => {
     const routerPath = findRouterBinary()
@@ -275,7 +264,6 @@ describe("package smoke — native binaries discovery", () => {
 
   it("resolves binary when override environment variable is provided", () => {
     const sampleBin = resolve(ROOT, "scripts", "install.sh")
-    expect(findTuiBinary({ AIBRIDGE_TUI_BIN: sampleBin })).toBe(sampleBin)
     expect(findRouterBinary({ AIBRIDGE_ROUTER_BIN: sampleBin })).toBe(sampleBin)
   })
 })

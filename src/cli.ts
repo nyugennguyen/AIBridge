@@ -20,6 +20,7 @@ import { access } from "node:fs/promises"
 import { validateProfileName, resolveProfilePaths } from "./host/paths.js"
 import { readSecret, readConfig } from "./host/profile-store.js"
 import type { IpcBusHandle } from "./ipc/bridge.js"
+import type { ProcessRunner } from "./host/types.js"
 // Type-only, so the discovery command costs nothing at import time and `aibr
 // --help` on a machine with no Tailscale still runs. The module that defines
 // these types is loaded lazily inside `createRealDeps`'s `discoverAgents`.
@@ -105,8 +106,10 @@ export interface CliDeps {
   }>
   /** Run `opencode serve` for a given profile. */
   readonly runOpencode: (profile: string) => Promise<void>
-  /** Run the separately-composed interactive TUI for a validated profile. */
+  /** Run the interactive TUI or link the Herdr manager plugin for a validated profile. */
   readonly runTui?: (profile: string) => Promise<CliExitCode>
+  /** Process runner for executing system commands (Herdr, etc.). */
+  readonly processRunner?: ProcessRunner
   /** Generate diagnostic support bundle. */
   readonly runBundle?: (profile: string, options?: { readonly preview?: boolean }) => Promise<CliExitCode>
   /** Validate dependencies, SSL token, and config format for a profile. */
@@ -228,7 +231,7 @@ function helpText(): string {
     "  status   Check tmux session and bridge health",
     "  verify   Validate dependencies, SSL token, and config format",
     "  update   Check and update to the latest version",
-    "  tui      Open the interactive local UI",
+    "  tui      Open the interactive manager (Herdr plugin)",
     "  bundle   Generate diagnostic support bundle",
     "  discover List tailnet peers and probe their /health (read-only)",
     "",
@@ -240,7 +243,7 @@ function helpText(): string {
     "  --help, -h             Show this help",
     "  --version, -v          Show version",
     "  --shadow-mode          Run in shadow mode (mirroring ingress to router)",
-    "  --ipc-publish          Serve the local IPC bus for the TUI (worker only)",
+    "  --ipc-publish          Serve the local IPC bus (worker only)",
     "",
   ].join("\n")
 }
@@ -686,20 +689,23 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<Cl
 
   // ── tui ────────────────────────────────────────────────────────────
   if (command === "tui") {
-    if (!deps.isTTY || deps.isInputTTY === false) {
-      deps.writer("Error: tui requires interactive stdin and stdout TTYs\n")
-      return 1
+    if (deps.runTui !== undefined) {
+      try {
+        return await deps.runTui(profile)
+      } catch (err) {
+        deps.writer(`Error: ${err instanceof Error ? err.message : "tui failed"}\n`)
+        return 1
+      }
     }
-    if (deps.runTui === undefined) {
-      deps.writer("Error: TUI application service is unavailable\n")
-      return 1
-    }
-    try {
-      return await deps.runTui(profile)
-    } catch (err) {
-      deps.writer(`Error: ${err instanceof Error ? err.message : "tui failed"}\n`)
-      return 1
-    }
+    const { runTuiCommand } = await import("./cli/tui.js")
+    const { BunProcessRunner } = await import("./host/runtime.js")
+    const runner = deps.processRunner ?? new BunProcessRunner()
+    return await runTuiCommand({
+      profile,
+      runner,
+      writer: deps.writer,
+      env: process.env,
+    })
   }
 
   // ── start ──────────────────────────────────────────────────────────
@@ -834,31 +840,13 @@ async function createRealDeps(): Promise<CliDeps> {
     isTTY: Boolean(process.stdout?.isTTY),
     isInputTTY: Boolean(process.stdin?.isTTY),
     runTui: async (profile: string) => {
-      // The Rust client attaches to the IPC daemon. When the daemon socket is
-      // active, the Rust client is preferred. If the daemon is not running or the
-      // client exits with code 1, the OpenTUI shell remains the fallback so `aibr tui`
-      // always launches a working workspace.
-      const { findTuiBinary, runRustTui } = await import("./tui/rust-client.js")
-      const { resolveSocketPath } = await import("./ipc/publisher.js")
-      const binary = findTuiBinary()
-      const socketActive = existsSync(resolveSocketPath())
-      const forceRust = process.env.AIBRIDGE_TUI_CLIENT === "rust"
-
-      if (binary !== null && (socketActive || forceRust)) {
-        try {
-          const exitCode = await runRustTui(profile)
-          if (exitCode === 0) return 0
-          process.stderr.write(
-            `\n[aibr] Rust TUI client exited with code ${exitCode}. Falling back to OpenTUI shell...\n`,
-          )
-        } catch (error) {
-          process.stderr.write(
-            `aibr tui: failed to launch native Rust client (${error instanceof Error ? error.message : String(error)}), falling back to OpenTUI shell...\n`,
-          )
-        }
-      }
-      const { runLocalTui } = await import("./tui/bootstrap.js")
-      return runLocalTui(profile)
+      const { runTuiCommand } = await import("./cli/tui.js")
+      return await runTuiCommand({
+        profile,
+        runner: processRunner,
+        writer,
+        env: process.env,
+      })
     },
 
     runSetup: async (profile?: string) => {

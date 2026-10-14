@@ -261,6 +261,7 @@ export const NOTIFICATION_CATEGORIES = [
   "budget_exhausted",
   "rule_conflict",
   "pre_approval_pending",
+  "roundtable_outcome",
 ] as const
 export const notificationCategorySchema = z.enum(NOTIFICATION_CATEGORIES)
 export type NotificationCategory = z.infer<typeof notificationCategorySchema>

@@ -93,9 +93,9 @@ Instead of sequential stdout readline prompts, `aibr setup` runs an interactive 
    ```bash
    aibr verify -p default
    ```
-4. Attach client:
+4. Link manager plugin:
    ```bash
-   aibr tui
+   aibr tui -p default
    ```
 
 ---

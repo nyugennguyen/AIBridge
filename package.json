@@ -9,7 +9,6 @@
   },
   "bin": {
     "aibr": "./dist/cli.js",
-    "aibr-tui": "./bin/aibr-tui",
     "aibr-router": "./bin/aibr-router"
   },
   "files": [

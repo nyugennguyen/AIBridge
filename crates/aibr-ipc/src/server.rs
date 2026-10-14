@@ -18,10 +18,8 @@
 //! from `Read`/`Write` into the runtime, which leaves `frame::read_frame_blocking`
 //! and `frame::AsyncFrameRead` as two live codepaths through the codec -- and the
 //! frame-cap check is the one thing in that codec that must not exist twice.
-//! `crates/aibr-tui` already depends on the async half, so the async half is the
-//! one that has to stay correct. The tokio transport's streams implement
-//! `tokio::io::AsyncRead`, so `read_frame()` is used directly and the crate keeps
-//! exactly one read path.
+//! The tokio transport's streams implement `tokio::io::AsyncRead`, so
+//! `read_frame()` is used directly and the crate keeps exactly one read path.
 //!
 //! The cost is real and recorded here rather than discovered later: the listener
 //! must run on a tokio runtime, so [`Server::bind`] cannot be called from a
@@ -190,10 +188,9 @@ impl std::error::Error for ServerError {}
 
 /// Resolve the socket path, in the order [`crate::SOCKET_PATH_ENV`] documents.
 ///
-/// The same three steps, in the same order, as
-/// `crates/aibr-tui/src/daemon/mod.rs::socket_path`: the override, then
+/// The canonical three steps: the override, then
 /// `$XDG_RUNTIME_DIR/aibr/daemon.sock`, then the `/tmp` default. They have to
-/// agree byte for byte, because a disagreement surfaces as "the daemon is not
+/// agree byte for byte with the publisher, because a disagreement surfaces as "the daemon is not
 /// running" rather than as a disagreement about a path.
 pub fn socket_path() -> Result<String, ServerError> {
     if let Some(path) = std::env::var_os(crate::SOCKET_PATH_ENV) {

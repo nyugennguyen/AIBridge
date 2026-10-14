@@ -188,8 +188,7 @@ interface Peer {
 }
 
 /**
- * Resolve the socket path the same way `crates/aibr-ipc/src/server.rs` and
- * `crates/aibr-tui/src/daemon/mod.rs` do.
+ * Resolve the socket path the same way `crates/aibr-ipc/src/server.rs` does.
  *
  * The three steps, in the same order, because a disagreement here surfaces as "the
  * daemon is not running" rather than as a disagreement about a path.

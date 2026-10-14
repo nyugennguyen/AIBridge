@@ -3,15 +3,15 @@
 # WHY THIS IS A SEPARATE CRATE AND NOT A MODULE OF `aibr-ipc`.
 # `aibr-ipc` is a wire codec and a socket; it must stay free of anything that
 # spawns processes, so that a client could depend on it without inheriting a
-# supervisor. `aibr-tui` must not depend on this crate at all -- a renderer that
-# links a PTY host could, in principle, open one, which would make "the TUI holds
+# A presentation client must not depend on this crate at all -- a renderer that
+# links a PTY host could, in principle, open one, which would make "the client holds
 # no state" untrue rather than merely unlikely. Keeping the supervisor on its own
 # makes that an import error instead of a review question.
 #
 # WHAT IT OWNS. A spawned child, its PTY master, the bytes it has written, and the
 # per-pane sequence counter that lets a client notice a gap. It does NOT own
 # lifetime policy: nothing here is signalled because a client disconnected. The
-# invariant Phase 6 names -- `aibr tui` can be killed at any moment without
+# invariant Phase 6 names -- a client can be killed at any moment without
 # affecting a single agent -- is enforced by the absence of any path from a
 # connection to a signal.
 

@@ -181,6 +181,41 @@ export async function runVerify(profileName: string, deps?: VerifyDeps): Promise
       detail: preflight.tailscale.error ?? undefined,
     })
   }
+  // ── 3b. Check Herdr workspace orchestrator (informational) ──────────
+  //
+  // Per ADR 0009 / ADR 0011 / docs/implementation-plans/aibridge-herdr-orchestration.md §8:
+  // Herdr is an optional user-installed terminal backend (`brew install herdr`), never
+  // an npm dependency. Headless nodes continue using tmux by default.
+  // The AIBridge orchestration fork exposes two capability flags:
+  // - F1: input-ownership fencing (`pane.claim_input` / `pane.release_input`)
+  // - F2: first-class `role` on pane/agent records
+  // Absence of Herdr or absence of fork flags is informational, never a hard failure.
+  const herdrFacts = preflight.herdr ?? {
+    installed: false,
+    path: null,
+    capabilities: { inputFencing: "no", firstClassRole: "no" },
+    error: null,
+  }
+  if (herdrFacts.installed) {
+    const { inputFencing, firstClassRole } = herdrFacts.capabilities
+    const detailParts: string[] = []
+    if (herdrFacts.path) detailParts.push(`Binary: ${herdrFacts.path}`)
+    if (herdrFacts.error) detailParts.push(`Schema probe note: ${herdrFacts.error}`)
+    checks.push({
+      name: "herdr",
+      status: "pass",
+      message: `herdr: found (fork capabilities: input-fencing=${inputFencing}, first-class-role=${firstClassRole})`,
+      detail: detailParts.length > 0 ? detailParts.join("; ") : undefined,
+    })
+  } else {
+    checks.push({
+      name: "herdr",
+      status: "pass",
+      message: "herdr: not found",
+      detail:
+        "Informational: tmux remains the default terminal backend. Install Herdr (e.g. brew install herdr) for GUI workspace orchestration.",
+    })
+  }
 
   // ── 4. Check Config File & Schema ───────────────────────────────────
   const fileOps: VerifyFileOps = deps?.fileOps ?? {

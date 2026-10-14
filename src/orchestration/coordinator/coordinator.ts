@@ -9,12 +9,12 @@ import type { SafetyFloor } from "../policy/types.js"
 import type { Charter } from "../charter/types.js"
 import { CURRENT_MESH_PROTOCOL_VERSION } from "../../mesh/protocol/negotiation.js"
 import { digestDispatchEnvelope } from "../digest.js"
-import { sessionIdSchema, nodeIdSchema, installationIdSchema, taskIdSchema } from "../identifiers.js"
-import { createContractError } from "../errors.js"
+import { sessionIdSchema, nodeIdSchema, installationIdSchema, taskIdSchema, type Timestamp } from "../identifiers.js"
+import { createContractError, type Result } from "../errors.js"
 import { verifyApproval } from "../policy/approval.js"
 import { validateCommandStateByType, type AggregateStateContext } from "../invariants.js"
 import { canTransitionDispatch, canTransitionRun, isRunTerminal, isDispatchTerminal, isApprovalTerminal, type RunState, type DispatchState } from "../transitions.js"
-import type { Approval, Dispatch, OrchestrationCommand, OrchestrationEvent, Run, Session, Task } from "../types.js"
+import type { Approval, Dispatch, OrchestrationCommand, OrchestrationEvent, Run, Session, Task, MemoryRecord } from "../types.js"
 import type { EventInput, OutboxRecordInput } from "../event-store/types.js"
 import type { ProjectionDispatchState } from "../projections/types.js"
 import {
@@ -28,7 +28,7 @@ import {
 } from "./types.js"
 import { getSiblingDispatches, planFanOutDispatchesSync } from "../scheduler/index.js"
 import { createRoundtableOutcomeMemoryRecord } from "../roundtable/index.js"
-import type { MemoryRepository, AppendMemoryInput } from "../../memory/ports.js"
+import type { MemoryRepository, AppendMemoryInput, AppendMemoryResult } from "../../memory/ports.js"
 import { evaluateRoundtableGate } from "../policy/evaluate.js"
 import type { BudgetReserveParams, BudgetReservationResult } from "../scheduler/types.js"
 
@@ -124,6 +124,7 @@ export class DispatchCoordinator {
   readonly #safetyFloor: SafetyFloor
   readonly #memoryRepository?: MemoryRepository
   readonly #pendingWriteBacks = new Set<Promise<unknown>>()
+  readonly #memoryWriteBacks = new Map<string, MemoryWriteBackRecord>()
 
   constructor(dependencies: CoordinatorDependencies) {
     this.#deps = dependencies
@@ -229,8 +230,8 @@ export class DispatchCoordinator {
     }
 
     this.#deps.boundary?.afterCommit?.(command, planned.value.result)
-    if (!appended.duplicate && command.type === "roundtable.close" && this.#memoryRepository) {
-      this.#writeBackMemory(planned.value)
+    if (!appended.duplicate && command.type === "roundtable.close") {
+      this.#registerAndWriteBackMemory(command, planned.value)
     }
 
 
@@ -1484,7 +1485,7 @@ export class DispatchCoordinator {
     return ok({
       events: [this.#event(command, "roundtable.outcome_recorded", { discussionId, outcome })],
       outboxRecords,
-      result: { outcome, memory: memoryRecord, appendInput },
+      result: { outcome, memory: memoryRecord, appendInput, outboxId },
     })
   }
 
@@ -1812,38 +1813,213 @@ export class DispatchCoordinator {
   }
 
   /**
-   * Writes back the deliberation outcome to the memory repository post-commit.
-   *
-   * Crucial semantic invariant (§10 row 3 acceptance):
-   * A failed memory write does NOT corrupt, roll back, or fail the outcome commit.
-   * The domain event `roundtable.outcome_recorded` and the outbox row are already
-   * durably committed. Any write-back failure (synchronous throw or rejected promise)
-   * is isolated; the outbox record remains in the store for recovery/replay.
+   * Registers a committed memory write-back outbox entry and triggers its initial delivery.
    */
-  #writeBackMemory(plan: Plan): void {
-    if (!this.#memoryRepository) return
-    const planResult = plan.result as { appendInput?: AppendMemoryInput } | undefined
-    if (!planResult?.appendInput) return
+  #registerAndWriteBackMemory(
+    command: Extract<OrchestrationCommand, { type: "roundtable.close" }>,
+    plan: Plan,
+  ): void {
+    const planResult = plan.result as
+      | { appendInput?: AppendMemoryInput; memory?: MemoryRecord; outboxId?: string }
+      | undefined
+    if (!planResult?.appendInput || !planResult?.memory || !planResult?.outboxId) return
+
+    const { outboxId, appendInput, memory: memoryRecord } = planResult
+
+    const existing = this.#memoryWriteBacks.get(outboxId)
+    const entry: MemoryWriteBackRecord = existing ?? {
+      outboxId,
+      commandId: command.commandId,
+      discussionId: command.payload.discussionId,
+      appendInput,
+      memoryRecord,
+      status: "pending",
+      attempts: 0,
+    }
+
+    if (!existing) {
+      this.#memoryWriteBacks.set(outboxId, entry)
+    }
+
+    if (!this.#memoryRepository) {
+      return
+    }
+
+    this.#executeMemoryWriteBack(entry)
+  }
+
+  /**
+   * Executes memory write-back to the memory repository post-commit.
+   *
+   * Crucial semantic invariants (§10 Phase 5 row 3):
+   * 1. A failed memory write does NOT corrupt, roll back, or fail the outcome commit.
+   *    The domain event `roundtable.outcome_recorded` and the outbox row are already
+   *    durably committed.
+   * 2. A failed append (sync throw or async rejection) leaves the row PENDING (not delivered)
+   *    with the failure visible on `lastError` and `attempts` incremented.
+   * 3. Idempotent convergence: if the memory repository returns `memory.duplicate_id`,
+   *    the record is already durable in memory and the row is marked `delivered`.
+   */
+  #executeMemoryWriteBack(entry: MemoryWriteBackRecord): void {
+    if (!this.#memoryRepository || entry.status === "delivered") return
+
+    entry.attempts += 1
+    entry.lastAttemptedAt = this.#deps.now()
 
     try {
-      const pending = this.#memoryRepository.append(planResult.appendInput)
+      const pending = this.#memoryRepository.append(entry.appendInput)
       if (pending && typeof (pending as Promise<unknown>).then === "function") {
-        const tracked = (pending as Promise<unknown>)
-          .catch(() => {
+        const tracked = (pending as Promise<Result<AppendMemoryResult>>)
+          .then((res) => {
+            if (res.ok || res.error.code === "memory.duplicate_id") {
+              entry.status = "delivered"
+              entry.deliveredAt = this.#deps.now()
+              entry.lastError = undefined
+              this.#notifyLogOutboxAcknowledged(entry.outboxId)
+            } else {
+              entry.status = "pending"
+              entry.lastError = res.error.message
+              this.#notifyLogOutboxFailed(entry.outboxId, res.error)
+            }
+          })
+          .catch((err) => {
             // Memory write failure is isolated: outcome commit is already durable.
+            // Row remains PENDING with error recorded for redelivery.
+            entry.status = "pending"
+            entry.lastError = err instanceof Error ? err.message : String(err)
+            this.#notifyLogOutboxFailed(entry.outboxId, err)
           })
           .finally(() => {
             this.#pendingWriteBacks.delete(tracked)
           })
         this.#pendingWriteBacks.add(tracked)
+      } else {
+        const res = pending as unknown as Result<AppendMemoryResult>
+        if (res && (res.ok || res.error?.code === "memory.duplicate_id")) {
+          entry.status = "delivered"
+          entry.deliveredAt = this.#deps.now()
+          entry.lastError = undefined
+          this.#notifyLogOutboxAcknowledged(entry.outboxId)
+        } else if (res && !res.ok) {
+          entry.status = "pending"
+          entry.lastError = res.error.message
+          this.#notifyLogOutboxFailed(entry.outboxId, res.error)
+        }
       }
-    } catch {
-      // Synchronous failure caught: outcome commit remains intact.
+    } catch (err) {
+      // Synchronous failure leaves row PENDING with lastError recorded
+      entry.status = "pending"
+      entry.lastError = err instanceof Error ? err.message : String(err)
+      this.#notifyLogOutboxFailed(entry.outboxId, err)
+    }
+  }
+
+  #notifyLogOutboxAcknowledged(outboxId: string): void {
+    const log = this.#deps.log as unknown as {
+      markOutboxAcknowledged?: (id: string, now: Timestamp) => void
+    }
+    if (typeof log?.markOutboxAcknowledged === "function") {
+      try {
+        log.markOutboxAcknowledged(outboxId, this.#deps.now())
+      } catch {
+        // Notification failure is non-fatal
+      }
+    }
+  }
+
+  #notifyLogOutboxFailed(outboxId: string, error: unknown): void {
+    const log = this.#deps.log as unknown as {
+      markOutboxFailed?: (id: string, error: unknown, options: { now: Timestamp }) => void
+    }
+    if (typeof log?.markOutboxFailed === "function") {
+      try {
+        log.markOutboxFailed(outboxId, error, { now: this.#deps.now() })
+      } catch {
+        // Notification failure is non-fatal
+      }
     }
   }
 
   get memoryRepository(): MemoryRepository | undefined {
     return this.#memoryRepository
+  }
+
+  getMemoryWriteBack(outboxId: string): MemoryWriteBackRecord | undefined {
+    return this.#memoryWriteBacks.get(outboxId)
+  }
+
+  listMemoryWriteBacks(filter?: { status?: "pending" | "delivered" | "failed" }): readonly MemoryWriteBackRecord[] {
+    const records = Array.from(this.#memoryWriteBacks.values())
+    if (!filter?.status) return records
+    return records.filter((r) => r.status === filter.status)
+  }
+
+  /**
+   * Sweeps and redelivers all pending memory write-backs.
+   *
+   * Exactly-once redelivery discipline (§10 Phase 5 row 3):
+   * Retries each pending write-back keyed by `outboxId`. If an outboxId has already
+   * been marked delivered, it is skipped (never double-delivered). If the memory
+   * repository already contains the record (returns `memory.duplicate_id`), it converges
+   * onto the stored record and marks the outbox row delivered.
+   */
+  async sweepMemoryWriteBacks(): Promise<readonly MemoryWriteBackSweepResult[]> {
+    if (!this.#memoryRepository) {
+      return []
+    }
+
+    const results: MemoryWriteBackSweepResult[] = []
+
+    for (const record of this.#memoryWriteBacks.values()) {
+      if (record.status !== "pending") {
+        continue
+      }
+
+      record.attempts += 1
+      record.lastAttemptedAt = this.#deps.now()
+
+      try {
+        const appendResult = await this.#memoryRepository.append(record.appendInput)
+        if (appendResult.ok || appendResult.error.code === "memory.duplicate_id") {
+          record.status = "delivered"
+          record.deliveredAt = this.#deps.now()
+          record.lastError = undefined
+          this.#notifyLogOutboxAcknowledged(record.outboxId)
+          results.push({
+            outboxId: record.outboxId,
+            status: "delivered",
+            attempts: record.attempts,
+          })
+        } else {
+          record.status = "pending"
+          record.lastError = appendResult.error.message
+          this.#notifyLogOutboxFailed(record.outboxId, appendResult.error)
+          results.push({
+            outboxId: record.outboxId,
+            status: "failed",
+            attempts: record.attempts,
+            error: appendResult.error.message,
+          })
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        record.status = "pending"
+        record.lastError = message
+        this.#notifyLogOutboxFailed(record.outboxId, err)
+        results.push({
+          outboxId: record.outboxId,
+          status: "failed",
+          attempts: record.attempts,
+          error: message,
+        })
+      }
+    }
+
+    return results
+  }
+
+  async redeliverPendingMemoryWriteBacks(): Promise<readonly MemoryWriteBackSweepResult[]> {
+    return this.sweepMemoryWriteBacks()
   }
 
   /**
@@ -1864,6 +2040,26 @@ export class DispatchCoordinator {
     await this.flushMemoryWriteBacks()
     return result
   }
+}
+
+export interface MemoryWriteBackRecord {
+  readonly outboxId: string
+  readonly commandId: string
+  readonly discussionId: string
+  readonly appendInput: AppendMemoryInput
+  readonly memoryRecord: MemoryRecord
+  status: "pending" | "delivered" | "failed"
+  attempts: number
+  lastError?: string
+  lastAttemptedAt?: string
+  deliveredAt?: string
+}
+
+export interface MemoryWriteBackSweepResult {
+  readonly outboxId: string
+  readonly status: "delivered" | "failed" | "skipped"
+  readonly attempts: number
+  readonly error?: string
 }
 
 export type { CoordinatorDependencies, CoordinatorResult }

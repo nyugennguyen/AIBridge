@@ -223,6 +223,38 @@ export function registerOrchestrationRoutes(app: FastifyInstance, dependencies: 
       } else {
         result = await coordinator.submit(command)
       }
+      if (!result.ok && dependencies.notificationConsumer) {
+        const payload = (command.payload && typeof command.payload === "object")
+          ? (command.payload as Record<string, unknown>)
+          : {}
+        const runId = typeof command.runId === "string" && command.runId.length > 0 ? command.runId : command.projectId
+        const dispatchObj = (payload.dispatch && typeof payload.dispatch === "object")
+          ? (payload.dispatch as Record<string, unknown>)
+          : undefined
+        const envelopeObj = (dispatchObj?.envelope && typeof dispatchObj.envelope === "object")
+          ? (dispatchObj.envelope as Record<string, unknown>)
+          : undefined
+        const taskId = typeof payload.taskId === "string"
+          ? payload.taskId
+          : (typeof dispatchObj?.taskId === "string"
+            ? dispatchObj.taskId
+            : (typeof envelopeObj?.taskId === "string" ? envelopeObj.taskId : undefined))
+        const dispatchId = typeof payload.dispatchId === "string"
+          ? payload.dispatchId
+          : (typeof dispatchObj?.dispatchId === "string"
+            ? dispatchObj.dispatchId
+            : (typeof envelopeObj?.dispatchId === "string" ? envelopeObj.dispatchId : undefined))
+        const ruleId = typeof payload.ruleId === "string" ? payload.ruleId : undefined
+
+        void dependencies.notificationConsumer.handleRefusal({
+          runId,
+          taskId,
+          ruleId,
+          dispatchId,
+          reasonCode: result.error.code,
+          detail: result.error.message,
+        })
+      }
 
       return reply.code(200).send(result)
     } catch (error) {

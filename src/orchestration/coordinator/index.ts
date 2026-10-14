@@ -7,6 +7,8 @@ export {
   MEMORY_WRITEBACK_DESTINATION,
   type CoordinatorDependencies,
   type CoordinatorResult,
+  type MemoryWriteBackRecord,
+  type MemoryWriteBackSweepResult,
 } from "./coordinator.js"
 export type {
   CommandLog,

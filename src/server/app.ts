@@ -15,6 +15,11 @@ import { registerReportRoute } from "./routes/report.js"
 import { registerTriggerRoute } from "./routes/trigger.js"
 import { registerOrchestrationRoutes } from "./routes/orchestration.js"
 import type { ShadowIngressMirror } from "./shadow.js"
+import type {
+  NotificationBus,
+  NotificationStore,
+  OrchestrationNotificationConsumer,
+} from "../notifications/index.js"
 
 export interface AppDependencies {
   config: BridgeConfig
@@ -66,6 +71,9 @@ export interface AppDependencies {
       ): Promise<CoordinatorResult<{ readonly events: readonly string[]; readonly duplicate: boolean }>>
     }
   }
+  readonly notificationStore?: NotificationStore
+  readonly notificationBus?: NotificationBus
+  readonly notificationConsumer?: OrchestrationNotificationConsumer
 }
 
 export function createApp(dependencies: AppDependencies): FastifyInstance {

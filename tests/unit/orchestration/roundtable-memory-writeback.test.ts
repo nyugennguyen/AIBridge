@@ -7,11 +7,13 @@
  * 3. Trust state: `trustState` matches the plan (`proposed`, never `accepted`).
  * 4. Durable commit & outbox discipline: outbox record rides the same commit as outcome event.
  * 5. Failure isolation: a failed memory write does NOT corrupt or roll back the outcome commit.
+ * 6. Durability review: failed append leaves row PENDING (not delivered) with error visible.
+ * 7. Exactly-once redelivery: sweep retries pending write-backs keyed by outboxId; success marks delivered; no double-write.
  */
 
 import { describe, expect, it } from "vitest"
 import { InMemoryMemoryRepository } from "../../../src/memory/in-memory-repository.js"
-import type { MemoryRepository } from "../../../src/memory/ports.js"
+import type { AppendMemoryInput, AppendMemoryResult, MemoryRepository } from "../../../src/memory/ports.js"
 import { isMemoryRecordV2 } from "../../../src/memory/record.js"
 import {
   DispatchCoordinator,
@@ -20,6 +22,7 @@ import {
   type CoordinatorDependencies,
 } from "../../../src/orchestration/coordinator/index.js"
 import type { EventInput, OutboxRecordInput } from "../../../src/orchestration/event-store/types.js"
+import type { Result } from "../../../src/orchestration/errors.js"
 import {
   commandIdSchema,
   correlationIdSchema,
@@ -164,15 +167,24 @@ function makeRunProjection(): RunProjectionState {
   return state!
 }
 
-class FailingMemoryRepository extends InMemoryMemoryRepository {
+class SyncFailingMemoryRepository extends InMemoryMemoryRepository {
   override append(): Promise<never> {
     throw new Error("Memory disk buffer I/O failure")
   }
 }
 
-class RejectingMemoryRepository extends InMemoryMemoryRepository {
-  override append(): Promise<never> {
-    return Promise.reject(new Error("Async network store timeout"))
+class FlakyMemoryRepository extends InMemoryMemoryRepository {
+  shouldFail = true
+  failMode: "throw" | "reject" = "throw"
+
+  override append(input: AppendMemoryInput): Promise<Result<AppendMemoryResult>> {
+    if (this.shouldFail) {
+      if (this.failMode === "throw") {
+        throw new Error("Memory disk buffer I/O failure")
+      }
+      return Promise.reject(new Error("Async network store timeout"))
+    }
+    return super.append(input)
   }
 }
 
@@ -181,6 +193,8 @@ interface TestHarness {
   readonly memoryRepository: InMemoryMemoryRepository
   readonly roundtables: RoundtableRepository
   readonly logCalls: { command: OrchestrationCommand; events: readonly EventInput[]; outboxRecords: readonly OutboxRecordInput[] }[]
+  readonly acknowledgedOutboxIds: string[]
+  readonly failedOutboxIds: string[]
 }
 
 function createTestHarness(options: {
@@ -189,9 +203,14 @@ function createTestHarness(options: {
 } = {}): TestHarness {
   const logCalls: { command: OrchestrationCommand; events: readonly EventInput[]; outboxRecords: readonly OutboxRecordInput[] }[] = []
   const byCommandId = new Map<string, { command: OrchestrationCommand; events: readonly EventInput[] }>()
+  const acknowledgedOutboxIds: string[] = []
+  const failedOutboxIds: string[] = []
   let eventSeq = 0
 
-  const log: CommandLog = {
+  const log: CommandLog & {
+    markOutboxAcknowledged(id: string, now: string): void
+    markOutboxFailed(id: string, error: unknown): void
+  } = {
     append(opts) {
       if (options.logAppendError) {
         throw options.logAppendError
@@ -203,6 +222,12 @@ function createTestHarness(options: {
       byCommandId.set(key, { command: opts.command, events: opts.events })
       logCalls.push({ command: opts.command, events: opts.events, outboxRecords: opts.outboxRecords ?? [] })
       return { duplicate: false, events: opts.events }
+    },
+    markOutboxAcknowledged(id: string) {
+      acknowledgedOutboxIds.push(id)
+    },
+    markOutboxFailed(id: string) {
+      failedOutboxIds.push(id)
     },
   }
 
@@ -226,6 +251,8 @@ function createTestHarness(options: {
     memoryRepository,
     roundtables,
     logCalls,
+    acknowledgedOutboxIds,
+    failedOutboxIds,
   }
 }
 
@@ -362,9 +389,9 @@ describe("P5 row 3: Memory Write-Back from Outcomes", () => {
     expect(outboxPayload.memory.sourceReferences).toContainEqual({ namespace: "postId", id: "post-201" })
   })
 
-  it("failed memory write does not corrupt the outcome commit (synchronous failure isolation)", async () => {
-    const failingMemoryRepo = new FailingMemoryRepository({ now: () => NOW })
-    const harness = createTestHarness({ memoryRepository: failingMemoryRepo })
+  it("failed memory write leaves outbox row PENDING with error visible and does not corrupt outcome commit (synchronous throw)", () => {
+    const syncFailingRepo = new SyncFailingMemoryRepository({ now: () => NOW })
+    const harness = createTestHarness({ memoryRepository: syncFailingRepo })
     const roundtable = makeSampleRoundtable()
 
     harness.coordinator.submit(baseCommand("roundtable.open", { roundtable }, "cmd-open-fail-sync"))
@@ -387,7 +414,6 @@ describe("P5 row 3: Memory Write-Back from Outcomes", () => {
       ),
     )
 
-    // Submit close: even though memory write throws, outcome commit succeeds!
     const outcome = makeSampleOutcome()
     const closeRes = harness.coordinator.submit(
       baseCommand("roundtable.close", { discussionId: roundtable.id, outcome }, "cmd-close-fail-sync"),
@@ -408,11 +434,24 @@ describe("P5 row 3: Memory Write-Back from Outcomes", () => {
     // Aggregate discussion state is closed
     const discussionState = harness.roundtables.get(roundtable.id)
     expect(discussionState?.roundtable.state).toBe("closed")
+
+    // Durability review invariant: row is NOT dropped; remains PENDING with error recorded
+    const outboxId = "obx-cmd-close-fail-sync-memory"
+    const writeBackEntry = harness.coordinator.getMemoryWriteBack(outboxId)
+    expect(writeBackEntry).toBeDefined()
+    expect(writeBackEntry!.status).toBe("pending")
+    expect(writeBackEntry!.attempts).toBe(1)
+    expect(writeBackEntry!.lastError).toContain("Memory disk buffer I/O failure")
+    expect(harness.failedOutboxIds).toContain(outboxId)
+    expect(harness.acknowledgedOutboxIds).not.toContain(outboxId)
   })
 
-  it("failed memory write does not corrupt the outcome commit (asynchronous promise rejection isolation)", async () => {
-    const rejectingMemoryRepo = new RejectingMemoryRepository({ now: () => NOW })
-    const harness = createTestHarness({ memoryRepository: rejectingMemoryRepo })
+  it("failed memory write leaves outbox row PENDING with error visible and does not corrupt outcome commit (asynchronous rejection)", async () => {
+    const flakyRepo = new FlakyMemoryRepository({ now: () => NOW })
+    flakyRepo.shouldFail = true
+    flakyRepo.failMode = "reject"
+
+    const harness = createTestHarness({ memoryRepository: flakyRepo })
     const roundtable = makeSampleRoundtable()
 
     harness.coordinator.submit(baseCommand("roundtable.open", { roundtable }, "cmd-open-fail-async"))
@@ -450,6 +489,198 @@ describe("P5 row 3: Memory Write-Back from Outcomes", () => {
     const closeCall = harness.logCalls.find((call) => call.command.type === "roundtable.close")
     expect(closeCall).toBeDefined()
     expect(closeCall!.events[0].type).toBe("roundtable.outcome_recorded")
+
+    // Durability review invariant: row is PENDING with error recorded
+    const outboxId = "obx-cmd-close-fail-async-memory"
+    const writeBackEntry = harness.coordinator.getMemoryWriteBack(outboxId)
+    expect(writeBackEntry).toBeDefined()
+    expect(writeBackEntry!.status).toBe("pending")
+    expect(writeBackEntry!.attempts).toBe(1)
+    expect(writeBackEntry!.lastError).toContain("Async network store timeout")
+    expect(harness.failedOutboxIds).toContain(outboxId)
+    expect(harness.acknowledgedOutboxIds).not.toContain(outboxId)
+  })
+
+  it("fail once -> redelivery delivers exactly once (assert one memory record, success marks delivered, no redelivery)", async () => {
+    const flakyRepo = new FlakyMemoryRepository({ now: () => NOW })
+    flakyRepo.shouldFail = true
+    flakyRepo.failMode = "throw"
+
+    const harness = createTestHarness({ memoryRepository: flakyRepo })
+    const roundtable = makeSampleRoundtable()
+
+    harness.coordinator.submit(baseCommand("roundtable.open", { roundtable }, "cmd-open-redeliver"))
+    harness.coordinator.submit(
+      baseCommand(
+        "roundtable.post",
+        {
+          post: {
+            postId: "post-redeliver-1",
+            discussionId: roundtable.id,
+            seq: 1,
+            authorNodeId: CHAIR_NODE,
+            authorRoleId: "chair",
+            kind: "proposal",
+            body: "Redelivery test post",
+            createdAt: NOW,
+          },
+        },
+        "cmd-post-redeliver-1",
+      ),
+    )
+
+    const outcome = makeSampleOutcome()
+    const outboxId = "obx-cmd-close-redeliver-memory"
+
+    // 1. Initial attempt fails
+    const closeRes = await harness.coordinator.submitClose(
+      baseCommand("roundtable.close", { discussionId: roundtable.id, outcome }, "cmd-close-redeliver") as Extract<OrchestrationCommand, { type: "roundtable.close" }>,
+    )
+    expect(closeRes.ok).toBe(true)
+
+    // Assert row is PENDING and memory store has 0 records
+    const beforeSweep = harness.coordinator.getMemoryWriteBack(outboxId)!
+    expect(beforeSweep).toBeDefined()
+    expect(beforeSweep.status).toBe("pending")
+    expect(beforeSweep.attempts).toBe(1)
+    expect(beforeSweep.lastError).toContain("Memory disk buffer I/O failure")
+    expect(await flakyRepo.listProjectUnscoped(PROJECT)).toHaveLength(0)
+
+    // 2. Unblock repository so subsequent write succeeds
+    flakyRepo.shouldFail = false
+
+    // 3. Trigger sweep / redelivery
+    const sweepResults = await harness.coordinator.sweepMemoryWriteBacks()
+    expect(sweepResults).toHaveLength(1)
+    expect(sweepResults[0]).toEqual({
+      outboxId,
+      status: "delivered",
+      attempts: 2,
+    })
+
+    // 4. Exactly one memory record was delivered
+    const recordsAfterFirstSweep = await flakyRepo.listProjectUnscoped(PROJECT)
+    expect(recordsAfterFirstSweep).toHaveLength(1)
+    const stored = recordsAfterFirstSweep[0]
+    if (!isMemoryRecordV2(stored)) throw new Error("Expected MemoryRecordV2")
+    expect(stored.trust).toBe("proposed")
+    expect(stored.sourceReferences).toContainEqual({ namespace: "postId", id: "post-redeliver-1" })
+
+    // Row is now marked delivered
+    const afterSweep = harness.coordinator.getMemoryWriteBack(outboxId)!
+    expect(afterSweep.status).toBe("delivered")
+    expect(afterSweep.deliveredAt).toBeDefined()
+    expect(afterSweep.lastError).toBeUndefined()
+    expect(harness.acknowledgedOutboxIds).toContain(outboxId)
+
+    // 5. Success marks delivered: subsequent sweep does NO redelivery
+    const sweepResults2 = await harness.coordinator.sweepMemoryWriteBacks()
+    expect(sweepResults2).toHaveLength(0)
+
+    // Still exactly ONE memory record in store (no double write)
+    const recordsAfterSecondSweep = await flakyRepo.listProjectUnscoped(PROJECT)
+    expect(recordsAfterSecondSweep).toHaveLength(1)
+  })
+
+  it("success marks delivered immediately (sweep skips already delivered row, exactly one memory record)", async () => {
+    const harness = createTestHarness()
+    const roundtable = makeSampleRoundtable()
+
+    harness.coordinator.submit(baseCommand("roundtable.open", { roundtable }, "cmd-open-healthy"))
+    harness.coordinator.submit(
+      baseCommand(
+        "roundtable.post",
+        {
+          post: {
+            postId: "post-healthy-1",
+            discussionId: roundtable.id,
+            seq: 1,
+            authorNodeId: CHAIR_NODE,
+            authorRoleId: "chair",
+            kind: "note",
+            body: "Healthy post",
+            createdAt: NOW,
+          },
+        },
+        "cmd-post-healthy-1",
+      ),
+    )
+
+    const outcome = makeSampleOutcome()
+    const outboxId = "obx-cmd-close-healthy-memory"
+
+    const closeRes = await harness.coordinator.submitClose(
+      baseCommand("roundtable.close", { discussionId: roundtable.id, outcome }, "cmd-close-healthy") as Extract<OrchestrationCommand, { type: "roundtable.close" }>,
+    )
+    expect(closeRes.ok).toBe(true)
+
+    // Success immediately marks row delivered
+    const wb = harness.coordinator.getMemoryWriteBack(outboxId)!
+    expect(wb).toBeDefined()
+    expect(wb.status).toBe("delivered")
+    expect(wb.deliveredAt).toBeDefined()
+    expect(wb.lastError).toBeUndefined()
+    expect(harness.acknowledgedOutboxIds).toContain(outboxId)
+
+    // Memory store has exactly one record
+    expect(await harness.memoryRepository.listProjectUnscoped(PROJECT)).toHaveLength(1)
+
+    // Sweep skips already delivered row
+    const sweepResults = await harness.coordinator.sweepMemoryWriteBacks()
+    expect(sweepResults).toHaveLength(0)
+
+    // Still exactly one record
+    expect(await harness.memoryRepository.listProjectUnscoped(PROJECT)).toHaveLength(1)
+  })
+
+  it("redelivery converges idempotently if memory store already has record (duplicate_id)", async () => {
+    const harness = createTestHarness()
+    const roundtable = makeSampleRoundtable()
+
+    harness.coordinator.submit(baseCommand("roundtable.open", { roundtable }, "cmd-open-dup-conv"))
+    harness.coordinator.submit(
+      baseCommand(
+        "roundtable.post",
+        {
+          post: {
+            postId: "post-dup-conv-1",
+            discussionId: roundtable.id,
+            seq: 1,
+            authorNodeId: CHAIR_NODE,
+            authorRoleId: "chair",
+            kind: "proposal",
+            body: "Convergence test post",
+            createdAt: NOW,
+          },
+        },
+        "cmd-post-dup-conv-1",
+      ),
+    )
+
+    const outcome = makeSampleOutcome()
+    const outboxId = "obx-cmd-close-dup-conv-memory"
+
+    await harness.coordinator.submitClose(
+      baseCommand("roundtable.close", { discussionId: roundtable.id, outcome }, "cmd-close-dup-conv") as Extract<OrchestrationCommand, { type: "roundtable.close" }>,
+    )
+
+    // Manually simulate ambiguous crash window: record is in memory store, but outbox row reverted to pending
+    const entry = harness.coordinator.getMemoryWriteBack(outboxId)!
+    expect(entry.status).toBe("delivered")
+    entry.status = "pending"
+
+    // Sweep attempts to re-append, memory repository returns duplicate_id, sweep converges
+    const sweepResults = await harness.coordinator.sweepMemoryWriteBacks()
+    expect(sweepResults).toHaveLength(1)
+    expect(sweepResults[0]).toEqual({
+      outboxId,
+      status: "delivered",
+      attempts: 2,
+    })
+
+    // Marked delivered again and still exactly one record
+    expect(entry.status).toBe("delivered")
+    expect(await harness.memoryRepository.listProjectUnscoped(PROJECT)).toHaveLength(1)
   })
 
   it("run-scoped roundtable (no taskId) writes back a run-scoped memory record", async () => {

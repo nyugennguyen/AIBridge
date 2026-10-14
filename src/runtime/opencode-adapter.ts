@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto"
 import { digestDispatchEnvelope, digestJson } from "../orchestration/digest.js"
 import { contractErrorSchema, type ContractError, type Result } from "../orchestration/errors.js"
 import { advanceSessionLifecycle } from "../orchestration/transitions.js"
+import { isUnionOptIn } from "../orchestration/schemas.js"
 import {
   adapterCapabilityReportSchema,
   agentInstallationSchema,
@@ -28,14 +29,132 @@ import {
   type RuntimeSession,
   type RuntimeSessionReference,
 } from "./schemas.js"
-import type { AgentRuntimeAdapter } from "./types.js"
+import type { AgentRuntimeAdapter, CapabilityEnvelopeInput, ComputedCapabilityEnvelope } from "./types.js"
 import type { OpencodeClient, OpencodeEvent, OpencodePromptPolicy, PermissionAskedEvent, PermissionDecision, SessionStatus, SessionStatusEvent } from "../opencode/types.js"
+import { RoleBinder } from "./binder.js"
 
 /**
  * Resolves an already-authorized local project binding to its working
  * directory. This is deliberately a narrow adapter boundary: path
  * authorization remains the application service's responsibility.
  */
+
+export const CAPABILITY_TOOLS_MAP: Readonly<Record<string, readonly string[]>> = Object.freeze({
+  "filesystem.read": ["read", "glob", "grep", "list"],
+  "filesystem.write": ["write", "edit", "patch"],
+  "process.exec": ["bash"],
+  "network.external": ["webfetch", "websearch"],
+})
+
+/**
+ * Computes the effective capability envelope across assigned roles per plan §7.2:
+ * `allowed ∩ roleAllowed ∩ ¬denied`
+ *
+ * Rules:
+ * 1. Default for multi-role is INTERSECTION — an agent holding `implementer` + `release-manager`
+ *    can do only what both permit.
+ * 2. Union semantics require an explicit per-role `permissionRestrictions` opt-in
+ *    (`compositionMode: "union"`).
+ * 3. Any capability denied by ANY assigned role (or rule, or dispatch envelope) is DENIED,
+ *    even if another role allows it or opts into union.
+ * 4. When exactly one role is assigned, single-role behavior is preserved identically.
+ * 5. Deterministic: same assignment set + roles produces identical envelope.
+ */
+export function computeCapabilityEnvelope(input: CapabilityEnvelopeInput): ComputedCapabilityEnvelope {
+  const roles = (input.roles && input.roles.length > 0)
+    ? input.roles
+    : input.roleSnapshot
+      ? [input.roleSnapshot]
+      : []
+
+  const requested = new Set(input.requestedCapabilities)
+  const denied = new Set<string>(input.permissionEnvelope.deniedCapabilities)
+
+  // Accumulate denials across all roles: a capability denied by ANY role is denied
+  for (const role of roles) {
+    for (const capability of role.permissionRestrictions.deniedCapabilities) {
+      denied.add(capability)
+    }
+  }
+
+  // Accumulate denials across restrict rules
+  if (input.ruleSnapshots) {
+    for (const rule of input.ruleSnapshots) {
+      if (rule.enabled && rule.effect.kind === "restrict" && rule.effect.deniedCapabilities) {
+        for (const capability of rule.effect.deniedCapabilities) {
+          denied.add(capability)
+        }
+      }
+    }
+  }
+
+  let roleAllowed: Set<string>
+
+  if (roles.length <= 1) {
+    // Single-role path: behavior unchanged (regression safety)
+    const singleRole = roles[0]
+    roleAllowed = new Set(singleRole ? singleRole.permissionRestrictions.allowedCapabilities : [])
+  } else {
+    // Multi-role path: partition roles by union opt-in
+    const intersectRoles = roles.filter((r) => !isUnionOptIn(r.permissionRestrictions))
+    const unionRoles = roles.filter((r) => isUnionOptIn(r.permissionRestrictions))
+
+    if (intersectRoles.length === 0) {
+      // All roles opted into union
+      roleAllowed = new Set<string>()
+      for (const role of unionRoles) {
+        for (const capability of role.permissionRestrictions.allowedCapabilities) {
+          roleAllowed.add(capability)
+        }
+      }
+    } else {
+      // Default: intersection across all intersectRoles
+      const baseIntersect = new Set(intersectRoles[0].permissionRestrictions.allowedCapabilities)
+      for (let i = 1; i < intersectRoles.length; i++) {
+        const nextSet = new Set(intersectRoles[i].permissionRestrictions.allowedCapabilities)
+        for (const cap of baseIntersect) {
+          if (!nextSet.has(cap)) {
+            baseIntersect.delete(cap)
+          }
+        }
+      }
+
+      // If any roles opted into union, their permissions widen the base intersection
+      for (const role of unionRoles) {
+        for (const capability of role.permissionRestrictions.allowedCapabilities) {
+          baseIntersect.add(capability)
+        }
+      }
+
+      roleAllowed = baseIntersect
+    }
+  }
+
+  // Filter dispatch allowed capabilities: requested ∩ roleAllowed ∩ ¬denied
+  const allowedList = input.permissionEnvelope.allowedCapabilities.filter(
+    (capability) => requested.has(capability) && roleAllowed.has(capability) && !denied.has(capability),
+  )
+
+  const allowedSet = new Set(allowedList)
+
+  // Tool availability mapping
+  const tools: Record<string, boolean> = {}
+  for (const [capability, names] of Object.entries(CAPABILITY_TOOLS_MAP)) {
+    if (denied.has(capability) || !allowedSet.has(capability)) {
+      for (const name of names) {
+        tools[name] = false
+      }
+    }
+  }
+
+  return {
+    allowed: allowedList,
+    denied: [...denied].sort(),
+    allowedSet,
+    deniedSet: denied,
+    tools,
+  }
+}
 export interface OpencodeProjectDirectoryResolver {
   resolve(scope: {
     readonly projectId: string
@@ -390,51 +509,14 @@ export class OpencodeRuntimeAdapter implements AgentRuntimeAdapter {
   }
 
   #promptPolicy(request: LaunchAgentRequest): OpencodePromptPolicy {
-    const envelope = request.dispatchEnvelope
-    const role = envelope.roleSnapshot.permissionRestrictions
-    const requested = new Set(envelope.requestedCapabilities)
-    const roleAllowed = new Set(role.allowedCapabilities)
-    const denied = new Set([...envelope.permissionEnvelope.deniedCapabilities, ...role.deniedCapabilities])
-    for (const rule of envelope.ruleSnapshots) {
-      if (rule.enabled && rule.effect.kind === "restrict") for (const capability of rule.effect.deniedCapabilities) denied.add(capability)
-    }
-    const allowed = new Set(envelope.permissionEnvelope.allowedCapabilities.filter((capability) =>
-      requested.has(capability) && roleAllowed.has(capability) && !denied.has(capability),
-    ))
-    const capabilityTools: Readonly<Record<string, readonly string[]>> = {
-      "filesystem.read": ["read", "glob", "grep", "list"],
-      "filesystem.write": ["write", "edit", "patch"],
-      "process.exec": ["bash"],
-      "network.external": ["webfetch", "websearch"],
-    }
-    const tools: Record<string, boolean> = {}
-    for (const [capability, names] of Object.entries(capabilityTools)) {
-      if (denied.has(capability) || !allowed.has(capability)) for (const name of names) tools[name] = false
-    }
-    const rules = envelope.ruleSnapshots.map((rule) => `${rule.ruleId}: ${JSON.stringify(rule.effect)}`).join("\n")
-    return {
-      system: [
-        `Role: ${envelope.roleSnapshot.name}`,
-        envelope.roleSnapshot.instructions,
-        rules ? `Rules:\n${rules}` : "",
-        `Approved capability envelope: ${[...allowed].join(", ") || "none"}. Denied: ${[...denied].join(", ") || "none"}.`,
-        `This dispatch requests a timeout of ${envelope.timeoutSeconds} seconds.`,
-      ].filter(Boolean).join("\n\n"),
-      tools,
-    }
+    return RoleBinder.compileForOpenCode(request)
   }
 
   #permissionAllowed(policy: OpencodePromptPolicy, permission: string): boolean {
     if (policy.tools?.[permission] === false) return false
-    const capabilityTools: Readonly<Record<string, readonly string[]>> = {
-      "filesystem.read": ["read", "glob", "grep", "list"],
-      "filesystem.write": ["write", "edit", "patch"],
-      "process.exec": ["bash"],
-      "network.external": ["webfetch", "websearch"],
-    }
-    const names = capabilityTools[permission]
+    const names = CAPABILITY_TOOLS_MAP[permission]
     if (names) return names.every((name) => policy.tools?.[name] !== false)
-    return Object.values(capabilityTools).flat().includes(permission)
+    return Object.values(CAPABILITY_TOOLS_MAP).flat().includes(permission)
   }
 
   #startObservation(known: KnownSession): void {
@@ -677,3 +759,5 @@ function isSessionStatusEvent(event: OpencodeEvent): event is SessionStatusEvent
 function isPermissionAskedEvent(event: OpencodeEvent): event is PermissionAskedEvent {
   return event.type === "permission.asked"
 }
+
+export { OpencodeRuntimeAdapter as OpencodeAdapter }

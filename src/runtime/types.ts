@@ -68,3 +68,57 @@ export interface AgentRuntimeAdapter {
     operation: RuntimeOperationContext,
   ): Promise<Result<AgentResult>>
 }
+
+/**
+ * Input for computing the effective capability envelope across assigned roles.
+ */
+export interface CapabilityEnvelopeInput {
+  readonly requestedCapabilities: readonly string[]
+  readonly permissionEnvelope: {
+    readonly allowedCapabilities: readonly string[]
+    readonly deniedCapabilities: readonly string[]
+  }
+  readonly ruleSnapshots?: readonly {
+    readonly enabled: boolean
+    readonly effect: {
+      readonly kind: string
+      readonly deniedCapabilities?: readonly string[]
+    }
+  }[]
+  readonly roles?: readonly {
+    readonly roleId?: string
+    readonly name?: string
+    readonly instructions?: string
+    readonly permissionRestrictions: {
+      readonly allowedCapabilities: readonly string[]
+      readonly deniedCapabilities: readonly string[]
+      readonly compositionMode?: string
+    }
+  }[]
+  readonly roleSnapshot?: {
+    readonly roleId?: string
+    readonly name?: string
+    readonly instructions?: string
+    readonly permissionRestrictions: {
+      readonly allowedCapabilities: readonly string[]
+      readonly deniedCapabilities: readonly string[]
+      readonly compositionMode?: string
+    }
+  }
+  readonly roleAssignments?: readonly {
+    readonly roleId: string
+    readonly primary: boolean
+    readonly addendum?: string
+  }[]
+}
+
+/**
+ * Result of computing the effective capability envelope.
+ */
+export interface ComputedCapabilityEnvelope {
+  readonly allowed: readonly string[]
+  readonly denied: readonly string[]
+  readonly allowedSet: ReadonlySet<string>
+  readonly deniedSet: ReadonlySet<string>
+  readonly tools: Readonly<Record<string, boolean>>
+}

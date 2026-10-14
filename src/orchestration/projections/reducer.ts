@@ -6,9 +6,11 @@ import type { StoredRunEvent } from "../event-store/types.js"
 import {
   canTransitionTask,
   canTransitionSession,
+  isDispatchTerminal,
   isRunTerminal,
   isSessionTerminal,
   transitionApproval,
+  transitionDispatch,
   type RunState,
   type SessionObservedState,
   type SessionState,
@@ -832,6 +834,54 @@ export function reduceEvent(
         startedAt: nextDispatches[finishedPayload.dispatchId].startedAt,
         finishedAt: event.occurredAt,
       })
+
+      // Sibling cancellation on failure (DoD #6): when one sibling or parent fails terminally,
+      // cancel all remaining live siblings of the parent dispatch.
+      if (outcome === "failed") {
+        const siblingMatch = finishedPayload.dispatchId.match(/^(.+)-sibling-\d+$/)
+        const parentId =
+          existingDispatch?.envelope?.parentDispatchId ??
+          (siblingMatch ? siblingMatch[1] : null) ??
+          (Object.values(nextDispatches).some((d) => d.envelope?.parentDispatchId === finishedPayload.dispatchId)
+            ? finishedPayload.dispatchId
+            : null)
+
+        if (parentId) {
+          for (const [id, sib] of Object.entries(nextDispatches)) {
+            if (id === finishedPayload.dispatchId) continue
+            const isSibling =
+              sib.envelope?.parentDispatchId === parentId ||
+              sib.dispatchId === parentId ||
+              sib.dispatchId.startsWith(`${parentId}-sibling-`)
+            if (!isSibling) continue
+            if (isDispatchTerminal(sib.lifecycleState)) continue
+
+            transitionDispatch(sib.lifecycleState, "cancelled")
+            nextDispatches[id] = {
+              ...sib,
+              lifecycleState: "cancelled",
+              state: "cancelled",
+              outcome: "cancelled",
+              summary: `Cancelled due to terminal failure of sibling dispatch '${finishedPayload.dispatchId}'`,
+              updatedAt: event.occurredAt,
+              cancelRequested: false,
+            }
+
+            if (sib.sessionId && nextSessions[sib.sessionId]) {
+              const sibSess = nextSessions[sib.sessionId]
+              if (!isSessionTerminal(sibSess.state)) {
+                nextSessions[sib.sessionId] = {
+                  ...sibSess,
+                  state: "cancelled",
+                  observedState: "unknown",
+                  outcome: "cancelled",
+                  updatedAt: event.occurredAt,
+                }
+              }
+            }
+          }
+        }
+      }
 
       const targetTaskId = existingDispatch?.taskId ?? Object.values(nextTasks).find((t) => t.currentDispatchId === finishedPayload.dispatchId)?.taskId
       if (targetTaskId && nextTasks[targetTaskId]) {

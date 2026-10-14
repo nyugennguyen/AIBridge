@@ -221,6 +221,63 @@ describe("concurrency and fan-out are separate counters per project", () => {
     expect(third.ok).toBe(true)
     expect(ledger.heldUnits(PROJECT_ID, "concurrency")).toBe(4)
   })
+
+  it("DoD #6: refuses the seventh fan-out reservation at ceiling 6 while concurrency counter is untouched", async () => {
+    const { ledger } = testLedger({ maximumFanOut: 6, maximumConcurrency: 6 })
+    for (let index = 0; index < 6; index += 1) {
+      const result = await ledger.reserve(reserveRequestFor(index, { scope: "fan_out" }))
+      expect(result.ok, `fan-out reservation ${index}`).toBe(true)
+    }
+    expect(ledger.heldUnits(PROJECT_ID, "fan_out")).toBe(6)
+    // Concurrency counter untouched in this direction:
+    expect(ledger.heldUnits(PROJECT_ID, "concurrency")).toBe(0)
+
+    // The seventh is refused:
+    const seventh = await ledger.reserve(reserveRequestFor(6, { scope: "fan_out" }))
+    expect(seventh.ok).toBe(false)
+    if (!seventh.ok) {
+      expect(seventh.refusal.code).toBe("budget.scope_saturated")
+      expect(seventh.refusal.scope).toBe("fan_out")
+      expect(seventh.refusal.limit).toBe(6)
+      expect(seventh.refusal.heldUnits).toBe(6)
+      expect(seventh.refusal.requestedUnits).toBe(1)
+    }
+
+    // Reserving concurrency capacity still succeeds (untouched in reverse direction):
+    for (let index = 0; index < 6; index += 1) {
+      const result = await ledger.reserve(reserveRequestFor(100 + index, { scope: "concurrency" }))
+      expect(result.ok, `concurrency reservation ${index}`).toBe(true)
+    }
+    expect(ledger.heldUnits(PROJECT_ID, "concurrency")).toBe(6)
+    // Fan-out counter still exactly 6:
+    expect(ledger.heldUnits(PROJECT_ID, "fan_out")).toBe(6)
+
+    // The seventh concurrency reservation is also refused at its own ceiling 6:
+    const seventhConcurrency = await ledger.reserve(reserveRequestFor(106, { scope: "concurrency" }))
+    expect(seventhConcurrency.ok).toBe(false)
+    if (!seventhConcurrency.ok) {
+      expect(seventhConcurrency.refusal.code).toBe("budget.scope_saturated")
+      expect(seventhConcurrency.refusal.scope).toBe("concurrency")
+    }
+  })
+
+  it("supports reserveSync: admits up to ceiling 6 and refuses the seventh synchronously", () => {
+    const { ledger } = testLedger({ maximumFanOut: 6 })
+    for (let index = 0; index < 6; index += 1) {
+      const result = ledger.reserveSync(reserveRequestFor(index, { scope: "fan_out" }))
+      expect(result.ok, `sync fan-out reservation ${index}`).toBe(true)
+    }
+    expect(ledger.heldUnits(PROJECT_ID, "fan_out")).toBe(6)
+    expect(ledger.heldUnits(PROJECT_ID, "concurrency")).toBe(0)
+
+    const seventh = ledger.reserveSync(reserveRequestFor(6, { scope: "fan_out" }))
+    expect(seventh.ok).toBe(false)
+    if (!seventh.ok) {
+      expect(seventh.refusal.code).toBe("budget.scope_saturated")
+      expect(seventh.refusal.limit).toBe(6)
+      expect(seventh.refusal.heldUnits).toBe(6)
+    }
+  })
 })
 
 // ===========================================================================

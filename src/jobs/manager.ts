@@ -5,6 +5,17 @@ import type { JobStore } from "./store.js"
 
 const TERMINAL_STATUSES: JobStatus[] = ["completed", "failed", "timed_out", "callback_failed"]
 
+/**
+ * Grace period after `blockedAt` (or `createdAt` if `blockedAt` is unset)
+ * for a local dependency record to appear in the job store.
+ *
+ * Admission already verifies local dependency existence, so a "missing"
+ * reading afterwards can only stem from a store-convergence gap or race.
+ * A missing dependency within this window is treated as still waiting;
+ * past this window, it is unresolvable and marked terminally failed.
+ */
+export const DEPENDENCY_RESOLUTION_WINDOW_MS = 30_000
+
 export class JobManager {
   constructor(private readonly store: JobStore) {}
 
@@ -72,7 +83,7 @@ export class JobManager {
         return { ...dependency, status: report.status, reportedAt: now }
       })
       const updated = await this.transition(job.id, "blocked", now, { remoteDependencies: updatedDependencies })
-      const outcome = await this.dependencyOutcome(updated)
+      const outcome = await this.dependencyOutcome(updated, now)
       if (outcome.kind === "failed") await this.markFailed(updated.id, outcome.error, now)
       if (outcome.kind === "ready") unblocked.push(await this.transition(updated.id, "accepted", now))
     }
@@ -88,7 +99,7 @@ export class JobManager {
     )
 
     for (const job of dependents) {
-      const outcome = await this.dependencyOutcome(job)
+      const outcome = await this.dependencyOutcome(job, now)
       if (outcome.kind === "failed") await this.markFailed(job.id, outcome.error, now)
       if (outcome.kind === "ready") unblocked.push(await this.transition(job.id, "accepted", now))
     }
@@ -111,15 +122,41 @@ export class JobManager {
     )
   }
 
+  /**
+   * Sweeps jobs to terminal states:
+   * 1. Blocked jobs with missing local dependencies past the resolution window
+   *    are marked failed (with specific diagnosis before generic timeout).
+   * 2. Non-terminal jobs past their configured timeout are marked timed_out.
+   *
+   * Returns all jobs transitioned to a terminal state during this sweep.
+   */
   async sweepExpiredJobs(now = new Date().toISOString()): Promise<JobRecord[]> {
     const currentTime = new Date(now).getTime()
     const expired: JobRecord[] = []
-    for (const job of await this.store.list()) {
-      if (TERMINAL_STATUSES.includes(job.status)) continue
-      const deadline = new Date(job.createdAt).getTime() + job.trigger.timeout_seconds * 1000
-      if (currentTime <= deadline) continue
-      expired.push(await this.markTimedOut(job.id, now))
+
+    while (true) {
+      let transitionedInPass = 0
+      for (const job of await this.store.list()) {
+        if (TERMINAL_STATUSES.includes(job.status)) continue
+
+        if (job.status === "blocked") {
+          const outcome = await this.dependencyOutcome(job, now)
+          if (outcome.kind === "failed") {
+            expired.push(await this.markFailed(job.id, outcome.error, now))
+            transitionedInPass++
+            continue
+          }
+        }
+
+        const deadline = new Date(job.createdAt).getTime() + job.trigger.timeout_seconds * 1000
+        if (currentTime <= deadline) continue
+        expired.push(await this.markTimedOut(job.id, now))
+        transitionedInPass++
+      }
+
+      if (transitionedInPass === 0) break
     }
+
     return expired
   }
 
@@ -133,16 +170,31 @@ export class JobManager {
     return next
   }
 
-  private async dependencyOutcome(job: JobRecord): Promise<{ kind: "waiting" } | { kind: "ready" } | { kind: "failed"; error: string }> {
+  private async dependencyOutcome(
+    job: JobRecord,
+    now: string,
+  ): Promise<{ kind: "waiting" } | { kind: "ready" } | { kind: "failed"; error: string }> {
     const localDependencies = await Promise.all(
       (job.depends_on ?? []).map(async (id) => ({ id, status: (await this.store.get(id))?.status ?? "missing" })),
     )
     const failedLocal = localDependencies.find((dependency) => dependency.status === "failed" || dependency.status === "timed_out")
     if (failedLocal) return { kind: "failed", error: `Dependency ${failedLocal.id} ${failedLocal.status}` }
+
     const failedRemote = (job.remoteDependencies ?? []).find(
       (dependency) => dependency.status === "failed" || dependency.status === "timed_out" || dependency.status === "callback_failed",
     )
     if (failedRemote?.status) return { kind: "failed", error: `Remote dependency ${failedRemote.agent_id}/${failedRemote.job_id} ${failedRemote.status}` }
+
+    const missingLocal = localDependencies.find((dependency) => dependency.status === "missing")
+    if (missingLocal) {
+      const anchorTime = Date.parse(job.blockedAt ?? job.createdAt)
+      const currentTime = Date.parse(now)
+      if (currentTime < anchorTime + DEPENDENCY_RESOLUTION_WINDOW_MS) {
+        return { kind: "waiting" }
+      }
+      return { kind: "failed", error: `Dependency ${missingLocal.id} missing` }
+    }
+
     const localReady = localDependencies.every((dependency) => dependency.status === "completed")
     const remoteReady = (job.remoteDependencies ?? []).every((dependency) => dependency.status === "completed")
     return localReady && remoteReady ? { kind: "ready" } : { kind: "waiting" }

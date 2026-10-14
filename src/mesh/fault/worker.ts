@@ -27,7 +27,7 @@ import type { RecordedApproval, RecordedDispatch, RecordedLease } from "../inbox
 import type { RunProjectionState } from "../../orchestration/projections/types.js"
 import { MeshCommandEpochGate, MeshControllerLease, SqliteControllerLeaseStore, createUnreconciledNodeSource } from "../lease/index.js"
 import type { ControllerLeaseStore, RecordedCommandStateResolver } from "../lease/types.js"
-import { DurableEventOutbox, OutboxDeliverer, SqliteEventOutboxStore } from "../outbox/index.js"
+import { DurableEventOutbox, MeshEventIngestor, OutboxDeliverer, SqliteEventOutboxStore } from "../outbox/index.js"
 import type { EventOutboxTransport, MeshOutboxEntry } from "../outbox/types.js"
 import { meshAckSchema } from "../protocol/ack.js"
 import type { MeshEvent } from "../protocol/event.js"
@@ -42,8 +42,10 @@ import {
   removeNodeFiles,
   type DurableNodeFiles,
   type OpenDatabase,
+  readPeerEvents,
+  writePeerEvent,
 } from "./durable.js"
-import { eventEnvelopeFor, FAULT_MESH_ID } from "./records.js"
+import { anEventAck, eventEnvelopeFor, FAULT_MESH_ID } from "./records.js"
 import type { FaultClock, InboundHandler } from "./types.js"
 import type { NodeIdentity, NodeTransportContext } from "./transport.js"
 
@@ -98,6 +100,8 @@ export interface WorkerNode {
   /** Closes every handle and rebuilds over the same files. */
   restart(): Promise<void>
   close(): void
+  /** Every peer event this worker ingested, in apply order. */
+  ingested(): readonly MeshEvent[]
 }
 
 export async function buildWorker(input: {
@@ -151,6 +155,8 @@ export async function buildWorker(input: {
     readonly leaseStore: ControllerLeaseStore
     readonly outbox: DurableEventOutbox
     readonly outboxRows: SqliteEventOutboxStore
+    readonly kernelDatabase: OpenDatabase
+    readonly ingestor: MeshEventIngestor
   }
 
   const build = (): Live => {
@@ -200,6 +206,27 @@ export async function buildWorker(input: {
       recordedLog: input.recordedLog,
       acks: { emit: async () => undefined },
     })
+
+    const ingestor = new MeshEventIngestor({
+      store: {
+        seen: async (eventId) => ({
+          ok: true,
+          value: readPeerEvents(kernelDb).some((row) => row.event_id === eventId),
+        }),
+        apply: async (event: MeshEvent) => {
+          writePeerEvent(kernelDb, {
+            eventId: event.eventId,
+            sourceNodeId: event.sourceNodeId,
+            localSequence: event.localSequence,
+            projectId: event.runProjectScope.projectId,
+            runId: event.runProjectScope.runId,
+            eventType: event.eventType,
+            eventJson: JSON.stringify(event),
+          })
+          return { ok: true, value: undefined }
+        },
+      },
+    })
     const outboxRows = new SqliteEventOutboxStore(kernelDb.driver)
     return {
       databases,
@@ -209,6 +236,8 @@ export async function buildWorker(input: {
       leaseStore,
       outbox: new DurableEventOutbox({ store: outboxRows, now: clock.now }),
       outboxRows,
+      kernelDatabase: kernelDb,
+      ingestor,
     }
   }
 
@@ -247,6 +276,17 @@ export async function buildWorker(input: {
             return { result: await live.lease.applyLease(request.record) }
           case "mesh.command":
             return { result: await live.inbox.submit(request.record) }
+          case "mesh.event": {
+            const envelope = request.record as Record<string, unknown>
+            const payload = (envelope.payload ?? envelope) as MeshEvent
+            const result = await live.ingestor.ingest(payload)
+            if (!result.ok) return { result }
+            const outcome = result.value.status === "duplicate" ? "duplicate" : "accepted"
+            return {
+              ingested: result.value,
+              ack: anEventAck(payload, outcome),
+            }
+          }
           default:
             return {
               refused: createContractError(
@@ -318,6 +358,9 @@ export async function buildWorker(input: {
       closeDatabases(live.databases)
       removeNodeFiles(files)
     },
+    ingested: () =>
+      readPeerEvents(live.kernelDatabase)
+        .map((row) => JSON.parse(row.event_json) as MeshEvent),
   }
 
   return worker

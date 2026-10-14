@@ -6,7 +6,7 @@ import type {
   TaskId,
   Timestamp,
 } from "../identifiers.js"
-import type { DispatchEnvelope, TaskDependency } from "../types.js"
+import type { Dispatch, DispatchEnvelope, TaskDependency } from "../types.js"
 import type {
   DispatchProjection,
   ProjectionTaskState,
@@ -218,4 +218,89 @@ export interface RetryTaskResult {
   readonly nextDispatchId: DispatchId
   readonly dispatchEnvelope: DispatchEnvelope
   readonly updatedTask: TaskProjection
+}
+
+// --- Budget Ledger Port Types ---
+
+/**
+ * Shape of a budget refusal, structurally compatible with BudgetRefusal from src/budgets/
+ * without importing src/budgets/ directly (layering rule: budgets -> orchestration).
+ */
+export interface BudgetRefusalShape {
+  readonly code: string
+  readonly message: string
+  readonly scope?: string | null
+  readonly limit?: number | null
+  readonly heldUnits?: number | null
+  readonly requestedUnits?: number | null
+  readonly reservationId?: string | null
+}
+
+export type BudgetReservationResult<T = unknown> =
+  | { readonly ok: true; readonly value: T }
+  | { readonly ok: false; readonly refusal: BudgetRefusalShape }
+
+export interface BudgetReserveParams {
+  readonly reservationId: string
+  readonly projectId: string
+  readonly runId: string
+  readonly taskId: string
+  readonly dispatchId: string
+  readonly scope: "concurrency" | "fan_out"
+  readonly units: number
+  readonly now: string
+  readonly leaseSeconds?: number
+  readonly subScope?: string
+}
+
+/**
+ * The budget ledger port consumed by the scheduler.
+ * Injected interface so orchestration does not depend on src/budgets/.
+ */
+export interface BudgetLedgerPort {
+  reserve(request: BudgetReserveParams): Promise<BudgetReservationResult> | BudgetReservationResult
+  reserveSync?(request: BudgetReserveParams, limits?: unknown): BudgetReservationResult
+  heldUnits?(projectId: string, scope: "concurrency" | "fan_out", subScope?: string): number
+  eligible?(dispatchId: string): boolean
+}
+
+// --- Fan-Out Planning Types ---
+
+export interface PlanFanOutOptions {
+  readonly parentDispatch: Dispatch
+  readonly fanOut?: number
+  readonly now?: string
+  readonly budgetLedger?: BudgetLedgerPort
+  readonly leaseSeconds?: number
+  readonly envelopeOverrides?: readonly Partial<DispatchEnvelope>[]
+}
+
+export interface PlanFanOutSyncOptions {
+  readonly parentDispatch: Dispatch
+  readonly fanOut?: number
+  readonly now?: string
+  readonly budgetLedger?: BudgetLedgerPort
+  readonly leaseSeconds?: number
+  readonly envelopeOverrides?: readonly Partial<DispatchEnvelope>[]
+}
+
+export interface RefusedSiblingDispatch {
+  readonly siblingDispatchId: DispatchId
+  readonly index: number
+  readonly refusal: BudgetRefusalShape
+}
+
+export interface PlanFanOutResult {
+  readonly parentDispatchId: DispatchId
+  readonly requestedFanOut: number
+  readonly plannedDispatches: readonly Dispatch[]
+  readonly refusedDispatches: readonly RefusedSiblingDispatch[]
+}
+
+// --- Sibling Cancellation Types ---
+
+export interface SiblingCancellationResult {
+  readonly updatedRunState: RunProjectionState
+  readonly cancelledDispatchIds: readonly DispatchId[]
+  readonly parentDispatchId: DispatchId | null
 }

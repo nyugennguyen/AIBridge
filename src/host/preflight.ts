@@ -46,6 +46,19 @@ export interface TailscaleFacts {
   readonly tailnetLock: boolean | null
   readonly error: string | null
 }
+export type HerdrCapabilityStatus = "yes" | "no" | "unknown"
+
+export interface HerdrCapabilities {
+  readonly inputFencing: HerdrCapabilityStatus
+  readonly firstClassRole: HerdrCapabilityStatus
+}
+
+export interface HerdrFacts {
+  readonly installed: boolean
+  readonly path: string | null
+  readonly capabilities: HerdrCapabilities
+  readonly error: string | null
+}
 
 export interface PreflightResult {
   readonly ok: boolean
@@ -53,6 +66,7 @@ export interface PreflightResult {
   readonly checks: readonly PreflightCheck[]
   readonly missing: number
   readonly tailscale: TailscaleFacts
+  readonly herdr: HerdrFacts
 }
 
 export interface PreflightDeps {
@@ -159,6 +173,7 @@ export async function planPreflight(deps: PreflightDeps): Promise<PreflightResul
       checks: [],
       missing: 0,
       tailscale: emptyFacts(`Unsupported platform: ${info.platform}`),
+      herdr: emptyHerdrFacts(`Unsupported platform: ${info.platform}`),
     }
   }
 
@@ -175,6 +190,8 @@ export async function planPreflight(deps: PreflightDeps): Promise<PreflightResul
 
   // Gather tailscale status
   const tailscale = await checkTailscaleStatus(deps.processRunner)
+  // Gather herdr status
+  const herdr = await checkHerdrStatus(deps.processRunner)
 
   return {
     ok: !hasMissing,
@@ -182,6 +199,7 @@ export async function planPreflight(deps: PreflightDeps): Promise<PreflightResul
     checks,
     missing: checks.filter((c) => c.status === "missing").length,
     tailscale,
+    herdr,
   }
 }
 
@@ -305,6 +323,7 @@ export async function runPreflight(deps: PreflightDeps): Promise<PreflightResult
       checks: [],
       missing: 0,
       tailscale: emptyFacts(`Unsupported platform: ${info.platform}`),
+      herdr: emptyHerdrFacts(`Unsupported platform: ${info.platform}`),
     }
   }
 
@@ -357,6 +376,8 @@ export async function runPreflight(deps: PreflightDeps): Promise<PreflightResult
 
   // Phase 3: Gather tailscale status
   const tailscale = await checkTailscaleStatus(deps.processRunner)
+  // Phase 3b: Gather herdr status
+  const herdr = await checkHerdrStatus(deps.processRunner)
 
   // Determine overall ok
   const hasBlocking = checks.some(
@@ -369,6 +390,7 @@ export async function runPreflight(deps: PreflightDeps): Promise<PreflightResult
     checks,
     missing: checks.filter((c) => c.status === "missing").length,
     tailscale,
+    herdr,
   }
 }
 
@@ -383,4 +405,275 @@ function emptyFacts(error: string | null = null): TailscaleFacts {
     tailnetLock: null,
     error,
   }
+}
+
+function emptyHerdrFacts(error: string | null = null): HerdrFacts {
+  return {
+    installed: false,
+    path: null,
+    capabilities: {
+      inputFencing: "unknown",
+      firstClassRole: "unknown",
+    },
+    error,
+  }
+}
+
+/** Timeout for `herdr api schema --json` probe in milliseconds. */
+const HERDR_PROBE_TIMEOUT_MS = 2500
+
+/**
+ * Format capability flags into canonical string representation
+ * (e.g. "input-fencing=yes, first-class-role=no").
+ */
+export function formatHerdrCapabilities(caps: HerdrCapabilities): string {
+  return `input-fencing=${caps.inputFencing}, first-class-role=${caps.firstClassRole}`
+}
+
+/**
+ * Detects presence of the Herdr binary on PATH and inspects the daemon IPC
+ * JSON Schema via `herdr api schema --json` for AIBridge orchestration fork capability flags:
+ * - F1: Input-ownership fencing (socket methods `pane.claim_input` / `pane.release_input`)
+ * - F2: First-class `role` field on pane/agent records
+ *
+ * Architectural invariants:
+ * - Herdr is a detected user-installed binary (`brew install herdr`), never an npm dependency.
+ * - Absence of Herdr or absence of fork capabilities is INFORMATIONAL, never a hard failure;
+ *   tmux remains the default headless/supervisor terminal backend.
+ * - Nonzero exit codes or malformed schema JSON output report flags as "unknown" without throwing.
+ */
+export async function checkHerdrStatus(runner: ProcessRunner): Promise<HerdrFacts> {
+  const whichResult = await runner.exec(["which", "herdr"])
+  if (whichResult.exitCode !== 0) {
+    return {
+      installed: false,
+      path: null,
+      capabilities: {
+        inputFencing: "no",
+        firstClassRole: "no",
+      },
+      error: null,
+    }
+  }
+
+  const binaryPath = whichResult.stdout.trim() || "herdr"
+
+  let schemaResult: { exitCode: number | null; stdout: string; stderr: string }
+  try {
+    schemaResult = await runner.exec(["herdr", "api", "schema", "--json"], {
+      timeoutMs: HERDR_PROBE_TIMEOUT_MS,
+    })
+  } catch (err) {
+    return {
+      installed: true,
+      path: binaryPath,
+      capabilities: {
+        inputFencing: "unknown",
+        firstClassRole: "unknown",
+      },
+      error: err instanceof Error ? err.message : String(err),
+    }
+  }
+
+  if (schemaResult.exitCode !== 0) {
+    return {
+      installed: true,
+      path: binaryPath,
+      capabilities: {
+        inputFencing: "unknown",
+        firstClassRole: "unknown",
+      },
+      error: schemaResult.stderr || "herdr api schema --json failed",
+    }
+  }
+
+  const rawStdout = schemaResult.stdout.trim()
+  if (rawStdout === "") {
+    return {
+      installed: true,
+      path: binaryPath,
+      capabilities: {
+        inputFencing: "unknown",
+        firstClassRole: "unknown",
+      },
+      error: "empty schema output",
+    }
+  }
+
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(rawStdout)
+  } catch {
+    return {
+      installed: true,
+      path: binaryPath,
+      capabilities: {
+        inputFencing: "unknown",
+        firstClassRole: "unknown",
+      },
+      error: "malformed schema JSON",
+    }
+  }
+
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    return {
+      installed: true,
+      path: binaryPath,
+      capabilities: {
+        inputFencing: "unknown",
+        firstClassRole: "unknown",
+      },
+      error: "schema output is not a JSON object",
+    }
+  }
+
+  const obj = parsed as Record<string, unknown>
+  if (typeof obj.error === "string" || obj.status === "error") {
+    return {
+      installed: true,
+      path: binaryPath,
+      capabilities: {
+        inputFencing: "unknown",
+        firstClassRole: "unknown",
+      },
+      error: typeof obj.error === "string" ? obj.error : "daemon error reported in schema output",
+    }
+  }
+
+  if (!isSchemaStructure(obj)) {
+    return {
+      installed: true,
+      path: binaryPath,
+      capabilities: {
+        inputFencing: "unknown",
+        firstClassRole: "unknown",
+      },
+      error: "unrecognized or malformed schema structure",
+    }
+  }
+
+  const hasFencing = containsToken(obj, "pane.claim_input") && containsToken(obj, "pane.release_input")
+  const hasRole = hasFirstClassRoleField(obj)
+
+  return {
+    installed: true,
+    path: binaryPath,
+    capabilities: {
+      inputFencing: hasFencing ? "yes" : "no",
+      firstClassRole: hasRole ? "yes" : "no",
+    },
+    error: null,
+  }
+}
+
+/**
+ * Validates that an object resembles a JSON Schema or IPC API definition.
+ */
+function isSchemaStructure(obj: Record<string, unknown>): boolean {
+  const schemaMarkers = [
+    "$schema",
+    "type",
+    "properties",
+    "definitions",
+    "$defs",
+    "methods",
+    "paths",
+    "title",
+    "components",
+    "schemas",
+    "records",
+    "types",
+    "rpc",
+  ]
+  if (schemaMarkers.some((marker) => marker in obj)) {
+    return true
+  }
+  // Check if any key resembles a Herdr socket method / IPC endpoint
+  return Object.keys(obj).some(
+    (k) =>
+      k.startsWith("pane.") ||
+      k.startsWith("agent.") ||
+      k.startsWith("workspace.") ||
+      k === "pane.claim_input" ||
+      k === "pane.release_input",
+  )
+}
+
+function containsToken(data: unknown, token: string): boolean {
+  if (typeof data === "string") {
+    return data === token || data === `/${token}`
+  }
+  if (Array.isArray(data)) {
+    return data.some((item) => containsToken(item, token))
+  }
+  if (typeof data === "object" && data !== null) {
+    for (const [key, value] of Object.entries(data)) {
+      if (key === token || key === `/${token}`) {
+        return true
+      }
+      if (containsToken(value, token)) {
+        return true
+      }
+    }
+  }
+  return false
+}
+
+/**
+ * Probes whether the schema exposes a first-class `role` field on pane or agent records (F2).
+ */
+function hasFirstClassRoleField(data: unknown): boolean {
+  if (typeof data !== "object" || data === null) return false
+
+  function search(node: unknown, inPaneOrAgentScope: boolean): boolean {
+    if (typeof node !== "object" || node === null) return false
+
+    if (Array.isArray(node)) {
+      if (inPaneOrAgentScope && node.includes("role")) return true
+      return node.some((item) => search(item, inPaneOrAgentScope))
+    }
+
+    const obj = node as Record<string, unknown>
+
+    for (const [key, value] of Object.entries(obj)) {
+      const isPaneOrAgent = /pane|agent/i.test(key)
+      const currentScope = inPaneOrAgentScope || isPaneOrAgent
+
+      if (currentScope) {
+        if (key === "role") return true
+        if (typeof value === "object" && value !== null) {
+          const vObj = value as Record<string, unknown>
+          if ("role" in vObj) return true
+          if (vObj.properties && typeof vObj.properties === "object" && vObj.properties !== null) {
+            if ("role" in (vObj.properties as Record<string, unknown>)) return true
+          }
+          if (vObj.fields && typeof vObj.fields === "object" && vObj.fields !== null) {
+            if ("role" in (vObj.fields as Record<string, unknown>)) return true
+          }
+        }
+      }
+
+      // Root / definition level checks:
+      if (
+        (key === "properties" || key === "definitions" || key === "$defs" || key === "records" || key === "types") &&
+        typeof value === "object" &&
+        value !== null &&
+        "role" in (value as Record<string, unknown>)
+      ) {
+        return true
+      }
+
+      if (key === "role" && typeof value === "object") {
+        return true
+      }
+
+      if (search(value, currentScope)) {
+        return true
+      }
+    }
+
+    return false
+  }
+
+  return search(data, false)
 }

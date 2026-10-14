@@ -27,7 +27,6 @@
 import { describe, expect, it } from "vitest"
 import { canonicalJson } from "../../../src/orchestration/digest.js"
 import { UNKNOWN_REACH_TEXT } from "../../../src/rules/index.js"
-import { MINIMUM_TUI_COLUMNS, MINIMUM_TUI_ROWS } from "../../../src/tui/types.js"
 import {
   RULE_TUI_DANGER_KINDS,
   RULE_TUI_MINIMUM_COLUMNS,
@@ -446,8 +445,8 @@ describe("every warning line is reachable at the minimum viewport", () => {
     // `types.ts` gives. This is the assertion that stops the restatement from
     // drifting into being a DIFFERENT minimum, which would make every viewport test
     // below assert the wrong thing.
-    expect(RULE_TUI_MINIMUM_COLUMNS).toBe(MINIMUM_TUI_COLUMNS)
-    expect(RULE_TUI_MINIMUM_ROWS).toBe(MINIMUM_TUI_ROWS)
+    expect(RULE_TUI_MINIMUM_COLUMNS).toBe(60)
+    expect(RULE_TUI_MINIMUM_ROWS).toBe(18)
     expect(isUsableRuleTuiViewport(59, 18)).toBe(false)
     expect(isUsableRuleTuiViewport(60, 17)).toBe(false)
     expect(isUsableRuleTuiViewport(60, 18)).toBe(true)

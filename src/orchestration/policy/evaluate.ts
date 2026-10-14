@@ -1,6 +1,8 @@
 import { digestDispatchEnvelope, digestJson } from "../digest.js"
 import { createContractError, type ContractError, type Result } from "../errors.js"
-import type { Rule } from "../types.js"
+import type { DispatchEnvelope, Rule } from "../types.js"
+import type { Charter, CommunicationPolicy } from "../charter/types.js"
+import type { RoundtableRepository } from "../roundtable/repository.js"
 import {
   SAFETY_FLOOR_NARROWING,
   dispatchNarrowing,
@@ -783,4 +785,117 @@ export function authorizeDispatch(input: PolicyEvaluationInput): Result<PolicyEv
         )
 
   return { ok: false, error }
+}
+
+export interface RoundtableGateInput {
+  readonly envelope: DispatchEnvelope
+  readonly charter?: Charter | { readonly communicationPolicy?: CommunicationPolicy }
+  readonly task?: { readonly taskId: string; readonly title?: string; readonly labelKeys?: readonly string[] }
+  readonly roundtables?:
+    | RoundtableRepository
+    | readonly {
+        readonly roundtable: { readonly state: string; readonly taskId?: string; readonly runId?: string }
+        readonly outcome?: unknown
+      }[]
+}
+
+/**
+ * Evaluates whether an execution dispatch is admitted under the charter's communicationPolicy.
+ *
+ * Per the plan §7/§12 and §10 Phase 5:
+ * When the charter's `communicationPolicy.objectionRequiredBefore` covers the dispatch's action class
+ * (e.g. "deploy", "dispatch.execute", capability names, task titles/labels), an execution dispatch
+ * is refused with error code `roundtable_required` UNLESS a closed roundtable exists for the task
+ * whose outcome recorded the deliberation (closed + outcome_recorded).
+ */
+export function evaluateRoundtableGate(input: RoundtableGateInput): Result<true> {
+  const communicationPolicy = input.charter?.communicationPolicy
+  const objectionRequiredBefore = communicationPolicy?.objectionRequiredBefore ?? []
+
+  if (objectionRequiredBefore.length === 0) {
+    return { ok: true, value: true }
+  }
+
+  const envelope = input.envelope
+  const task = input.task
+
+  let matchedAction: string | null = null
+
+  for (const requiredAction of objectionRequiredBefore) {
+    if (requiredAction === "dispatch.execute") {
+      matchedAction = requiredAction
+      break
+    }
+    if (envelope.requestedCapabilities.includes(requiredAction)) {
+      matchedAction = requiredAction
+      break
+    }
+    if (task?.title !== undefined) {
+      if (task.title === requiredAction) {
+        matchedAction = requiredAction
+        break
+      }
+      const titleWords = task.title.toLowerCase().split(/\s+/)
+      if (titleWords.includes(requiredAction.toLowerCase())) {
+        matchedAction = requiredAction
+        break
+      }
+    }
+    if (task && "labelKeys" in task && Array.isArray(task.labelKeys) && task.labelKeys.includes(requiredAction)) {
+      matchedAction = requiredAction
+      break
+    }
+    const envelopeCandidate: object = envelope
+    if ("taskLabels" in envelopeCandidate && Array.isArray(envelopeCandidate.taskLabels)) {
+      if (envelopeCandidate.taskLabels.includes(requiredAction)) {
+        matchedAction = requiredAction
+        break
+      }
+    }
+  }
+
+  // Non-covered action classes are NOT gated (no false refusals).
+  if (matchedAction === null) {
+    return { ok: true, value: true }
+  }
+
+  // Action is covered: must find a CLOSED roundtable for this task with recorded outcome.
+  const taskId = envelope.taskId
+  let hasClosedDeliberation = false
+
+  if (input.roundtables !== undefined) {
+    const rt = input.roundtables
+    if ("hasClosedDeliberationForTask" in rt && typeof rt.hasClosedDeliberationForTask === "function") {
+      hasClosedDeliberation = rt.hasClosedDeliberationForTask(taskId)
+    } else if (Array.isArray(rt)) {
+      hasClosedDeliberation = rt.some(
+        (disc) =>
+          disc.roundtable?.taskId === taskId &&
+          disc.roundtable?.state === "closed" &&
+          disc.outcome !== undefined,
+      )
+    } else if ("listByRun" in rt && typeof rt.listByRun === "function") {
+      const discussions = rt.listByRun(envelope.runId)
+      hasClosedDeliberation = discussions.some(
+        (disc) =>
+          disc.roundtable?.taskId === taskId &&
+          disc.roundtable?.state === "closed" &&
+          disc.outcome !== undefined,
+      )
+    }
+  }
+
+  if (!hasClosedDeliberation) {
+    return {
+      ok: false,
+      error: createContractError(
+        "policy_denied",
+        "roundtable_required",
+        `roundtable_required: execution dispatch for task '${taskId}' is refused; communicationPolicy.objectionRequiredBefore covers action '${matchedAction}' and requires a closed roundtable deliberation with recorded outcome.`,
+        false,
+      ),
+    }
+  }
+
+  return { ok: true, value: true }
 }

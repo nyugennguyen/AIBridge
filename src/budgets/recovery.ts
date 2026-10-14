@@ -681,7 +681,7 @@ export function replayDurableReservations(
   const rejectedByReason = emptyRejectionCounts()
 
   for (const row of ordered) {
-    const key = budgetScopeKey(row.projectId, row.scope)
+    const key = budgetScopeKey(row.projectId, row.scope, row.subScope)
     scopeMeta.set(key, { projectId: row.projectId, scope: row.scope })
     // The FIRST row for a dispatch, in `reservationId` code-unit order, is the one
     // that speaks for it — whatever state it carries. Recorded here rather than at
@@ -866,7 +866,7 @@ function occupiedUnitsFrom(reservations: Iterable<BudgetReservation>): ReadonlyM
   const heldUnits = new Map<string, number>()
   for (const reservation of reservations) {
     if (!occupiesCapacity(reservation.state)) continue
-    const key = budgetScopeKey(reservation.projectId, reservation.scope)
+    const key = budgetScopeKey(reservation.projectId, reservation.scope, reservation.subScope)
     heldUnits.set(key, (heldUnits.get(key) ?? 0) + reservation.units)
   }
   return heldUnits

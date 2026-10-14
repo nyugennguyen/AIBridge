@@ -481,6 +481,7 @@ export const budgetReservationSchema = z
     leaseExpiresAt: timestampSchema,
     createdAt: timestampSchema,
     updatedAt: timestampSchema,
+    subScope: z.string().min(1).max(256).optional(),
   })
   .strict()
   .refine((reservation) => reservation.state !== "held" || reservation.leaseExpiresAt >= reservation.createdAt, {
@@ -522,6 +523,7 @@ export const reserveRequestSchema = z
     units: z.number(),
     now: timestampSchema,
     leaseSeconds: z.number().min(1).max(BUDGET_MAX_WALL_CLOCK_SECONDS).safe().optional(),
+    subScope: z.string().min(1).max(256).optional(),
   })
   .strict()
 
@@ -720,6 +722,7 @@ export const reclaimedReservationSchema = z
     /** The state the reclamation left it in: `released` or `expired`. */
     reclaimedState: terminalReservationStateSchema,
     reason: z.enum(RECOVERY_REASONS),
+    subScope: z.string().min(1).max(256).optional(),
   })
   .strict()
 
@@ -924,6 +927,6 @@ export function addBudgetSeconds(timestamp: string, seconds: number): string {
 }
 
 /** The composite key under which a scope's held-unit total is stored. */
-export function budgetScopeKey(projectId: string, scope: BudgetScope): string {
-  return `${projectId}\u0000${scope}`
+export function budgetScopeKey(projectId: string, scope: BudgetScope, subScope?: string): string {
+  return subScope !== undefined ? `${projectId}\u0000${scope}\u0000${subScope}` : `${projectId}\u0000${scope}`
 }

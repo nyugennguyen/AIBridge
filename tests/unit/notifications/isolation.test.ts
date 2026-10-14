@@ -214,6 +214,15 @@ describe("M6.9 the notifications module has no upward import edge", () => {
       expect(file.text.length).toBeGreaterThan(1_000)
     }
   })
+  it("orchestration, rules, and budget modules never import from notifications (M4/M5 discipline)", () => {
+    for (const dirName of ["orchestration", "rules", "budgets"]) {
+      const files = sourceFiles(join(REPOSITORY_ROOT, `src/${dirName}`))
+      const offenders = files
+        .flatMap((file) => importsOf(file.text).map((specifier) => ({ file: file.path, specifier })))
+        .filter(({ specifier }) => specifier.includes("/notifications/") || specifier.includes("notifications"))
+      expect(offenders, `${dirName} has forbidden imports of notifications`).toEqual([])
+    }
+  })
 })
 
 /** Strip comments so a docblock mentioning `Date.now` does not fail the scan. */

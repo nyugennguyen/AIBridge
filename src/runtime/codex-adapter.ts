@@ -32,6 +32,7 @@ import {
   type RuntimeSession,
   type RuntimeSessionReference,
 } from "./schemas.js"
+import { RoleBinder } from "./binder.js"
 import { LineStreamSplitter, safeParseJsonLine } from "./stream-parser.js"
 import type { AgentRuntimeAdapter } from "./types.js"
 
@@ -469,14 +470,14 @@ export class CodexRuntimeAdapter implements AgentRuntimeAdapter {
       args.push("--skip-git-repo-check")
     }
 
-    const canWrite = request.dispatchEnvelope.permissionEnvelope.allowedCapabilities.includes("filesystem.write")
-    args.push("-s", canWrite ? "workspace-write" : "read-only")
+    const compiled = RoleBinder.compileForCodex(request)
+    args.push("-s", compiled.toolPolicy.sandbox)
 
     if (request.dispatchEnvelope.model) {
       args.push("-m", request.dispatchEnvelope.model)
     }
 
-    args.push(request.dispatchEnvelope.prompt)
+    args.push(compiled.prompt)
 
     const sanitizedEnv = sanitizeChildProcessEnv(this.#env, ["OPENAI_API_KEY"])
 

@@ -12,6 +12,7 @@ import {
 } from "../../../src/orchestration/identifiers.js"
 import { COMMAND_MATRIX, validateCommandStateByType } from "../../../src/orchestration/invariants.js"
 import { dispatchEnvelopeSchema, orchestrationCommandSchema } from "../../../src/orchestration/schemas.js"
+import { computeCharterSnapshotDigest } from "../../../src/orchestration/schemas.js"
 import {
   APPROVAL_STATES,
   DISPATCH_STATES,
@@ -82,15 +83,24 @@ const PLANNED_BY_COORDINATOR = [
   "dispatch.retry",
   "dispatch.timeout.request",
   "dispatch.execute",
+  "session.prompt",
+  "roundtable.open",
+  "roundtable.post",
+  "roundtable.inject_human",
+  "roundtable.close",
+  "charter.propose",
+  "charter.approve",
+  "charter.revise",
+  "charter.reject",
 ] as const satisfies readonly OrchestrationCommand["type"][]
 
 /** Command types the coordinator refuses as unimplemented, matrix first. */
 const SESSION_COMMAND_TYPES = [
-  "session.prompt",
   "session.respond",
   "session.interrupt",
   "session.terminate",
 ] as const satisfies readonly OrchestrationCommand["type"][]
+
 
 // --- Fixtures ---------------------------------------------------------------
 
@@ -460,6 +470,126 @@ function payloadFor(type: OrchestrationCommand["type"]): unknown {
     case "session.interrupt":
     case "session.terminate":
       return { sessionId: SESSION_ID, reason: "operator" }
+    case "roundtable.open":
+      return {
+        roundtable: {
+          id: "rt-1",
+          runId: RUN,
+          subject: "Design review",
+          mode: "sequential",
+          chairNodeId: "node-1",
+          members: [{ nodeId: "node-1", roleId: "role-1" }],
+          state: "open",
+        },
+      }
+    case "roundtable.post":
+      return {
+        post: {
+          postId: "post-1",
+          discussionId: "rt-1",
+          seq: 1,
+          authorNodeId: "node-1",
+          authorRoleId: "role-1",
+          kind: "proposal",
+          body: "A proposal",
+          createdAt: NOW,
+        },
+      }
+    case "roundtable.inject_human":
+      return {
+        post: {
+          postId: "post-human-1",
+          discussionId: "rt-1",
+          seq: 1,
+          authorNodeId: "node-1",
+          authorRoleId: "human",
+          kind: "note",
+          body: "Human guidance",
+          createdAt: NOW,
+        },
+      }
+    case "roundtable.close":
+      return {
+        discussionId: "rt-1",
+        outcome: {
+          summary: "Done",
+          recommendation: "Proceed",
+          addressedObjections: [],
+          unresolvedObjections: [],
+        },
+      }
+    case "charter.propose": {
+      const c = {
+        charterId: "charter-default",
+        version: 1,
+        purpose: "Default charter",
+        globalRules: ["rule-1"],
+        communicationPolicy: {
+          turnTaking: "chair_ordered" as const,
+          objectionRequiredBefore: ["deploy"],
+          verbosity: "normal" as const,
+          mustStopAndAsk: ["stop"],
+          objectionMustContain: ["rationale"],
+        },
+        escalationPolicy: {
+          maxRounds: 5,
+          onDeadlock: "human_decides" as const,
+          budgetScope: "shared" as const,
+        },
+        roleCatalog: [],
+        immutableCoreDigest: `sha256:${"a".repeat(64)}`,
+        snapshotDigest: `sha256:${"b".repeat(64)}`,
+        capturedAt: NOW,
+        author: "human" as const,
+      }
+      const snapshotDigest = computeCharterSnapshotDigest(c)
+      return {
+        proposal: {
+          charter: { ...c, snapshotDigest },
+          rationale: "Update charter",
+          evidenceRefs: ["rt-1"],
+          changes: [{ area: "charter.purpose" as const, note: "Update" }],
+        },
+      }
+    }
+    case "charter.approve":
+      return {
+        charterId: "charter-default",
+        version: 1,
+      }
+    case "charter.revise": {
+      const c = {
+        charterId: "charter-default",
+        version: 1,
+        purpose: "Default charter",
+        globalRules: ["rule-1"],
+        communicationPolicy: {
+          turnTaking: "chair_ordered" as const,
+          objectionRequiredBefore: ["deploy"],
+          verbosity: "normal" as const,
+          mustStopAndAsk: ["stop"],
+          objectionMustContain: ["rationale"],
+        },
+        escalationPolicy: {
+          maxRounds: 5,
+          onDeadlock: "human_decides" as const,
+          budgetScope: "shared" as const,
+        },
+        roleCatalog: [],
+        immutableCoreDigest: `sha256:${"a".repeat(64)}`,
+        snapshotDigest: `sha256:${"b".repeat(64)}`,
+        capturedAt: NOW,
+        author: "human" as const,
+      }
+      const snapshotDigest = computeCharterSnapshotDigest(c)
+      return { charter: { ...c, snapshotDigest } }
+    }
+    case "charter.reject":
+      return {
+        charterId: "charter-default",
+        version: 1,
+        rationale: "Refused by operator",
+      }
   }
 }
 
@@ -580,6 +710,14 @@ const FORBIDDEN_TRANSITIONS: readonly {
     forbidden: SESSION_STATES.filter((s) => !["launching", "running", "idle"].includes(s)),
     expectation: "refused",
   },
+  { type: "roundtable.open", dimension: "runState", forbidden: ["completed", "failed", "cancelled"], expectation: "refused" },
+  { type: "roundtable.post", dimension: "runState", forbidden: ["completed", "failed", "cancelled"], expectation: "refused" },
+  { type: "roundtable.inject_human", dimension: "runState", forbidden: ["completed", "failed", "cancelled"], expectation: "refused" },
+  { type: "roundtable.close", dimension: "runState", forbidden: ["completed", "failed", "cancelled"], expectation: "refused" },
+  { type: "charter.propose", dimension: "runState", forbidden: ["completed", "failed", "cancelled"], expectation: "refused" },
+  { type: "charter.approve", dimension: "runState", forbidden: ["completed", "failed", "cancelled"], expectation: "refused" },
+  { type: "charter.revise", dimension: "runState", forbidden: ["completed", "failed", "cancelled"], expectation: "refused" },
+  { type: "charter.reject", dimension: "runState", forbidden: ["completed", "failed", "cancelled"], expectation: "refused" },
 ]
 
 // --- 1. Conformance: the vocabulary and the matrix agree ---------------------
@@ -630,7 +768,7 @@ describe("M4-M conformance: the matrix covers the command vocabulary", () => {
 
 describe("M4-M conformance: the seam consults the matrix for every command type", () => {
   for (const type of PLANNED_BY_COORDINATOR) {
-    it(`refuses '${type}' in a state its entry forbids`, () => {
+    it(`refuses '${type}' in a state its entry forbids`, async () => {
       const rule = COMMAND_MATRIX[type]
       // The run is the one dimension every entry constrains, so the run
       // dimension alone is enough to prove the seam reaches the matrix for this
@@ -639,7 +777,11 @@ describe("M4-M conformance: the seam consults the matrix for every command type"
       const forbiddenRun = RUN_STATES.find((state) => !rule.allowedRunStates.includes(state))!
       const harness = makeHarness(inState({ runState: forbiddenRun }))
 
-      const result = harness.coordinator.submit(commandFor(type))
+      const cmd = commandFor(type)
+      const result =
+        cmd.type === "session.prompt"
+          ? await harness.coordinator.submitPrompt(cmd)
+          : harness.coordinator.submit(cmd)
 
       // The outcome follows the same table the negative suite uses, so the
       // one deliberate exemption is visible in both places instead of being
@@ -732,11 +874,14 @@ describe("M4-M negative evidence: a forbidden transition is refused and writes n
 
   for (const row of FORBIDDEN_TRANSITIONS) {
     for (const state of row.forbidden) {
-      it(`${row.type} in ${row.dimension} '${state}' is ${row.expectation === "refused" ? "refused" : "a no-op that appends nothing"}`, () => {
+      it(`${row.type} in ${row.dimension} '${state}' is ${row.expectation === "refused" ? "refused" : "a no-op that appends nothing"}`, async () => {
         const harness = makeHarness(inState({ [row.dimension]: state } as never))
         const command = commandFor(row.type, `cmd-${row.type}-${row.dimension}-${state}`)
 
-        const result = harness.coordinator.submit(command)
+        const result =
+          command.type === "session.prompt"
+            ? await harness.coordinator.submitPrompt(command)
+            : harness.coordinator.submit(command)
 
         // The invariant that holds for EVERY row, exception or not: a forbidden
         // command writes no EVENT and names no EFFECT. The append itself is a

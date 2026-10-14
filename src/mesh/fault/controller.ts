@@ -20,8 +20,9 @@
  */
 import { createContractError } from "../../orchestration/errors.js"
 import type { NodeId, ProjectId, RunId } from "../../orchestration/identifiers.js"
-import { eventIdSchema } from "../../orchestration/identifiers.js"
-import { DispatchCoordinator, type CoordinatorDependencies, type EffectBoundary } from "../../orchestration/coordinator/index.js"
+import { eventIdSchema, nodeIdSchema } from "../../orchestration/identifiers.js"
+import { DispatchCoordinator, type CoordinatorDependencies, type EffectBoundary, type EffectTransport } from "../../orchestration/coordinator/index.js"
+import { RoundtableRepository } from "../../orchestration/roundtable/index.js"
 import { SqliteEventStore } from "../../orchestration/event-store/event-store.js"
 import type { StoredRunEvent } from "../../orchestration/event-store/types.js"
 import { ProjectionEngine } from "../../orchestration/projections/projection-engine.js"
@@ -29,6 +30,7 @@ import type { RunProjectionState } from "../../orchestration/projections/types.j
 import { MeshNodeRegistry, SqliteNodeRegistryStore, type NodeRegistryStore } from "../registry/index.js"
 import { MeshControllerLease, SqliteControllerLeaseStore, createUnreconciledNodeSource } from "../lease/index.js"
 import type { ControllerLeaseStore, LeaseScope } from "../lease/types.js"
+import { DefaultRoundtablePostRelay } from "../outbox/ingest.js"
 import { DurableEventOutbox, MeshEventIngestor, OutboxDeliverer, SqliteEventOutboxStore } from "../outbox/index.js"
 import type { EventOutboxTransport, MeshOutboxEntry } from "../outbox/types.js"
 import { MeshEventGateway, MeshProjectionUpdater, ProjectionSnapshotFallback } from "../gateway/events/index.js"
@@ -51,7 +53,8 @@ import {
   writePeerEvent,
 } from "./durable.js"
 import { aNodeIdentity, type NodeIdentity, type NodeTransportContext } from "./transport.js"
-import { FAULT_MESH_ID, eventEnvelopeFor } from "./records.js"
+import { FAULT_MESH_ID, eventEnvelope, eventEnvelopeFor } from "./records.js"
+import { timestampSchema } from "../../orchestration/identifiers.js"
 import type { FaultClock, InboundHandler } from "./types.js"
 
 export interface ControllerScope {
@@ -102,6 +105,8 @@ export interface ControllerNode {
   /** Closes every handle and rebuilds over the same files. */
   restart(): Promise<void>
   close(): void
+  readonly roundtables: RoundtableRepository
+  readonly outboxStore: SqliteEventOutboxStore
 }
 
 /**
@@ -141,6 +146,7 @@ export async function buildController(input: {
     readonly outbox: DurableEventOutbox
     readonly outboxStore: SqliteEventOutboxStore
     readonly coordinator: DispatchCoordinator
+    readonly roundtables: RoundtableRepository
   }
 
   const build = (): Live => {
@@ -172,6 +178,7 @@ export async function buildController(input: {
     })
     const outboxStore = new SqliteEventOutboxStore(kernelDb.driver)
     const outbox = new DurableEventOutbox({ store: outboxStore, now: clock.now })
+    const roundtables = new RoundtableRepository()
 
     // Peer events are written to the HARNESS's own durable table, not kept in an
     // array, and the table's `global_position` — not a counter held here — is what
@@ -205,6 +212,21 @@ export async function buildController(input: {
           return { ok: true, value: undefined }
         },
       },
+      relay: new DefaultRoundtablePostRelay({
+        roundtables,
+        controllerNodeId: nodeId,
+        transport: {
+          deliver: async (entry) => {
+            await transport.send({
+              from: nodeId,
+              to: entry.destination,
+              record: eventEnvelope(entry.event, entry.destination),
+              method: "POST",
+              path: "/v1/mesh/event",
+            })
+          },
+        },
+      }),
     })
 
     const reconciler = new MeshReconciler({
@@ -249,6 +271,21 @@ export async function buildController(input: {
       newEventId: () => `evt-fault-${(eventSequence += 1)}`,
       boundary,
       readRun: (runId) => engine.getProjection(runId),
+      roundtables,
+      effectTransport: {
+        deliver: async (record) => {
+          const payload = record.payload as MeshEvent
+          const destination = nodeIdSchema.parse(record.destination)
+          await transport.send({
+            from: nodeId,
+            to: destination,
+            record: eventEnvelope(payload, destination),
+            method: "POST",
+            path: "/v1/mesh/event",
+          })
+          outboxStore.markAcknowledged(record.outboxId, timestampSchema.parse(new Date(clock.now()).toISOString()))
+        },
+      },
     }
 
     /**
@@ -265,6 +302,10 @@ export async function buildController(input: {
       updater.applyAll(kernel.readStream(scope.runId, { fromSequence: 1 }))
     }
     replayProjection()
+    const replayRoundtables = (): void => {
+      roundtables.replayFromEvents(kernel.readStream(scope.runId, { fromSequence: 1 }).map((s) => s.event))
+    }
+    replayRoundtables()
 
     return {
       databases,
@@ -282,6 +323,7 @@ export async function buildController(input: {
       outbox,
       outboxStore,
       coordinator: new DispatchCoordinator(dependencies),
+      roundtables,
     }
   }
 
@@ -310,6 +352,14 @@ export async function buildController(input: {
 
     get coordinator() {
       return live.coordinator
+    },
+
+    get roundtables() {
+      return live.roundtables
+    },
+
+    get outboxStore() {
+      return live.outboxStore
     },
 
     receive: (request) =>

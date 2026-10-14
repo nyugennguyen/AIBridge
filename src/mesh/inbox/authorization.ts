@@ -162,6 +162,14 @@ export const APPROVAL_CREATING_COMMAND_TYPES: Readonly<Record<CommandType, boole
   "session.respond": false,
   "session.interrupt": false,
   "session.terminate": false,
+  "roundtable.open": false,
+  "roundtable.post": false,
+  "roundtable.inject_human": false,
+  "roundtable.close": false,
+  "charter.propose": false,
+  "charter.approve": false,
+  "charter.revise": false,
+  "charter.reject": false,
 })
 
 /**
@@ -187,6 +195,14 @@ export const DISPATCH_CREATING_COMMAND_TYPES: Readonly<Record<CommandType, boole
   "session.respond": false,
   "session.interrupt": false,
   "session.terminate": false,
+  "roundtable.open": false,
+  "roundtable.post": false,
+  "roundtable.inject_human": false,
+  "roundtable.close": false,
+  "charter.propose": false,
+  "charter.approve": false,
+  "charter.revise": false,
+  "charter.reject": false,
 })
 
 /** Whether this command's payload creates the approval it points at. */
@@ -405,6 +421,14 @@ function digestOfCommandEnvelope(command: OrchestrationCommand): Digest | null {
     case "session.respond":
     case "session.interrupt":
     case "session.terminate":
+    case "roundtable.open":
+    case "roundtable.post":
+    case "roundtable.inject_human":
+    case "roundtable.close":
+    case "charter.propose":
+    case "charter.approve":
+    case "charter.revise":
+    case "charter.reject":
       return null
   }
 }

@@ -95,11 +95,13 @@ import { SENSITIVITY_RANK, type Sensitivity } from "../memory/ontology.js"
 import { matchesBounded, type SafePattern } from "../mesh/protocol/safe-pattern.js"
 import { digestJson } from "../orchestration/digest.js"
 import { createContractError, type Result } from "../orchestration/errors.js"
-import { evaluatePolicy, renderPolicyExplanation } from "../orchestration/policy/evaluate.js"
+import { evaluatePolicy, evaluateRoundtableGate, renderPolicyExplanation, type RoundtableGateInput } from "../orchestration/policy/evaluate.js"
 import { narrowPolicyState } from "../orchestration/policy/floor.js"
 import type { EffectivePolicyState, NarrowingOutcome, PolicyDecision, PolicyEvaluation } from "../orchestration/policy/types.js"
 import { policyEvaluationSchema } from "../orchestration/policy/types.js"
 import type { DispatchEnvelope, Rule } from "../orchestration/types.js"
+import type { Charter, CommunicationPolicy } from "../orchestration/charter/types.js"
+import type { RoundtableRepository } from "../orchestration/roundtable/repository.js"
 import {
   SENSITIVITY_BY_RANK,
   actionKindRank,
@@ -1847,7 +1849,16 @@ export interface KernelCompositionInput {
    * restrictions must pass them, or those restrictions do not take effect.
    */
   readonly ruleRestrictions?: RuleRestrictionComposition | null
+  readonly charter?: Charter | { readonly communicationPolicy?: CommunicationPolicy }
+  readonly roundtables?:
+    | RoundtableRepository
+    | readonly {
+        readonly roundtable: { readonly state: string; readonly taskId?: string; readonly runId?: string }
+        readonly outcome?: unknown
+      }[]
 }
+
+export { evaluateRoundtableGate, type RoundtableGateInput }
 
 /**
  * Runs the KERNEL's own policy evaluation over a rule set's kernel rules and
@@ -1892,7 +1903,19 @@ export function evaluateWithKernel(
   // below was therefore unreachable, and `ruleRestrictions` had zero references in
   // `tests/`, which is why a fully green suite did not notice a safety feature that
   // could not run.
-  const { ruleRestrictions, ...kernelInput } = input
+  const { ruleRestrictions, charter, roundtables, ...kernelInput } = input
+
+  if (charter !== undefined) {
+    const gate = evaluateRoundtableGate({
+      envelope: input.envelope,
+      charter,
+      task: input.taskTitle ? { taskId: input.envelope.taskId, title: input.taskTitle } : undefined,
+      roundtables,
+    })
+    if (!gate.ok) {
+      return { ok: false, error: gate.error }
+    }
+  }
 
   try {
     const evaluation = evaluatePolicy({ ...kernelInput, envelope: { ...input.envelope, ruleSnapshots: [...kernelRules] } })

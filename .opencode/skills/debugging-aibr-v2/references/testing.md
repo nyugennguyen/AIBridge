@@ -120,10 +120,10 @@ regenerate it.
 bun run release:check
 ```
 
-= `bun install --frozen-lockfile && bun run build && bun test && bun run typecheck && shellcheck scripts/install.sh && bash -n scripts/install.sh && bun dist/cli.js --help && bun pm pack --dry-run`
+= `bun install --frozen-lockfile && bun run build && bun test && bun run typecheck && shellcheck scripts/install.sh && bash -n scripts/install.sh && bun run contracts:check && bun dist/cli.js --help && bun pm pack --dry-run`
 
-Plus the Rust half, which `release:check` omits:
+Plus the Rust half from repo root (matching `.github/workflows/ci.yml`):
 
 ```bash
-cd router && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
+cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace
 ```

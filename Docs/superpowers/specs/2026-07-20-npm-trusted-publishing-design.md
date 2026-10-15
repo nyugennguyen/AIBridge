@@ -1,5 +1,9 @@
 # npm Trusted Publishing Design
 
+> **Status:** Historical
+>
+> This document is a historical v1.0.x-era agentic specification. Current architecture and procedures are documented in [`Docs/architecture/current-state.md`](../../architecture/current-state.md).
+
 ## Goal
 
 Publish a validated AIBridge release to npm automatically after its GitHub Release is published.

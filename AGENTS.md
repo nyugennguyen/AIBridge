@@ -16,7 +16,7 @@ bun run start                # run compiled bridge server from dist/ (bun dist/i
 bun run aibr -- <args>       # run local CLI entrypoint (bun src/cli.ts)
 
 # Testing
-bun test                     # run all tests via vitest
+bun test                     # run tests via Bun's built-in test runner (vitest is `bun run test`)
 bun run test:unit            # run unit tests only (tests/unit)
 bun run test:integration     # run integration tests only (tests/integration)
 bun run test:installer       # shellcheck, bash syntax, and installer tests
@@ -62,8 +62,8 @@ src/
                      project allowlists, actor claims, operator tokens (AIBRIDGE_OPERATOR_TOKEN)
   config/          - Zod schemas (schemas.ts), inferred types (types.ts), profile loader
   host/            - Host environment probes, binary detection, platform supervisor generators
-  cli/             - CLI command implementations (setup wizard, verify, discover, doctor)
-  jobs/            - JobManager, JsonFileJobStore (file-backed in .aibridge/jobs/)
+  cli/             - CLI command implementations (setup wizard, verify, discover)
+  jobs/            - JobManager, JsonFileJobStore (file-backed in `<stateDir>/jobs/`, e.g. `~/.local/state/aibridge/<profile>/jobs/`)
   opencode/        - Legacy OpenCode SDK adapter, session monitor, permission policies
   planning/        - Plan approval provider
   callback/        - Report callback reporter and egress outbox
@@ -116,24 +116,28 @@ where the docs and the source disagree — commands the runbook documents that d
 
 JSON config files in `config/` or stored in platform profile directories via `aibr setup`. Example configs: `dev-main.example.json`, `test-vps.example.json`.
 
-Required env vars at runtime:
-- `AIBRIDGE_AGENT_ID` — this machine's agent identifier
-- `AIBRIDGE_CONFIG` — path to config JSON
-- `OPENCODE_SERVER_PASSWORD` — for opencode serve auth
-- `AIBRIDGE_OPERATOR_TOKEN` — operator credential token granting user-kind `actor` claims for charter approval authority, human roundtable injection, and emergency intervention
-
+Environment variables:
+- Required:
+  - `AIBRIDGE_CONFIG` — path to config JSON (`src/index.ts`, `router/src/config.rs`)
+  - `AIBRIDGE_BEARER_TOKEN` — shared secret token for router (`router/src/config.rs`) and engine in bearer mode (`src/index.ts`)
+  - `AIBRIDGE_INGRESS_OUTBOX` — path to router admission store SQLite database (`router/src/outbox.rs`, `src/ingress/worker.ts`)
+- Optional / conditional:
+  - `AIBRIDGE_AGENT_ID` — identifier required only by `scripts/tmux-start.sh` (forwarded when set in `src/host/tmux.ts`)
+  - `OPENCODE_SERVER_PASSWORD` — for opencode serve auth; falls back to secrets file `secrets/opencode_password` (`src/cli.ts`)
+  - `AIBRIDGE_OPERATOR_TOKEN` — operator credential token granting user-kind `actor` claims for charter approval authority (`src/bridge.ts`)
+  - `OPENCODE_PORT` — port for opencode serve (defaults to 4096; prompted by setup wizard)
 ## Operational
 
 - Process management: headless via `tmux` or interactive via Herdr workspace manager. `scripts/tmux-start.sh` starts background services for headless environments.
 - Terminal backend: selected via `terminal.backend` in config (`"tmux"` for headless VPS nodes, `"herdr"` for interactive operator workstations).
 - Presentation: `aibr-tui` is retired; `aibr tui` checks Herdr availability and launches/links the `aibr-manager` Herdr plugin.
-- Job state persisted as JSON files in `.aibridge/jobs/` (gitignored), with orchestration state managed in SQLite event stores.
+- Job state persisted as JSON files under `<stateDir>/jobs/` (by default `~/.local/state/aibridge/<profile>/jobs/` in profile deployments, or `.aibridge/jobs/` in local legacy dev runs), with orchestration state managed in SQLite event stores.
 - Bridge port (8787) must be Tailscale-only. Never expose opencode serve publicly.
-- opencode serve must use port 4096 explicitly.
+- opencode serve defaults to port 4096 (`OPENCODE_PORT` or setup wizard prompt).
 
 ## Release Procedure & Automated CI/CD Publishing
 
-AIBridge uses automated CI/CD to validate and publish releases to npm whenever a new version is released on `main`.
+AIBridge uses `.github/workflows/ci.yml` for pull request and branch validation only. Automated npm package publishing is handled exclusively by `.github/workflows/publish.yml` triggered on GitHub Release published events.
 
 ### 1. Pre-Release Verification
 
@@ -146,11 +150,11 @@ bun run release:check
 This verifies:
 1. Frozen lockfile installation
 2. TypeScript compilation (`dist/`)
-3. Vitest test suite execution
+3. Bun test suite execution
 4. Typecheck (`tsc --noEmit`)
 5. Shellcheck and syntax validation of install scripts
-6. Contract parity and CLI smoke checks
-7. Package tarball dry-run packaging
+6. Contract parity (`contracts:check`) and CLI smoke checks
+7. Package tarball dry-run packaging (`bun pm pack --dry-run`)
 
 ### 2. Version Bump
 
@@ -159,7 +163,7 @@ Update the version number across the repository:
 - `src/version.ts`: `CLI_VERSION` — the single source of truth every version report in the CLI reads (splash banner, `--version`, `aibr update`, diagnostics bundle)
 - `CHANGELOG.md`: document new features, fixes, and changes under `## [x.y.z]`
 
-`publish.yml` refuses a release tag that does not match `package.json`, which catches the mismatch in the direction that matters. The reverse drift is not caught automatically, which is why the version lives in one place rather than being written out at each use site.
+The publishing workflow verifies that the release tag matches `format('v{0}', package.version)`.
 
 ### 3. Merge or Push to `main`
 
@@ -169,20 +173,23 @@ git commit -m "chore(release): prepare vx.y.z"
 git push origin main
 ```
 
-### 4. Automated Publishing
+Pushes to `main` run `.github/workflows/ci.yml` (validation only: build, test, typecheck, contract checks). CI does not publish packages.
 
-Whenever code is pushed to `main`:
-- The **CI** workflow (`.github/workflows/ci.yml`) runs the full `verify` gate (tests, typecheck, build, contract parity).
-- The automated **`publish`** job inspects the repository version against the latest published version on the npm registry (`npm view @nyugennguyen/aibridge version`).
-- If the version has been bumped, it validates the release package and publishes `@nyugennguyen/aibridge` to npm automatically.
-- Authentication supports npm Automation Tokens (`NPM_TOKEN` stored in GitHub repository secrets) and npm OIDC Trusted Publishing with cryptographic provenance.
+### 4. Tagging and Publishing via GitHub Release
 
-### 5. Tagging the Release
-
-Create the corresponding git tag and GitHub Release:
+To publish to npm, create a git tag matching the bumped version and publish a GitHub Release:
 
 ```bash
 git tag vx.y.z
 git push origin vx.y.z
 gh release create vx.y.z --title "AIBridge vx.y.z" --notes "Release notes..."
 ```
+
+When a GitHub Release is published:
+1. `.github/workflows/publish.yml` triggers on `release: [published]`.
+2. It verifies the release tag matches `v<version>` from `package.json`.
+3. A duplicate-version preflight inspects npm registry state per package via `gitHead`:
+   - Skips packages already published from this exact release commit.
+   - Fails if a version is already published from a different commit.
+4. Runs `bun run release:check` gate before publishing.
+5. Publishes queued packages to npm with provenance/OIDC or `NPM_TOKEN`.

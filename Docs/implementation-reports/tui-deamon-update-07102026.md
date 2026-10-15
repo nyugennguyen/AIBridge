@@ -1,3 +1,7 @@
+> **Status:** Historical
+>
+> This document targets the retired `aibr-tui` and `src/tui` components (retired per [ADR 0011](../adr/0011-herdr-orchestration-architecture.md)).
+
  AIBridge Systems Engineering Summary Report: TUI Control Plane & Onboarding Wizard Modernization
 
  ────────────────────────────────────────────────────────────────────────────────

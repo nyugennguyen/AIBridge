@@ -1,5 +1,9 @@
 # Milestone 3: Orchestration Kernel
 
+> **Status:** Historical
+>
+> This document is a completed milestone work order. The shipped behavior is described by [`Docs/architecture/current-state.md`](../architecture/current-state.md) and [`CHANGELOG.md`](../../CHANGELOG.md).
+
 ## Objective
 
 Replace imperative job coordination for new runs with an event-sourced orchestration kernel: durable runs, dependency-aware tasks, immutable dispatch attempts, versioned role snapshots, deterministic policy evaluation, digest-bound approvals, retry, timeout, cancellation, and replayable projections.

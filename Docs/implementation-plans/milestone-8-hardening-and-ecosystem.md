@@ -1,5 +1,9 @@
 # Milestone 8: Hardening and Ecosystem
 
+> **Status:** Historical
+>
+> This document is a completed milestone work order. The shipped behavior is described by [`Docs/architecture/current-state.md`](../architecture/current-state.md) and [`CHANGELOG.md`](../../CHANGELOG.md).
+
 ## Objective
 
 Prepare AIBridge for reliable external use through crash and corruption recovery, observability, diagnostics, resource limits, upgrade/rollback discipline, an adapter SDK and conformance kit, packaging validation, and an optional Herdr terminal-backend experiment.

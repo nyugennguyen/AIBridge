@@ -1,5 +1,9 @@
 # Milestone 5: Shared Memory and Context Engineering
 
+> **Status:** Historical
+>
+> This document is a completed milestone work order. The shipped behavior is described by [`Docs/architecture/current-state.md`](../architecture/current-state.md) and [`CHANGELOG.md`](../../CHANGELOG.md).
+
 ## Objective
 
 Create structured, scoped, attributable memory and deterministic context assembly so agents receive relevant continuity without uncontrolled transcript sharing. Extend the current decision/constraint/handoff store through compatibility migration rather than silently replacing it.

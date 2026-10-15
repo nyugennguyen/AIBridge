@@ -1,5 +1,9 @@
 # AIBridge TUI & Background Architecture Modernization Plan
 
+> **Status:** Superseded
+>
+> The standalone TUI direction in this plan (`aibr-tui` / Ratatui embedded terminal client) was retired by [ADR 0011](../adr/0011-herdr-orchestration-architecture.md) in favor of the Herdr manager plugin architecture. Daemon decoupling and IPC contracts remain part of current architecture.
+
 This document provides a comprehensive, production-ready modernization plan for [**AIBridge**](https://github.com/nyugennguyen/AIBridge) (`aibr`), incorporating design principles and patterns from [**Herdr**](https://github.com/herdrdev/herdr). It spans the entire stack: the headless background server/daemon, the interactive multi-pane TUI runtime, an interactive onboarding wizard for `aibr setup`, and a parallel sub-agent execution prompt for `oh-my-pi` / `opencode`.
 
 ---

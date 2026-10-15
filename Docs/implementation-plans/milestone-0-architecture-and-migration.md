@@ -1,5 +1,9 @@
 # Milestone 0: Architecture and Migration Contracts
 
+> **Status:** Historical
+>
+> This document is a completed milestone work order. The shipped behavior is described by [`Docs/architecture/current-state.md`](../architecture/current-state.md) and [`CHANGELOG.md`](../../CHANGELOG.md).
+
 ## Objective
 
 Establish the domain language, versioned schemas, subsystem interfaces, security invariants, persistence decision, and legacy migration path needed by every later milestone. This milestone produces compilable contracts and contract tests, not production orchestration behavior.

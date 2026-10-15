@@ -1,11 +1,18 @@
 name: Publish npm package
 
+# SOLE PUBLISHING AUTHORITY. This is the only workflow that may call
+# `npm publish` or hold `NPM_TOKEN`. `.github/workflows/ci.yml` is
+# validation-only: when both could publish, a version transition had two
+# writers of one immutable npm version, and a publishing failure turned a
+# passing code-verification run red.
 on:
   release:
     types: [published]
 
 permissions:
   contents: read
+  # For npm OIDC trusted publishing / provenance. `NPM_TOKEN` (automation
+  # token) remains supported as a fallback via `NODE_AUTH_TOKEN` below.
   id-token: write
 
 jobs:
@@ -59,17 +66,106 @@ jobs:
           echo "Release tag must match the package version."
           exit 1
 
-      - name: Validate release package
-        run: bun run release:check
-
-      - name: Publish to npm
+      # npm versions are immutable. This preflight decides, PER PACKAGE, between
+      # three outcomes before anything is published:
+      #
+      #   1. not published        -> queue for publish after validation
+      #   2. published, and the registry's `gitHead` equals this release commit
+      #                           -> "already published; skipped" (a re-run of a
+      #                              release that already landed)
+      #   3. published, but from another commit, or with no `gitHead` to verify
+      #                           -> FAIL with a diagnostic: a new package
+      #                              version is required, because the published
+      #                              artifact cannot be proven to be this one
+      #
+      # This is the second line of defense behind having exactly one publishing
+      # workflow. `npm view` alone is not authoritative release state -- it can
+      # race a concurrent publish -- so a skip is only taken when the registry
+      # metadata proves the artifact is this release's.
+      - name: Publish preflight
+        id: preflight
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
+          set -euo pipefail
+          RELEASE_SHA=$(git rev-parse HEAD)
+          PENDING=""
+
+          # absent | matching:<gitHead> | unverifiable
+          registry_state() {
+            local name="$1" version="$2" git_head
+            if ! npm view "$name@$version" version >/dev/null 2>&1; then
+              echo "absent"
+              return
+            fi
+            git_head=$(npm view "$name@$version" gitHead 2>/dev/null || echo "")
+            if [ -z "$git_head" ] || [ "$git_head" = "null" ]; then
+              echo "unverifiable"
+              return
+            fi
+            echo "matching:$git_head"
+          }
+
+          check_pkg() {
+            local dir="$1" name version state
+            name=$(jq -r .name "$dir/package.json")
+            version=$(jq -r .version "$dir/package.json")
+            state=$(registry_state "$name" "$version")
+            case "$state" in
+              absent)
+                echo "Queued for publish: $name@$version ($dir)"
+                PENDING="$PENDING $dir"
+                ;;
+              matching:*)
+                if [ "${state#matching:}" = "$RELEASE_SHA" ]; then
+                  echo "$name@$version is already published from this release commit ($RELEASE_SHA); skipped."
+                else
+                  echo "::error::$name@$version is already published from commit ${state#matching:}, which is not this release commit ($RELEASE_SHA). npm versions are immutable: bump the version and cut a new release."
+                  exit 1
+                fi
+                ;;
+              unverifiable)
+                echo "::error::$name@$version is already published but the registry carries no gitHead for it, so the artifact cannot be verified as this release's. Bump the version and cut a new release."
+                exit 1
+                ;;
+            esac
+          }
+
           for pkg_dir in packages/*; do
             if [ -d "$pkg_dir" ] && [ -f "$pkg_dir/package.json" ]; then
-              echo "Publishing platform package in $pkg_dir..."
-              (cd "$pkg_dir" && npm publish --access public) || true
+              check_pkg "$pkg_dir"
             fi
           done
-          npm publish --access public
+          check_pkg .
+
+          if [ -z "$PENDING" ]; then
+            echo "All packages of this release are already published; nothing to do."
+            echo "pending=" >> "$GITHUB_OUTPUT"
+          else
+            echo "pending=$PENDING" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Validation precedes publication and is skipped only when the preflight
+      # proved there is nothing left to publish.
+      - name: Validate release package
+        if: steps.preflight.outputs.pending != ''
+        run: bun run release:check
+
+      # Publishes exactly the packages the preflight queued. Platform packages
+      # (`packages/*`, installed via optionalDependencies) are REQUIRED once a
+      # release names them: a failed publish here fails the release explicitly
+      # instead of being swallowed, so a half-published release is visible
+      # rather than silent.
+      - name: Publish to npm
+        if: steps.preflight.outputs.pending != ''
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          for pkg_dir in ${{ steps.preflight.outputs.pending }}; do
+            name=$(jq -r .name "$pkg_dir/package.json")
+            version=$(jq -r .version "$pkg_dir/package.json")
+            echo "Publishing $name@$version from $pkg_dir ..."
+            (cd "$pkg_dir" && npm publish --access public)
+            echo "Published $name@$version."
+          done

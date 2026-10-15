@@ -1,5 +1,9 @@
 # curl | bash Installer Implementation Plan
 
+> **Status:** Historical
+>
+> This document is a historical v1.0.x-era agentic plan. Current architecture and procedures are documented in [`Docs/architecture/current-state.md`](../../architecture/current-state.md).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add a single `curl -fsSL https://raw.githubusercontent.com/nyugennguyen/AIBridge/main/scripts/install.sh | bash` one-liner that installs Bun (if missing), tmux/opencode/tailscale dependencies, and `@nyugennguyen/aibridge` globally, then prints verified next steps.

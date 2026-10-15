@@ -1,5 +1,9 @@
 # Milestone 2: Multi-Runtime Adapter Layer
 
+> **Status:** Historical
+>
+> This document is a completed milestone work order. The shipped behavior is described by [`Docs/architecture/current-state.md`](../architecture/current-state.md) and [`CHANGELOG.md`](../../CHANGELOG.md).
+
 ## Objective
 
 Prove that AIBridge orchestrates capabilities rather than one provider by supporting OpenCode, Claude Code, and Codex through a single conformance-tested runtime interface. Each adapter must expose its confidence and limitations instead of manufacturing feature parity.

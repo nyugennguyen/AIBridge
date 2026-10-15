@@ -1,5 +1,9 @@
 # Milestone 7: Polyglot Ingress and Durable Admission
 
+> **Status:** Historical
+>
+> This document is a completed milestone work order. The shipped behavior is described by [`Docs/architecture/current-state.md`](../architecture/current-state.md) and [`CHANGELOG.md`](../../CHANGELOG.md).
+
 ## Objective
 
 Replace the Bun engine's HTTP ingress with a native Rust router that owns the listening socket, authenticates and bounds every request, and admits work to a durable SQLite queue before acknowledging it. Remove Fastify from the engine process, cut resident memory by roughly 39%, and close five open High threat-model findings at the trust boundary — while leaving the engine as the sole authority for every authorization decision and leaving the TUI decoupled from the job engine.

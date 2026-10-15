@@ -1,5 +1,9 @@
 # AIBridge v1.0.1 Release and Changelog Design
 
+> **Status:** Historical
+>
+> This document is a historical v1.0.x-era agentic specification. Current architecture and procedures are documented in [`Docs/architecture/current-state.md`](../../architecture/current-state.md).
+
 ## Goal
 
 Publish the existing AIBridge `1.0.1` package version as a GitHub release and establish a concise, repository-owned changelog for the released versions `v1.0.0` and `v1.0.1`.

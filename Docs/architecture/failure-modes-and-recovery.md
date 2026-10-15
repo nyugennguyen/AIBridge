@@ -1,5 +1,16 @@
 # AIBridge Failure Mode Inventory and Operator Recovery Runbooks
 
+> **Status:** Needs revalidation
+>
+> This document describes an operator CLI (`aibr db|sessions|lease|config|preflight`, `--drain-only`, `aibr-router --version|--profile`) that does **not** exist in this repository's CLI (`src/cli.ts:152-153` implements `setup`, `start`, `serve`, `worker`, `status`, `verify`, `update`, `tui`, `bundle`, `discover`; `router/src/main.rs:95-117` accepts `--preflight` and `--init-store` only).
+>
+> The original text is preserved below in full as a design record of the intended recovery surface, not current operating procedure.
+>
+> For current triage and executable commands, see:
+> - [`Docs/architecture/current-state.md`](current-state.md)
+> - [`Docs/cli-reference.md`](../cli-reference.md)
+> - The `debugging-aibr-v2` skill (`.opencode/skills/debugging-aibr-v2/SKILL.md`)
+
 Document version: 1.0.0 (Milestone 8 Hardening and Ecosystem)
 Status: Released / Verified
 Classification: Operational Architecture and Incident Response

@@ -9,7 +9,7 @@ This specification defines the modern redesign of the TUI's interaction model, l
 An interactive live prototype is published as an OpenDesign project:
 - **OpenDesign Preview**: `http://127.0.0.1:55715/api/projects/aibridge-tui/raw/index.html`
 - **OpenDesign Studio**: `http://127.0.0.1:55726/projects/aibridge-tui/conversations/a210090c-ab57-4a17-93d9-cc205e60e4c2/files/index.html`
-- **Local Artifact**: [`Docs/tui/aibridge-tui-redesign.html`](file:///Users/mac/Projects/AIBrigde/Docs/tui/aibridge-tui-redesign.html)
+- **Local Artifact**: [`Docs/tui/aibridge-tui-redesign.html`](./aibridge-tui-redesign.html)
 
 ---
 

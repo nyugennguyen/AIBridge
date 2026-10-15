@@ -13,19 +13,13 @@
 [![CI](https://github.com/nyugennguyen/AIBridge/actions/workflows/ci.yml/badge.svg)](https://github.com/nyugennguyen/AIBridge/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Bun Version](https://img.shields.io/badge/Bun-%3E%3D1.3.0-black.svg)](https://bun.sh)
-[![Rust Version](https://img.shields.io/badge/Rust-1.94-orange.svg)](https://www.rust-lang.org)
+[![Rust MSRV](https://img.shields.io/badge/Rust_MSRV-1.94-orange.svg)](https://www.rust-lang.org)
 
 **AIBridge** is a resilient, polyglot orchestrator and agent mesh connecting OpenCode and local execution daemons securely across machines over private Tailscale networks.
 
-AIBridge replaces traditional monolithic bridge architectures with a **two-tier polyglot architecture**: a native Rust ingress router (`aibr-router`) for low-overhead, fail-closed admission and durable queuing, paired with a TypeScript/Bun worker daemon (`aibr worker`) for semantic task execution, rule evaluation, and distributed orchestration.
+AIBridge replaces traditional monolithic bridge architectures with a **two-tier polyglot architecture**: a native Rust ingress router (`aibr-router`) for low-overhead, fail-closed admission and durable queuing, paired with a TypeScript/Bun worker daemon (`aibr worker`) for semantic task execution, rule evaluation, and distributed orchestration. Rust development and CI builds pin toolchain `1.99.0` (`rust-toolchain.toml`), with an MSRV of `1.94`.
 
-The first supported topology is two machines:
-
-- `dev-main`: development workstation that triggers remote work.
-- `test-vps`: testing VPS that creates a fresh opencode session, runs the requested task, and reports back.
-
-The bridge keeps the design ready for a future N-machine mesh through explicit registry, routing, job store, auth, plan review, and permission policy boundaries.
-
+Two machines serve as the starter topology (`dev-main` workstation triggering remote tasks on `test-vps`), and multi-node federation is supported across an N-node mesh through explicit registry, routing, job store, auth, plan review, and permission policy boundaries.
 ---
 
 ## Architecture Overview
@@ -38,7 +32,7 @@ The bridge keeps the design ready for a future N-machine mesh through explicit r
              ┌─────────────────────────────────────────────────┐
              │       Tier 1: aibr-router (Native Rust)         │
              │─────────────────────────────────────────────────│
-             │ • Binds tailscale0:8787 (4-layer preflight)    │
+             │ • Binds bridge.host:bridge.port (preflight)    │
              │ • Constant-time Bearer authentication (subtle)  │
              │ • Bounded inflight concurrency (cap: 64)        │
              │ • Payload body limit (1 MiB ceiling)            │
@@ -84,7 +78,7 @@ The bridge keeps the design ready for a future N-machine mesh through explicit r
 AIBridge is tested on:
 
 - **macOS** (Apple Silicon `aarch64` and Intel `x86_64`)
-- **Debian / Ubuntu** Linux (`x86_64` and `aarch64`)
+- **Debian / Ubuntu** Linux (`x86_64` and `aarch64`). The prebuilt binary matrix targets `x86_64-apple-darwin`, `aarch64-apple-darwin`, `x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl`, and `x86_64-unknown-linux-gnu`; `aarch64` Linux is served by the static musl binary.
 
 Other platforms are not supported. The `aibr setup` command will refuse to run on unsupported systems.
 
@@ -97,8 +91,8 @@ Before installing AIBridge, ensure every participating machine has:
 | Requirement | Notes |
 |---|---|
 | [Bun](https://bun.sh) >= 1.3.0 | Install from the official installer at bun.sh. |
-| [tmux](https://github.com/tmux/tmux) | Used for process supervision. `aibr setup` can install it via Homebrew (macOS) or apt (Debian/Ubuntu) with your confirmation. |
-| [opencode](https://opencode.ai) | `aibr setup` can install it via `bun install -g opencode-ai` with your confirmation. Bound strictly to loopback `127.0.0.1`. |
+| [tmux](https://github.com/tmux/tmux) | Used for process supervision. `scripts/install.sh` can install it via Homebrew (macOS) or apt (Debian/Ubuntu) with your confirmation (`aibr setup` does not install packages). |
+| [opencode](https://opencode.ai) | Pre-requisite runtime. Bound strictly to loopback `127.0.0.1`. Install manually via `bun install -g opencode-ai` (`scripts/install.sh` and `aibr setup` refuse to auto-install OpenCode). |
 | [Tailscale](https://tailscale.com) | Must be installed, logged in, and authenticated. The bridge binds to your Tailscale IPv4 address — it is never exposed to the public Internet. |
 
 ---
@@ -178,8 +172,8 @@ The wizard walks five steps. You can jump straight to any step you have already 
 
 | Step | What it does |
 | --- | --- |
-| **1. Network** | Verifies Tailscale is running, extracts this machine's Tailscale IPv4 and MagicDNS hostname, and checks that ports `4095` (router), `4096` (OpenCode), and `8787` (bridge) are free. |
-| **2. Security** | Generates a CSPRNG bearer token, accepts one you paste, or runs with no authentication. Press `r` to regenerate. Confirms the security floor: constant-time token comparison, a 2 MB body cap, and automatic secret redaction. |
+| **1. Network** | Verifies Tailscale is running, extracts this machine's Tailscale IPv4 and MagicDNS hostname, and checks that probe ports `4095` (router free-port check), `4096` (OpenCode), and `8787` (bridge/router shared port) are free. |
+| **2. Security** | Generates a CSPRNG bearer token, accepts one you paste, or runs with no authentication. Press `r` to regenerate. Confirms the security floor: constant-time token comparison, a 1 MiB body cap, and automatic secret redaction. |
 | **3. Allowlists** | Choose the project roots agents may touch. Containment is enforced **fail-closed**: a path that is not under an allowed root is refused, not clamped. |
 | **4. AI Runtimes** | Probes the OpenCode loopback endpoint and resolves the `claude` and `codex` CLIs on `$PATH`. Uses tailnet discovery to propose peers (see [Peer Discovery](#peer-discovery)) and sets peer agent ID and URL. |
 | **5. Install & Test** | Writes a supervisor unit (launchd on macOS, systemd on Linux) and runs a preflight audit. |
@@ -411,16 +405,23 @@ aibr <command> [options]
 |---|---|:---:|
 | `aibr setup` | Interactive 5-step onboarding wizard (network, security, allowlists, runtimes, supervisor unit). | Optional |
 | `aibr start` | Launches opencode and bridge inside detached tmux windows. | **Yes** |
-| `aibr worker` | Starts the Tier 2 ingress drain worker (no listener). | **Yes** |
 | `aibr serve` | Runs the bridge HTTP server directly (engine or shadow mode). | **Yes** |
+| `aibr worker` | Starts the Tier 2 ingress drain worker (no listener). | **Yes** |
 | `aibr status` | Checks process health, queue depth, and probe connectivity. | **Yes** |
-| `aibr discover` | Lists tailnet peers and probes each peer's `/health`. Read-only; enrols nothing. | Optional |
+| `aibr verify` | Validates dependencies, SSL token, and config format. | Optional |
+| `aibr update` | Checks and updates to the latest version. | Optional |
 | `aibr tui` | Links and configures the AIBridge Manager plugin inside Herdr. | **Yes** |
 | `aibr bundle` | Generates a redacted diagnostic support bundle. | **Yes** |
+| `aibr discover` | Lists tailnet peers and probes each peer's `/health`. Read-only; enrols nothing. | Optional |
+
+For full command-line documentation and options generated directly from `aibr --help`, see [`Docs/cli-reference.md`](Docs/cli-reference.md).
 
 ### Global Options
-- `--profile, -p <name>`: Profile name (required for start/serve/worker/status/tui).
-- `--preview`: Preview support bundle without exporting raw JSON.
+- `--profile, -p <name>`: Profile name (required for start/serve/worker/status/tui and bundle).
+- `--preview`: Preview support bundle without exporting raw JSON (`bundle` only).
+- `--check, -c`: Check for updates without installing (`update` only).
+- `--yes, -y`: Automatic yes to prompts (`update` only).
+- `--json`: Emit one JSON document and nothing else (`discover` only).
 - `--shadow-mode`: Runs engine in shadow mode, mirroring traffic to the router.
 - `--ipc-publish`: Serve the local IPC bus (`worker` only).
 - `--help, -h`: Displays help output.
@@ -508,7 +509,7 @@ These are reference examples only. Use `aibr setup` to create your actual profil
 
 Important fields:
 
-- `security.auth_mode`: currently always `"bearer-token"`; the actual token is kept in the separate profile secrets file, not in this JSON configuration.
+- `security.auth_mode`: enum `bearer-token` or `none` (default: `"bearer-token"`). When set to `"bearer-token"`, the actual token is kept in the separate profile secrets file, not in this JSON configuration.
 - `security.allowed_sources`: declares which source agents can trigger this agent and which capabilities they can request.
 - `projects[].path`: allowlisted remote project directories. Trigger requests cannot run outside these paths.
 - `planning.require_approval_for`: capabilities that require approved Plan Annotator metadata.

@@ -111,5 +111,5 @@ Each milestone closes with a short report in `Docs/implementation-reports/` cont
 - Evidence for every completion criterion
 - Exact prerequisites handed to the next milestone
 
-The report filename is `milestone-<N>-completion.md`. The root agent, independent reviewer, and—where required—security reviewer must all sign off in the document.
+The report filename typically follows `milestone-<N>-completion.md` (or milestone gate/progress reports such as `milestone-4-gate-report.md`, `milestone-7-progress.md`, `m7.3-progress.md`). The root agent, independent reviewer, and—where required—security reviewer must all sign off in the document.
 

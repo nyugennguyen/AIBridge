@@ -1,5 +1,9 @@
 # Milestone 1: Single-Node TUI Vertical Slice
 
+> **Status:** Historical
+>
+> This document is a completed milestone work order. The shipped behavior is described by [`Docs/architecture/current-state.md`](../architecture/current-state.md) and [`CHANGELOG.md`](../../CHANGELOG.md).
+
 ## Objective
 
 Deliver one complete local workflow through `aibr tui`: select a project, create a one-task run, inspect the dispatch envelope, approve it, launch OpenCode, observe state, attach to its tmux terminal, interact safely, and review the result. This milestone proves the user experience before adding more providers or distributed coordination.

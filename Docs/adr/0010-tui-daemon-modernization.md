@@ -1,5 +1,9 @@
 # ADR 0010: Mouse-native TUI client and decoupled daemon
 
+> **Status:** Superseded in part
+>
+> [ADR 0011](./0011-herdr-orchestration-architecture.md) amends and supersedes this ADR's TUI direction, retiring `aibr-tui` in favor of the Herdr manager plugin. The decoupled daemon, IPC schema generation, and Cargo workspace structure established here remain active.
+
 Status: Accepted (in progress)
 Date: 2026-10-06
 Supersedes: nothing. Amends [ADR 0008](./0008-polyglot-ingress-and-admission.md) §4 only.

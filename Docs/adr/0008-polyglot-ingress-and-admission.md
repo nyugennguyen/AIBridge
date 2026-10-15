@@ -470,10 +470,10 @@ Four stateless routes move: `GET /health`, `POST /trigger`, `GET /jobs/:id`,
 
 ## 7. The TUI stays decoupled
 
-`aibr tui` ([`src/tui/bootstrap.ts:28`](../../src/tui/bootstrap.ts)) and
+`aibr tui` (`src/tui/bootstrap.ts:28` — note: the `src/tui/` tree was subsequently retired per ADR 0011) and
 `aibr serve` are separate OS processes. Nothing under `src/tui/` imports
-`src/jobs/`; the TUI's only recurring timer is a 100 ms terminal-output poller
-([`src/tui/shell.ts:87`](../../src/tui/shell.ts)). It receives nothing from the
+`src/jobs/`; the TUI's only recurring timer was a 100 ms terminal-output poller
+(`src/tui/shell.ts:87`). It receives nothing from the
 job engine, and that is correct: `SF-11` requires detach and TUI loss to preserve
 node-owned sessions.
 

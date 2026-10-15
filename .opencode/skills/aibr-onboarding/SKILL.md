@@ -35,12 +35,12 @@ Instead of sequential stdout readline prompts, `aibr setup` runs an interactive 
    ```
    Must belong to `100.64.0.0/10` CGNAT range.
 3. Validate port availability:
-   - Port `4095`: Ingress router (`aibr-router`)
+   - Port probe default `4095` (wizard probe default for ingress router)
    - Port `4096`: OpenCode loopback (`opencode serve`)
-   - Port `8787`: AIBridge Fastify HTTP bridge
+   - Port `8787`: AIBridge Fastify HTTP bridge (`bridge.host`:`bridge.port` endpoint)
 
 ### Step 2: Router Security & Bearer Credentials
-1. Listening port defaults to `4095`.
+1. Ingress router serves the configured `bridge.host`:`bridge.port` endpoint (default `8787`).
 2. Generate a cryptographically secure 128-bit bearer token (32 hex chars;
    `openssl rand -hex 16` is 16 bytes, NOT 32 -- do not write 32 here by mistake):
    ```bash
@@ -49,7 +49,7 @@ Instead of sequential stdout readline prompts, `aibr setup` runs an interactive 
 3. Store config in `~/.config/aibridge/<profile>/config.json` with strict `0600` permissions.
 4. Enforce security floor invariants:
    - Constant-time token comparison (mitigates timing side-channels).
-   - Strict 2 MB payload cap (prevents memory exhaustion DoS).
+   - Strict 1 MiB payload cap (prevents memory exhaustion DoS; matches Fastify `bodyLimit` and router `MAX_BODY_BYTES`).
    - Automated secret redaction pipeline on stdout and telemetry.
 
 ### Step 3: Project Allowlists & Containment Boundaries
@@ -101,6 +101,6 @@ Instead of sequential stdout readline prompts, `aibr setup` runs an interactive 
 ---
 
 ## Interactive Visual Artifacts
-- **Interactive Stepper Wizard**: [`Docs/tui/aibridge-setup-wizard.html`](file:///Users/mac/Projects/AIBrigde/Docs/tui/aibridge-setup-wizard.html)
-- **TUI Next-Gen Canvas**: [`Docs/tui/aibridge-tui-redesign.html`](file:///Users/mac/Projects/AIBrigde/Docs/tui/aibridge-tui-redesign.html)
-- **Logo Design System**: [`Docs/assets/logos/logo-design-system.html`](file:///Users/mac/Projects/AIBrigde/Docs/assets/logos/logo-design-system.html)
+- **Interactive Stepper Wizard**: [`Docs/tui/aibridge-setup-wizard.html`](../../../Docs/tui/aibridge-setup-wizard.html)
+- **TUI Next-Gen Canvas**: [`Docs/tui/aibridge-tui-redesign.html`](../../../Docs/tui/aibridge-tui-redesign.html)
+- **Logo Design System**: [`Docs/assets/logos/logo-design-system.html`](../../../Docs/assets/logos/logo-design-system.html)

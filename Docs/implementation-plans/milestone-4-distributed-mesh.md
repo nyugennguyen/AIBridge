@@ -1,5 +1,9 @@
 # Milestone 4: Distributed Tailscale Mesh
 
+> **Status:** Historical
+>
+> This document is a completed milestone work order. The shipped behavior is described by [`Docs/architecture/current-state.md`](../architecture/current-state.md) and [`CHANGELOG.md`](../../CHANGELOG.md).
+
 ## Objective
 
 Extend the orchestration kernel across trusted Tailscale-connected nodes with revocable node identity, capability heartbeats, controller leases, idempotent command delivery, durable worker outboxes, authenticated event/terminal streams, reconnect reconciliation, and manual controller takeover.

@@ -36,6 +36,8 @@
     "test:integration": "vitest run tests/integration",
     "test:watch": "vitest",
     "test:installer": "shellcheck scripts/install.sh && bash -n scripts/install.sh && vitest run tests/unit/installer",
+    "docs:check": "bun scripts/docs/check-docs.ts",
+    "docs:skills": "bun scripts/docs/sync-skills.ts",
     "contracts:check": "command -v cargo >/dev/null 2>&1 || { echo 'contracts:check requires a Rust toolchain: router/src/contracts.rs and crates/aibr-ipc/src/contracts.rs are GENERATED from contracts/v1 and cannot be verified with Bun alone.' >&2; exit 1; }; bun run generate:contracts && bun run generate:parity-vector && { git diff --exit-code contracts/ router/src/contracts.rs crates/aibr-ipc/src/contracts.rs router/tests/parity-vector.json; } && { untracked=$(git status --porcelain contracts/ router/src/contracts.rs crates/aibr-ipc/src/contracts.rs router/tests/parity-vector.json | rg '^\\?\\?'); if [ -n \"$untracked\" ]; then echo \"contracts:check found generated artefacts that are not committed:\" >&2; echo \"$untracked\" >&2; exit 1; fi; }",
     "release:check": "bun install --frozen-lockfile && bun run build && bun test && bun run typecheck && shellcheck scripts/install.sh && bash -n scripts/install.sh && bun run contracts:check && bun dist/cli.js --help && bun pm pack --dry-run",
     "generate:parity-vector": "tsx scripts/generate-parity-vector.ts",

@@ -1,5 +1,9 @@
 # Milestone 6: Rules, Automation, and Reusable Workflows
 
+> **Status:** Historical
+>
+> This document is a completed milestone work order. The shipped behavior is described by [`Docs/architecture/current-state.md`](../architecture/current-state.md) and [`CHANGELOG.md`](../../CHANGELOG.md).
+
 ## Objective
 
 Allow users to reduce repetitive approvals safely through explainable bounded rules, reusable roles and run templates, fan-out/concurrency/cost/time budgets, deterministic dry-run simulation, and attention notifications. The default remains approval required for every dispatch.

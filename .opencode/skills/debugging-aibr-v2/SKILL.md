@@ -13,19 +13,19 @@ description: Use when debugging, diagnosing, or testing the aibr / AIBridge v2 a
 
 **The documentation lies. The source is the only truth.**
 
-`README.md`, `AGENTS.md`, and `Docs/runbooks/failure-mode-recovery.md` describe commands,
-flags, and file paths that do not exist in v2.0.0. Every trap below was confirmed by reading
+`README.md`, `AGENTS.md`, and `Docs/architecture/failure-modes-and-recovery.md` describe commands,
+flags, and file paths that do not exist in v3.0.0. Every trap below was confirmed by reading
 `src/`. Before you repeat an instruction found in a doc, grep for it.
 
 ```bash
 cd /Users/mac/Projects/AIBrigde
 bun src/cli.ts --help          # authoritative command + flag list
-grep -n "COMMANDS = " src/cli.ts   # line 93 — the real command table
+grep -n "COMMANDS = " src/cli.ts   # line 152 — the real command table
 ```
 
 ## Non-existent commands — never suggest these
 
-`Docs/runbooks/failure-mode-recovery.md` documents all of these. **None are implemented.**
+`Docs/architecture/failure-modes-and-recovery.md` documents all of these. **None are implemented.**
 Each returns `Error: unknown command` / `unknown flag`.
 
 | Documented but fake | Real substitute |
@@ -37,10 +37,6 @@ Each returns `Error: unknown command` / `unknown flag`.
 | `aibr config get` | read `~/.config/aibridge/<profile>/config.json` |
 | `aibr worker --drain-only` | `aibr worker -p <profile>` (no flag) |
 | `aibr logs\|doctor\|tail\|inspect` | none — see "Where output actually goes" |
-
-Also broken: `aibr bundle --preview`. `--preview` is pushed into *both* the known and unknown
-flag lists (`src/cli.ts:125-127`), so the unknown-flag guard always rejects it. README:398
-advertises it. Use `aibr bundle -p <profile>` (JSON to stdout).
 
 ## Triage ladder
 
@@ -201,10 +197,9 @@ A green vitest run is not a green CI run.
 ## Rust tests
 
 ```bash
-cd router
-cargo fmt --check
-cargo clippy --all-targets -- -D warnings
-cargo test
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
 ```
 
 `cargo test` passing on macOS proves nothing about Linux — a `cfg(target_os = "linux")` arm
@@ -213,8 +208,8 @@ shipped broken this way (`Docs/implementation-reports/milestone-7-progress.md:10
 
 ## Red flags
 
-- Repeating a command found in `Docs/runbooks/` without grepping `src/cli.ts:93` first.
-- Suggesting `aibr bundle --preview`, `aibr db *`, or any `logs/` path.
+- Repeating a command found in `Docs/architecture/failure-modes-and-recovery.md` without grepping `src/cli.ts:152` first.
+- Suggesting `aibr db *`, or any `logs/` path.
 - Looking for a log file.
 - Treating `aibr status: healthy` as proof auth or authorization works.
 - Concluding "opencode is unreachable" from a job timeout without grepping opencode's own log.
@@ -224,7 +219,6 @@ shipped broken this way (`Docs/implementation-reports/milestone-7-progress.md:10
 
 | Mistake | Correct |
 |---|---|
-| `aibr bundle --preview -p x` | `aibr bundle -p x` |
 | `aibr db check` | `sqlite3 <state>/egress_outbox.db "PRAGMA integrity_check;"` |
 | `tail -f .../logs/worker.log` | `tmux capture-pane -p -t aibridge-<p>:bridge -S -2000` |
 | `ls .aibridge/jobs/` | `ls ~/.local/state/aibridge/<profile>/jobs/` |

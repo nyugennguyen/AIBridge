@@ -1,5 +1,9 @@
 # Task Graph & Dependency Tracking Implementation Plan
 
+> **Status:** Historical
+>
+> This document is a historical v1.0.x-era agentic plan. Current architecture and procedures are documented in [`Docs/architecture/current-state.md`](../../architecture/current-state.md).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 >
 > **Execution Mode:** Subagent-Driven Development — dispatch a fresh subagent per task, review between tasks, fast iteration. Each task is independent and can be executed in isolation.

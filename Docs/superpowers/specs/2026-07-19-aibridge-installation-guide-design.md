@@ -1,5 +1,9 @@
 # AIBridge Installation and Operator Guide Design
 
+> **Status:** Historical
+>
+> This document is a historical v1.0.x-era agentic specification. Current architecture and procedures are documented in [`Docs/architecture/current-state.md`](../../architecture/current-state.md).
+
 ## Goal
 
 Make first-time two-host AIBridge setup succeed without prior knowledge of bearer tokens. The guide will explain how to create one shared token, enter it safely on both hosts, confirm the connection, recover from a 401 response, and rotate a compromised token.

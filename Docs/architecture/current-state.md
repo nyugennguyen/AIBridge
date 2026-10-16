@@ -2,7 +2,7 @@
 
 > **Status:** Current
 > **Applies to:** AIBridge 3.0.0
-> **Last verified:** 2026-10-15 against commit d012119
+> **Last verified:** 2026-10-16 against commit a887380 (core architecture, port bindings, trust boundaries, and wizard probe semantics)
 > **Owner:** maintainers
 
 ## 1. Purpose and status

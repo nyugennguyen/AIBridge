@@ -248,20 +248,98 @@ function checkArchiveStatusMarkers(): string[] {
   return errors
 }
 
-function checkSafeUninstallation(): string[] {
-  const errors: string[] = []
-  // Matches recursive deletion of base aibridge directories without profile scoping (e.g. rm -rf ~/.config/aibridge)
-  const broadRootDeletion = /rm\s+(?:-[a-zA-Z]*\s+)*(?:~|\$HOME|\/home\/[\w.-]+|\/Users\/[\w.-]+)\/(?:\.config|\.local\/share|\.local\/state)\/aibridge\/?(?:\s|$|`|'|"|\n)/
-  const hasDestructiveWarning = />\s*\[!(?:CAUTION|WARNING)\][\s\S]*?(?:destructive|irreversible)/i
+export interface MarkdownSection {
+  heading: string
+  content: string
+  startLine: number
+}
 
+/**
+ * Splits a Markdown document into heading-delimited sections, preserving line numbers
+ * and ignoring headings nested inside fenced code blocks.
+ */
+export function parseMarkdownSections(markdown: string): MarkdownSection[] {
+  const lines = markdown.split("\n")
+  const sections: MarkdownSection[] = []
+  let currentHeading = ""
+  let currentLines: string[] = []
+  let currentStartLine = 1
+  let inFence = false
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!
+    if (/^\s*(```|~~~)/.test(line)) {
+      inFence = !inFence
+    }
+    if (!inFence && /^#{1,6}\s+(.*)$/.test(line)) {
+      if (currentLines.length > 0 || currentHeading !== "") {
+        sections.push({
+          heading: currentHeading,
+          content: currentLines.join("\n"),
+          startLine: currentStartLine,
+        })
+      }
+      currentHeading = line
+      currentLines = [line]
+      currentStartLine = i + 1
+    } else {
+      currentLines.push(line)
+    }
+  }
+  if (currentLines.length > 0 || currentHeading !== "") {
+    sections.push({
+      heading: currentHeading,
+      content: currentLines.join("\n"),
+      startLine: currentStartLine,
+    })
+  }
+  return sections
+}
+
+/**
+ * Matches broad recursive deletion commands targeting root AIBridge directories without profile scoping:
+ * e.g. rm -rf ~/.config/aibridge, rm -rf "${XDG_CONFIG_HOME:-$HOME/.config}/aibridge", rm -rf "$XDG_DATA_HOME/aibridge"
+ */
+export const BROAD_ROOT_DELETION =
+  /rm\s+(?:-[a-zA-Z]*\s+)*(?:~|\$HOME|\$\{HOME\}|\/home\/[\w.-]+|\/Users\/[\w.-]+|["']?\$\{?(?:XDG_CONFIG_HOME|XDG_DATA_HOME|XDG_STATE_HOME)[^}"]*\}?)(?:\/(?:\.config|\.local\/share|\.local\/state))?\/aibridge\/?["']?(?:\s|$|`|\n)/
+
+export const DESTRUCTIVE_WARNING =
+  />\s*\[!(?:CAUTION|WARNING)\][\s\S]*?(?:destructive|irreversible|permanently delete|wipe)/i
+
+/**
+ * Validates that any destructive root deletion command is strictly enclosed within a section
+ * that contains an explicit caution or warning banner ([!CAUTION] or [!WARNING]).
+ */
+export function validateMarkdownUninstallSafety(
+  content: string,
+  filePath = "document.md",
+): string[] {
+  if (UNVERIFIED_STATUS.test(content)) return []
+
+  const errors: string[] = []
+  const sections = parseMarkdownSections(content)
+
+  for (const section of sections) {
+    if (BROAD_ROOT_DELETION.test(section.content)) {
+      const hasWarning = DESTRUCTIVE_WARNING.test(section.content)
+
+      if (!hasWarning) {
+        errors.push(
+          `${filePath}:${section.startLine}: documents un-warned recursive deletion of root ~/.config/aibridge or ~/.local/{share,state}/aibridge in section '${section.heading || "<preamble>"}'. Root data removal must be isolated in an explicitly marked destructive section with a caution/warning banner.`,
+        )
+      }
+    }
+  }
+
+  return errors
+}
+
+export function checkSafeUninstallation(): string[] {
+  const errors: string[] = []
   for (const file of markdownFiles()) {
     const content = readFileSync(join(REPOSITORY_ROOT, file), "utf8")
-    if (UNVERIFIED_STATUS.test(content)) continue
-    if (broadRootDeletion.test(content) && !hasDestructiveWarning.test(content)) {
-      errors.push(
-        `${file}: documents un-warned recursive deletion of root ~/.config/aibridge or ~/.local/{share,state}/aibridge. Root data removal must be isolated in an explicitly marked destructive section with a caution/warning banner.`,
-      )
-    }
+    const fileErrors = validateMarkdownUninstallSafety(content, file)
+    errors.push(...fileErrors)
   }
   return errors
 }

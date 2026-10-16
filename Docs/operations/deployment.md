@@ -134,11 +134,11 @@ aibr start --profile <profile>
 
 ### Uninstallation & Profile Cleanup
 
-AIBridge strictly separates application binary removal from configuration, credentials, and state data.
+AIBridge strictly separates application package removal from configuration, credentials, and state data.
 
-#### Removing the Application Package
+#### Removing the Application Package (Recommended Default)
 
-To remove the AIBridge CLI binary and runtime dependencies:
+For standard upgrades, toolchain changes, or uninstallation, **package-only removal is the default and recommended action**. It uninstalls the executable while preserving your profiles, tokens, and database logs:
 
 ```bash
 bun remove -g @nyugennguyen/aibridge
@@ -148,6 +148,24 @@ bun remove -g @nyugennguyen/aibridge
 > Removing the global package uninstalls only the `aibr` executable and its npm dependencies. It leaves all user profiles, configuration files, shared bearer tokens, task history, and SQLite databases intact.
 > AIBridge does not provide an automated CLI command for deleting profiles or purging data (`aibr` does not implement an uninstall or profile-deletion subcommand). Data removal must be performed manually and intentionally.
 
+#### Identifying Resolved Paths & XDG Overrides
+
+AIBridge adheres to the XDG Base Directory specification on both macOS and Linux (`src/host/paths.ts`). Paths resolve as follows:
+
+- **Configuration:** `${XDG_CONFIG_HOME:-$HOME/.config}/aibridge`
+- **Secrets & Data:** `${XDG_DATA_HOME:-$HOME/.local/share}/aibridge`
+- **State (Jobs & Event WAL):** `${XDG_STATE_HOME:-$HOME/.local/state}/aibridge`
+
+*(Note: The listed paths `~/.config/aibridge`, `~/.local/share/aibridge`, and `~/.local/state/aibridge` represent default locations when no XDG environment variables are overridden. If your environment sets custom XDG base directories, substitute your custom paths accordingly).*
+
+To inspect the resolved directory paths in your active shell:
+
+```bash
+echo "Config: ${XDG_CONFIG_HOME:-$HOME/.config}/aibridge/<profile>"
+echo "Data:   ${XDG_DATA_HOME:-$HOME/.local/share}/aibridge/<profile>"
+echo "State:  ${XDG_STATE_HOME:-$HOME/.local/state}/aibridge/<profile>"
+```
+
 #### Profile Decommissioning (Narrowly Scoped)
 
 To decommission a specific profile (e.g. `<profile>`) without affecting other profiles on the machine:
@@ -155,18 +173,21 @@ To decommission a specific profile (e.g. `<profile>`) without affecting other pr
 1. **Stop active services:** Ensure tmux sessions and supervisor services for the profile are terminated:
    ```bash
    tmux kill-session -t aibridge-<profile>
-   # If using systemd: systemctl --user stop aibridge-<profile>.service
-   # If using launchd: launchctl unload ~/Library/LaunchAgents/com.aibridge.<profile>.plist
+   # If using systemd (Linux): systemctl --user stop aibridge-<profile>.service
+   # If using launchd (macOS): launchctl unload ~/Library/LaunchAgents/com.aibridge.<profile>.plist
    ```
 2. **Inspect and back up data:** Review the files before deletion. Archive any audit databases or tokens you may need to preserve:
-   - Config: `ls -la ~/.config/aibridge/<profile>/`
-   - Secrets: `ls -la ~/.local/share/aibridge/<profile>/secrets/`
-   - State: `ls -la ~/.local/state/aibridge/<profile>/`
+   ```bash
+   # Default paths shown; adjust if using XDG overrides
+   ls -la "${XDG_CONFIG_HOME:-$HOME/.config}/aibridge/<profile>/"
+   ls -la "${XDG_DATA_HOME:-$HOME/.local/share}/aibridge/<profile>/secrets/"
+   ls -la "${XDG_STATE_HOME:-$HOME/.local/state}/aibridge/<profile>/"
+   ```
 3. **Remove profile directories:**
    ```bash
-   rm -r ~/.config/aibridge/<profile>
-   rm -r ~/.local/share/aibridge/<profile>
-   rm -r ~/.local/state/aibridge/<profile>
+   rm -r "${XDG_CONFIG_HOME:-$HOME/.config}/aibridge/<profile>"
+   rm -r "${XDG_DATA_HOME:-$HOME/.local/share}/aibridge/<profile>"
+   rm -r "${XDG_STATE_HOME:-$HOME/.local/state}/aibridge/<profile>"
    ```
 
 #### Destructive Complete Data Removal
@@ -176,20 +197,22 @@ To decommission a specific profile (e.g. `<profile>`) without affecting other pr
 
 Before proceeding, verify the contents of each directory and create backups if necessary:
 
-| Directory | Contents |
-|---|---|
-| `~/.config/aibridge/` | Profile configuration (`config.json`), project allowlists, network addresses, and peer definitions. |
-| `~/.local/share/aibridge/` | Shared bearer tokens (`secrets/bearer_token`) and local runtime passwords. |
-| `~/.local/state/aibridge/` | Ingress outbox WAL (`ingress_outbox.db`), authoritative event stores (`events.db`), and job records. |
+| Directory Role | Default Path (When XDG Unset) | Resolved Location | Contents |
+|---|---|---|---|
+| **Configuration** | `~/.config/aibridge/` | `${XDG_CONFIG_HOME:-$HOME/.config}/aibridge` | Profile configurations (`config.json`), project allowlists, network addresses, and peer definitions. |
+| **Secrets & Data** | `~/.local/share/aibridge/` | `${XDG_DATA_HOME:-$HOME/.local/share}/aibridge` | Cryptographic bearer tokens (`secrets/bearer_token`) and local runtime credentials. |
+| **Persistent State** | `~/.local/state/aibridge/` | `${XDG_STATE_HOME:-$HOME/.local/state}/aibridge` | Ingress outbox WAL (`ingress_outbox.db`), authoritative event stores (`events.db`), and job records. |
 
 After inspecting and backing up needed data, remove all user data directories:
 
 ```bash
-# Verify the paths first:
-ls -d ~/.config/aibridge ~/.local/share/aibridge ~/.local/state/aibridge
+# 1. Verify the paths first:
+ls -d "${XDG_CONFIG_HOME:-$HOME/.config}/aibridge" \
+      "${XDG_DATA_HOME:-$HOME/.local/share}/aibridge" \
+      "${XDG_STATE_HOME:-$HOME/.local/state}/aibridge"
 
-# Permanently remove all data directories:
-rm -rf ~/.config/aibridge
-rm -rf ~/.local/share/aibridge
-rm -rf ~/.local/state/aibridge
+# 2. Permanently remove all data directories:
+rm -rf "${XDG_CONFIG_HOME:-$HOME/.config}/aibridge"
+rm -rf "${XDG_DATA_HOME:-$HOME/.local/share}/aibridge"
+rm -rf "${XDG_STATE_HOME:-$HOME/.local/state}/aibridge"
 ```

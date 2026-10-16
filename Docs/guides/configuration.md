@@ -18,7 +18,10 @@ AIBridge profiles separate non-sensitive configuration, credentials, and volatil
 | **Secrets** | `~/.local/share/aibridge/<profile>/secrets/bearer_token` | `0600` | Cryptographic bearer token (separated from JSON config). |
 | **State** | `~/.local/state/aibridge/<profile>/` | `0700` | SQLite WAL databases (`ingress_outbox.db`, `events.db`), jobs, and locks. |
 
-Override root directories using standard XDG environment variables: `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, and `XDG_STATE_HOME`.
+On both macOS and Linux, directory resolution follows `src/host/paths.ts` using standard XDG environment variables with fallback to home defaults:
+- **Configuration:** `${XDG_CONFIG_HOME:-$HOME/.config}/aibridge/<profile>`
+- **Secrets & Data:** `${XDG_DATA_HOME:-$HOME/.local/share}/aibridge/<profile>`
+- **Persistent State:** `${XDG_STATE_HOME:-$HOME/.local/state}/aibridge/<profile>`
 
 ---
 

@@ -408,12 +408,27 @@ export function extractMarkdownAlerts(markdown: string): MarkdownAlert[] {
   return alerts
 }
 
+const DESTRUCTIVE_ACTION_STEM =
+  /(?:delet(?:e[ds]?|ing|ion)s?|remov(?:e[ds]?|ing|al)s?|wip(?:e[ds]?|ing)s?|purg(?:e[ds]?|ing)s?|destroy(?:s|ed|ing)?|destruct(?:ion|ive))/
+
+const TARGET_PERSISTENT_RESOURCE =
+  /(?:all\s+AIBridge|(?:all\s+)?(?:AIBridge\s+)?(?:data|profiles?|config(?:uration)?s?|secrets?|databases?|stores?|storage)\b|(?:persistent\s+state|state\s+(?:files?|databases?|stores?|director(?:y|ies)))\b|(?:user\s+data|configuration|profile|state|storage)\s+director(?:y|ies)\b)/
+
+const DESTRUCTIVE_QUALIFIERS =
+  /(?:\s+(?:of\s+)?(?:[*_`"'-]*(?:all|the|these|any|its|every|user|persistent|local|AIBridge)[*_`"'-]*\s+){0,4})/
+
 /**
- * Matches language specifically warning about permanent data/profile/storage/configuration wiping.
+ * Matches language specifically warning about permanent deletion or wiping of AIBridge persistent
+ * resources (configuration, profiles, persistent state, secrets, databases, storage, or data directories).
  * Checked strictly against the internal content of a Markdown alert block.
+ *
+ * General destructive phrases alone (e.g. "permanently delete all active sessions" or "irreversible action")
+ * without explicitly targeting persistent AIBridge resources will not satisfy this check.
  */
-export const DESTRUCTIVE_ALERT_CONTENT =
-  /(?:permanently\s+(?:delete|remove)|wipe\s+all|(?:destructive|irreversible)[\s\S]*?(?:data|profile|config|state|secret|database|store|directory|file|cleanup|removal)|(?:delete|remove|wipe|purge|destroy)[\s\S]*?(?:all\s+(?:data|profile|config)|all\s+AIBridge))/i
+export const DESTRUCTIVE_ALERT_CONTENT = new RegExp(
+  `(?:${DESTRUCTIVE_ACTION_STEM.source}${DESTRUCTIVE_QUALIFIERS.source}${TARGET_PERSISTENT_RESOURCE.source}|${TARGET_PERSISTENT_RESOURCE.source}(?:\\s+and\\s+[^.!?\\n]+)?\\s+(?:will\\s+be\\s+|are\\s+)?(?:permanently\\s+|completely\\s+)?${DESTRUCTIVE_ACTION_STEM.source})`,
+  "i",
+)
 
 /** Exported for backward compatibility with existing tests and imports. */
 export const DESTRUCTIVE_WARNING = DESTRUCTIVE_ALERT_CONTENT

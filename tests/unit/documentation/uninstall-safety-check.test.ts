@@ -128,6 +128,72 @@ describe("uninstall safety checker", () => {
     expect(errors[0]).toContain("documents un-warned recursive deletion")
   })
 
+  it("rejects an alert about permanently deleting active sessions in the SAME section before deletion", () => {
+    const markdown = [
+      "## Security & Keys",
+      "",
+      "> [!CAUTION]",
+      "> **Irreversible Action:** Rotating master keys will permanently delete all active sessions.",
+      "",
+      "```bash",
+      "rm -rf ~/.config/aibridge",
+      "```",
+    ].join("\n")
+
+    const errors = validateMarkdownUninstallSafety(markdown, "test.md")
+    expect(errors.length).toBe(1)
+    expect(errors[0]).toContain("documents un-warned recursive deletion")
+    expect(errors[0]).toContain("## Security & Keys")
+  })
+
+  it("rejects an alert about in-flight metrics or routing tables in the SAME section", () => {
+    const markdown1 = [
+      "## Maintenance",
+      "",
+      "> [!WARNING]",
+      "> Terminating the daemon process will cause irreversible loss of unsaved in-flight memory metrics.",
+      "",
+      "```bash",
+      "rm -rf ~/.config/aibridge",
+      "```",
+    ].join("\n")
+
+    const errors1 = validateMarkdownUninstallSafety(markdown1, "test.md")
+    expect(errors1.length).toBe(1)
+    expect(errors1[0]).toContain("documents un-warned recursive deletion")
+
+    const markdown2 = [
+      "## Network Ops",
+      "",
+      "> [!CAUTION]",
+      "> This operation will permanently remove all cached network routing tables.",
+      "",
+      "```bash",
+      "rm -rf ~/.config/aibridge",
+      "```",
+    ].join("\n")
+
+    const errors2 = validateMarkdownUninstallSafety(markdown2, "test.md")
+    expect(errors2.length).toBe(1)
+    expect(errors2[0]).toContain("documents un-warned recursive deletion")
+  })
+
+  it("passes when deletion is preceded by a passive-voice destructive warning", () => {
+    const markdown = [
+      "## Complete Wipe",
+      "",
+      "> [!CAUTION]",
+      "> All AIBridge configuration and persistent data will be permanently deleted.",
+      "",
+      "```bash",
+      "rm -rf ~/.config/aibridge",
+      "```",
+    ].join("\n")
+
+    const errors = validateMarkdownUninstallSafety(markdown, "test.md")
+    expect(errors).toEqual([])
+  })
+
   it("rejects caution warning in an unrelated section earlier in the file", () => {
     const markdown = [
       "## 1. Security & Keys",

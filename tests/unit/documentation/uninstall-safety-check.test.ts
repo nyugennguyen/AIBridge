@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest"
 import {
   parseMarkdownSections,
+  extractMarkdownAlerts,
   validateMarkdownUninstallSafety,
   BROAD_ROOT_DELETION,
-  DESTRUCTIVE_WARNING,
+  DESTRUCTIVE_ALERT_CONTENT,
 } from "../../../scripts/docs/check-docs.js"
 
 describe("uninstall safety checker", () => {
@@ -26,9 +27,9 @@ describe("uninstall safety checker", () => {
     expect(errors[0]).toContain("test.md:1")
   })
 
-  // ── Case B: Deletion in destructive section with warning must pass ─────────
+  // ── Case B: Valid destructive alerts must pass ────────────────────────────
 
-  it("passes when deletion is inside a destructive section with caution banner", () => {
+  it("passes when deletion is preceded by a valid destructive [!CAUTION] alert", () => {
     const markdown = [
       "## Maintenance",
       "",
@@ -48,9 +49,86 @@ describe("uninstall safety checker", () => {
     expect(errors).toEqual([])
   })
 
-  // ── Case C: Unrelated warning must not satisfy unsafe command ──────────────
+  it("passes when deletion is preceded by a valid destructive [!WARNING] alert", () => {
+    const markdown = [
+      "## Cleanup",
+      "",
+      "> [!WARNING]",
+      "> This command permanently deletes all AIBridge configuration, database stores, and state files.",
+      "",
+      "```bash",
+      "rm -rf ~/.config/aibridge",
+      "```",
+    ].join("\n")
 
-  it("fails when caution warning is in an unrelated section earlier in the file", () => {
+    const errors = validateMarkdownUninstallSafety(markdown, "test.md")
+    expect(errors).toEqual([])
+  })
+
+  it("passes for multiline alerts where destructive warning is inside the blockquote", () => {
+    const markdown = [
+      "## Maintenance",
+      "",
+      "> [!CAUTION]",
+      ">",
+      "> **Irreversible Action:**",
+      ">",
+      "> The commands below will permanently delete all AIBridge configuration,",
+      "> bearer secrets, and state databases across this machine.",
+      "",
+      "```bash",
+      "rm -rf ~/.config/aibridge",
+      "```",
+    ].join("\n")
+
+    const errors = validateMarkdownUninstallSafety(markdown, "test.md")
+    expect(errors).toEqual([])
+  })
+
+  // ── Case C: Scoping & alert isolation ─────────────────────────────────────
+
+  it("rejects unrelated alert + destructive prose outside the alert", () => {
+    const markdown = [
+      "## Maintenance Operations",
+      "",
+      "> [!CAUTION]",
+      "> Never expose the bridge port to public networks without Tailscale encryption.",
+      "",
+      "The following operation permanently deletes all AIBridge data:",
+      "",
+      "```bash",
+      "rm -rf ~/.config/aibridge",
+      "```",
+    ].join("\n")
+
+    const errors = validateMarkdownUninstallSafety(markdown, "test.md")
+    expect(errors.length).toBe(1)
+    expect(errors[0]).toContain("documents un-warned recursive deletion")
+    expect(errors[0]).toContain("## Maintenance Operations")
+  })
+
+  it("rejects destructive wording placed before and after an unrelated alert", () => {
+    const markdown = [
+      "## Clean Up",
+      "",
+      "This section discusses permanently deleting all AIBridge data.",
+      "",
+      "> [!WARNING]",
+      "> Ensure all background agents have terminated before stopping services.",
+      "",
+      "Running the following command will wipe all configuration files:",
+      "",
+      "```bash",
+      "rm -rf ~/.config/aibridge",
+      "```",
+    ].join("\n")
+
+    const errors = validateMarkdownUninstallSafety(markdown, "test.md")
+    expect(errors.length).toBe(1)
+    expect(errors[0]).toContain("documents un-warned recursive deletion")
+  })
+
+  it("rejects caution warning in an unrelated section earlier in the file", () => {
     const markdown = [
       "## 1. Security & Keys",
       "",
@@ -70,26 +148,7 @@ describe("uninstall safety checker", () => {
     expect(errors[0]).toContain("## 2. Quick Uninstall")
   })
 
-  it("fails when warning in the SAME section addresses an unrelated operation", () => {
-    const markdown = [
-      "## Maintenance Operations",
-      "",
-      "> [!CAUTION]",
-      "> **Network Notice:** Never expose bridge port 8787 to public networks without Tailscale encryption.",
-      "",
-      "Run the cleanup command below:",
-      "```bash",
-      "rm -rf ~/.config/aibridge",
-      "```",
-    ].join("\n")
-
-    const errors = validateMarkdownUninstallSafety(markdown, "test.md")
-    expect(errors.length).toBe(1)
-    expect(errors[0]).toContain("documents un-warned recursive deletion")
-    expect(errors[0]).toContain("## Maintenance Operations")
-  })
-
-  it("fails when caution banner is placed AFTER the destructive command in the same section", () => {
+  it("rejects a destructive alert placed AFTER the deletion command", () => {
     const markdown = [
       "## Clean Up",
       "",
@@ -238,5 +297,36 @@ describe("uninstall safety checker", () => {
 
     const errors = validateMarkdownUninstallSafety(markdown, "archive.md")
     expect(errors).toEqual([])
+  })
+
+  // ── Alert Extraction Unit Tests ───────────────────────────────────────────
+
+  describe("extractMarkdownAlerts", () => {
+    it("extracts kind and content while stripping blockquote markers", () => {
+      const text = [
+        "> [!CAUTION]",
+        "> Line 1 of caution",
+        "> Line 2 of caution",
+        "",
+        "Regular prose",
+      ].join("\n")
+
+      const alerts = extractMarkdownAlerts(text)
+      expect(alerts).toHaveLength(1)
+      expect(alerts[0]!.kind).toBe("CAUTION")
+      expect(alerts[0]!.content).toBe("Line 1 of caution\nLine 2 of caution")
+    })
+
+    it("ignores alert blocks nested inside code fences", () => {
+      const text = [
+        "```markdown",
+        "> [!CAUTION]",
+        "> Fake alert in code block",
+        "```",
+      ].join("\n")
+
+      const alerts = extractMarkdownAlerts(text)
+      expect(alerts).toHaveLength(0)
+    })
   })
 })

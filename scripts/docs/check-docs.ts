@@ -315,18 +315,113 @@ export function parseMarkdownSections(markdown: string): MarkdownSection[] {
 export const BROAD_ROOT_DELETION =
   /rm\s+(?:(?:-[a-zA-Z]+|--[a-zA-Z-]+)\s+)*["']?(?:~|\$HOME|\$\{HOME\}|\/home\/[\w.-]+|\/Users\/[\w.-]+|\$\{?(?:XDG_CONFIG_HOME|XDG_DATA_HOME|XDG_STATE_HOME)[^}"]*\}?)(?:\/(?:\.config|\.local\/share|\.local\/state))?\/aibridge(?:["']?\/\*|\/?\*|\/?)["']?(?:\s|$|`|\n)/
 
-/**
- * Matches an explicit GitHub-style alert banner (> [!CAUTION] or > [!WARNING]) that specifically warns
- * about destructive data, configuration, profile, or persistent state removal/wiping.
- * Unrelated warnings (e.g. regarding network exposure, daemon restarts, or API key rotation)
- * will not satisfy this check.
- */
-export const DESTRUCTIVE_WARNING =
-  />\s*\[!(?:CAUTION|WARNING)\][\s\S]*?(?:(?:permanently\s+(?:delete|remove)|wipe\s+all|(?:destructive|irreversible)[\s\S]*?(?:data|profile|config|state|secret|database|store|directory|file|cleanup|removal)|(?:delete|remove|wipe|purge|destroy)[\s\S]*?(?:all\s+(?:data|profile|config)|all\s+AIBridge)))/i
+export interface MarkdownAlert {
+  kind: "CAUTION" | "WARNING"
+  content: string
+  raw: string
+  startLine: number
+}
 
 /**
- * Validates that any destructive root deletion command is strictly enclosed within a section
- * that contains an explicit caution or warning banner ([!CAUTION] or [!WARNING]) preceding the command.
+ * Extracts GitHub-style Markdown alert blocks (> [!CAUTION] or > [!WARNING]) from markdown text,
+ * capturing contiguous blockquoted lines while ignoring alerts nested inside code fences.
+ */
+export function extractMarkdownAlerts(markdown: string): MarkdownAlert[] {
+  const lines = markdown.split("\n")
+  const alerts: MarkdownAlert[] = []
+  let inAlert = false
+  let currentKind: "CAUTION" | "WARNING" = "CAUTION"
+  let currentLines: string[] = []
+  let currentRawLines: string[] = []
+  let currentStartLine = 1
+  let inFence = false
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!
+    if (/^\s*(```|~~~)/.test(line)) {
+      inFence = !inFence
+      if (inAlert) {
+        alerts.push({
+          kind: currentKind,
+          content: currentLines.join("\n"),
+          raw: currentRawLines.join("\n"),
+          startLine: currentStartLine,
+        })
+        inAlert = false
+        currentLines = []
+        currentRawLines = []
+      }
+      continue
+    }
+    if (inFence) continue
+
+    const alertHeaderMatch = /^\s*>\s*\[!(CAUTION|WARNING)\](.*)$/i.exec(line)
+    if (alertHeaderMatch) {
+      if (inAlert) {
+        alerts.push({
+          kind: currentKind,
+          content: currentLines.join("\n"),
+          raw: currentRawLines.join("\n"),
+          startLine: currentStartLine,
+        })
+      }
+      inAlert = true
+      currentKind = alertHeaderMatch[1]!.toUpperCase() as "CAUTION" | "WARNING"
+      currentStartLine = i + 1
+      currentLines = []
+      currentRawLines = [line]
+      const trailing = alertHeaderMatch[2]?.trim()
+      if (trailing) {
+        currentLines.push(trailing)
+      }
+      continue
+    }
+
+    if (inAlert) {
+      const quoteMatch = /^\s*>\s?(.*)$/.exec(line)
+      if (quoteMatch) {
+        currentLines.push(quoteMatch[1] ?? "")
+        currentRawLines.push(line)
+      } else {
+        alerts.push({
+          kind: currentKind,
+          content: currentLines.join("\n"),
+          raw: currentRawLines.join("\n"),
+          startLine: currentStartLine,
+        })
+        inAlert = false
+        currentLines = []
+        currentRawLines = []
+      }
+    }
+  }
+
+  if (inAlert) {
+    alerts.push({
+      kind: currentKind,
+      content: currentLines.join("\n"),
+      raw: currentRawLines.join("\n"),
+      startLine: currentStartLine,
+    })
+  }
+
+  return alerts
+}
+
+/**
+ * Matches language specifically warning about permanent data/profile/storage/configuration wiping.
+ * Checked strictly against the internal content of a Markdown alert block.
+ */
+export const DESTRUCTIVE_ALERT_CONTENT =
+  /(?:permanently\s+(?:delete|remove)|wipe\s+all|(?:destructive|irreversible)[\s\S]*?(?:data|profile|config|state|secret|database|store|directory|file|cleanup|removal)|(?:delete|remove|wipe|purge|destroy)[\s\S]*?(?:all\s+(?:data|profile|config)|all\s+AIBridge))/i
+
+/** Exported for backward compatibility with existing tests and imports. */
+export const DESTRUCTIVE_WARNING = DESTRUCTIVE_ALERT_CONTENT
+
+/**
+ * Validates that any destructive root deletion command is strictly preceded within its section
+ * by an explicit Markdown caution or warning alert block ([!CAUTION] or [!WARNING]) whose internal
+ * content directly addresses data, configuration, or profile deletion.
  */
 export function validateMarkdownUninstallSafety(
   content: string,
@@ -342,7 +437,10 @@ export function validateMarkdownUninstallSafety(
     if (deletionMatch) {
       // The relevant caution/warning banner must appear in this section before the destructive command
       const contentBeforeCommand = section.content.slice(0, deletionMatch.index)
-      const hasPrecedingWarning = DESTRUCTIVE_WARNING.test(contentBeforeCommand)
+      const precedingAlerts = extractMarkdownAlerts(contentBeforeCommand)
+      const hasPrecedingWarning = precedingAlerts.some((alert) =>
+        DESTRUCTIVE_ALERT_CONTENT.test(alert.content),
+      )
 
       if (!hasPrecedingWarning) {
         errors.push(

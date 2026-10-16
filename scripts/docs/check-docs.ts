@@ -39,6 +39,7 @@ const REQUIRED_ENTRY_POINTS = [
   "Docs/CONTRIBUTING.md",
   "Docs/architecture/current-state.md",
   "Docs/architecture/decisions/README.md",
+  "Docs/adr/README.md",
   "Docs/guides/configuration.md",
   "Docs/guides/development.md",
   "Docs/guides/integrations.md",
@@ -247,6 +248,24 @@ function checkArchiveStatusMarkers(): string[] {
   return errors
 }
 
+function checkSafeUninstallation(): string[] {
+  const errors: string[] = []
+  // Matches recursive deletion of base aibridge directories without profile scoping (e.g. rm -rf ~/.config/aibridge)
+  const broadRootDeletion = /rm\s+(?:-[a-zA-Z]*\s+)*(?:~|\$HOME|\/home\/[\w.-]+|\/Users\/[\w.-]+)\/(?:\.config|\.local\/share|\.local\/state)\/aibridge\/?(?:\s|$|`|'|"|\n)/
+  const hasDestructiveWarning = />\s*\[!(?:CAUTION|WARNING)\][\s\S]*?(?:destructive|irreversible)/i
+
+  for (const file of markdownFiles()) {
+    const content = readFileSync(join(REPOSITORY_ROOT, file), "utf8")
+    if (UNVERIFIED_STATUS.test(content)) continue
+    if (broadRootDeletion.test(content) && !hasDestructiveWarning.test(content)) {
+      errors.push(
+        `${file}: documents un-warned recursive deletion of root ~/.config/aibridge or ~/.local/{share,state}/aibridge. Root data removal must be isolated in an explicitly marked destructive section with a caution/warning banner.`,
+      )
+    }
+  }
+  return errors
+}
+
 // ── main ─────────────────────────────────────────────────────────────────
 
 function main(): void {
@@ -264,6 +283,7 @@ function main(): void {
     "documented commands": checkDocumentedCommands(help),
     "config examples": checkConfigExamples(),
     "archive status markers": checkArchiveStatusMarkers(),
+    "safe uninstallation guidance": checkSafeUninstallation(),
   }
 
   let failed = false

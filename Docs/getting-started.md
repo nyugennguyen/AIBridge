@@ -81,7 +81,7 @@ For a typical two-machine setup:
 
 The setup wizard guides you through five configuration steps:
 
-1. **Network Configuration:** Probes local `tailscaled` socket, retrieves your Tailscale IPv4 coordinate (`100.64.0.0/10`), and verifies that ports `4095` (router free-port probe), `4096` (OpenCode loopback), and `8787` (bridge/router shared port) are available.
+1. **Network Configuration:** Probes local `tailscaled` socket, retrieves your Tailscale IPv4 coordinate (`100.64.0.0/10`), and verifies port availability: `8787` (Fastify bridge and ingress router endpoint), `4096` (OpenCode loopback runtime), and `4095` (a legacy wizard preflight probe retained from early ingress designs; no production service listens on 4095).
 2. **Security & Authentication:** Generates a cryptographically secure 128-bit bearer token (or allows pasting an existing token). Tokens are saved with strict `0600` permissions.
 3. **Project Allowlists:** Declares absolute canonical project directories that agents are authorized to access. Containment is enforced fail-closed: any path outside configured roots is rejected.
 4. **AI Runtimes & Peer Discovery:** Probes the local OpenCode loopback daemon and detects installed `claude` and `codex` CLIs. Scans reachable tailnet peers and allows configuring inbound (`allowed_sources`) and outbound (`agents[]`) peer routing.

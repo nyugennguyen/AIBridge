@@ -119,7 +119,7 @@ aibr worker --profile <profile> --ipc-publish
 
 ---
 
-## 4. Updates & Maintenance
+## 4. Maintenance & Operations
 
 ### Updating AIBridge
 
@@ -132,13 +132,63 @@ tmux kill-session -t aibridge-<profile>
 aibr start --profile <profile>
 ```
 
-### Uninstallation
+### Uninstallation & Profile Cleanup
+
+AIBridge strictly separates application binary removal from configuration, credentials, and state data.
+
+#### Removing the Application Package
+
+To remove the AIBridge CLI binary and runtime dependencies:
 
 ```bash
-# Remove global npm package
 bun remove -g @nyugennguyen/aibridge
+```
 
-# Remove profile configuration, secrets, and database state
+> [!NOTE]
+> Removing the global package uninstalls only the `aibr` executable and its npm dependencies. It leaves all user profiles, configuration files, shared bearer tokens, task history, and SQLite databases intact.
+> AIBridge does not provide an automated CLI command for deleting profiles or purging data (`aibr` does not implement an uninstall or profile-deletion subcommand). Data removal must be performed manually and intentionally.
+
+#### Profile Decommissioning (Narrowly Scoped)
+
+To decommission a specific profile (e.g. `<profile>`) without affecting other profiles on the machine:
+
+1. **Stop active services:** Ensure tmux sessions and supervisor services for the profile are terminated:
+   ```bash
+   tmux kill-session -t aibridge-<profile>
+   # If using systemd: systemctl --user stop aibridge-<profile>.service
+   # If using launchd: launchctl unload ~/Library/LaunchAgents/com.aibridge.<profile>.plist
+   ```
+2. **Inspect and back up data:** Review the files before deletion. Archive any audit databases or tokens you may need to preserve:
+   - Config: `ls -la ~/.config/aibridge/<profile>/`
+   - Secrets: `ls -la ~/.local/share/aibridge/<profile>/secrets/`
+   - State: `ls -la ~/.local/state/aibridge/<profile>/`
+3. **Remove profile directories:**
+   ```bash
+   rm -r ~/.config/aibridge/<profile>
+   rm -r ~/.local/share/aibridge/<profile>
+   rm -r ~/.local/state/aibridge/<profile>
+   ```
+
+#### Destructive Complete Data Removal
+
+> [!CAUTION]
+> **Irreversible Action:** The commands below permanently delete **all** AIBridge profiles, network configurations, cryptographic bearer secrets, job logs, and SQLite event stores on this system. Do NOT run these commands unless you intend to completely wipe all AIBridge data.
+
+Before proceeding, verify the contents of each directory and create backups if necessary:
+
+| Directory | Contents |
+|---|---|
+| `~/.config/aibridge/` | Profile configuration (`config.json`), project allowlists, network addresses, and peer definitions. |
+| `~/.local/share/aibridge/` | Shared bearer tokens (`secrets/bearer_token`) and local runtime passwords. |
+| `~/.local/state/aibridge/` | Ingress outbox WAL (`ingress_outbox.db`), authoritative event stores (`events.db`), and job records. |
+
+After inspecting and backing up needed data, remove all user data directories:
+
+```bash
+# Verify the paths first:
+ls -d ~/.config/aibridge ~/.local/share/aibridge ~/.local/state/aibridge
+
+# Permanently remove all data directories:
 rm -rf ~/.config/aibridge
 rm -rf ~/.local/share/aibridge
 rm -rf ~/.local/state/aibridge

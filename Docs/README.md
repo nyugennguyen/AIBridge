@@ -14,8 +14,9 @@ Welcome to the AIBridge documentation hub. This index organizes documentation ar
 Docs/
 ├── getting-started.md              # Installation, onboarding, and first cross-host trigger
 ├── architecture/
-│   ├── current-state.md            # Canonical as-built architecture and trust boundaries
-│   └── decisions/                  # Architecture Decision Records (ADRs 0001–0011)
+│   └── current-state.md            # Canonical as-built architecture and trust boundaries
+├── adr/
+│   └── README.md                   # Architecture Decision Records (ADRs 0001–0011)
 ├── guides/
 │   ├── configuration.md            # Zod config schema, profile storage, and token rotation
 │   ├── development.md              # Build, test, typecheck, contract parity, and release gate
@@ -41,7 +42,7 @@ Docs/
 
 ### Architecture
 - [**Current Architecture Guide**](architecture/current-state.md) — The authoritative description of the implemented system: components, trust boundaries, event stores, and polyglot ingress separation.
-- [**Architecture Decision Records (ADRs)**](architecture/decisions/README.md) — Index of all 11 accepted and evaluated architectural decisions governing AIBridge.
+- [**Architecture Decision Records (ADRs)**](adr/README.md) — Index of all 11 accepted and evaluated architectural decisions governing AIBridge.
 
 ### User & Developer Guides
 - [**Configuration Guide**](guides/configuration.md) — Detailed reference for `config.json`, profile XDG paths, environment variables, and token management.

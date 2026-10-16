@@ -205,16 +205,20 @@ The bearer-token secret is write-once. To rotate a token:
 
 ### Update & Uninstall
 
-```bash
-# Update
-bun install -g @nyugennguyen/aibridge
+To update AIBridge globally:
 
-# Uninstall
-bun remove -g @nyugennguyen/aibridge
-rm -rf ~/.config/aibridge
-rm -rf ~/.local/share/aibridge
-rm -rf ~/.local/state/aibridge
+```bash
+bun install -g @nyugennguyen/aibridge
 ```
+
+To remove the AIBridge application binary (retaining your configuration, profiles, and state):
+
+```bash
+bun remove -g @nyugennguyen/aibridge
+```
+
+> [!WARNING]
+> Removing the global package preserves your profiles, configuration, bearer tokens, and SQLite event logs. If you need to decommission a specific profile or perform a complete, destructive data cleanup, see the [Uninstallation & Profile Cleanup Guide](Docs/operations/deployment.md#uninstallation--profile-cleanup).
 
 ---
 
@@ -244,7 +248,7 @@ Comprehensive documentation is organized around clear user needs in [`Docs/`](Do
 - [**Documentation Index**](Docs/README.md) — Documentation map and navigation hub.
 - [**Getting Started**](Docs/getting-started.md) — Step-by-step installation, profile setup, and first task dispatch.
 - [**Current Architecture**](Docs/architecture/current-state.md) — Authoritative guide to components, trust boundaries, and persistence.
-- [**Architecture Decisions (ADRs)**](Docs/architecture/decisions/README.md) — Index of all 11 architectural decision records.
+- [**Architecture Decisions (ADRs)**](Docs/adr/README.md) — Index of all 11 architectural decision records.
 - [**Configuration Guide**](Docs/guides/configuration.md) — Complete `config.json` schema, XDG directories, and token rotation.
 - [**Developer Guide**](Docs/guides/development.md) — Local development, test suites, contract parity, and release gates.
 - [**Integrations Guide**](Docs/guides/integrations.md) — OpenCode, Claude Code, Codex, Herdr presentation, and Tailscale mesh.

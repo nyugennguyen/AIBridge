@@ -35,7 +35,7 @@ Instead of sequential stdout readline prompts, `aibr setup` runs an interactive 
    ```
    Must belong to `100.64.0.0/10` CGNAT range.
 3. Validate port availability:
-   - Port probe default `4095` (wizard probe default for ingress router)
+   - Port probe `4095`: Legacy setup wizard probe default (no production service binds 4095; bridge & router use port 8787)
    - Port `4096`: OpenCode loopback (`opencode serve`)
    - Port `8787`: AIBridge Fastify HTTP bridge (`bridge.host`:`bridge.port` endpoint)
 

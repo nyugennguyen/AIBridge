@@ -185,6 +185,74 @@ describe("resolveProfilePaths", () => {
     const paths = resolveProfilePaths("dev-main", { HOME: "/home/user" })
     expect(Object.isFrozen(paths)).toBe(true)
   })
+
+  // ── XDG empty and relative fallback tests ────────────────────────────
+
+  it("falls back to default directories when XDG variables are empty strings", () => {
+    const paths = resolveProfilePaths("dev-main", {
+      HOME: "/home/user",
+      XDG_CONFIG_HOME: "",
+      XDG_DATA_HOME: "",
+      XDG_STATE_HOME: "",
+    })
+
+    expect(paths.configDir).toBe("/home/user/.config/aibridge/dev-main")
+    expect(paths.dataDir).toBe("/home/user/.local/share/aibridge/dev-main")
+    expect(paths.secretsDir).toBe("/home/user/.local/share/aibridge/dev-main/secrets")
+    expect(paths.stateDir).toBe("/home/user/.local/state/aibridge/dev-main")
+  })
+
+  it("falls back to default directory when XDG variable is whitespace-only", () => {
+    const paths = resolveProfilePaths("dev-main", {
+      HOME: "/home/user",
+      XDG_CONFIG_HOME: "   ",
+    })
+
+    expect(paths.configDir).toBe("/home/user/.config/aibridge/dev-main")
+  })
+
+  it("falls back to default directory when XDG variable is a relative path", () => {
+    const paths = resolveProfilePaths("dev-main", {
+      HOME: "/home/user",
+      XDG_CONFIG_HOME: "relative/config",
+      XDG_DATA_HOME: "./data",
+      XDG_STATE_HOME: "state",
+    })
+
+    expect(paths.configDir).toBe("/home/user/.config/aibridge/dev-main")
+    expect(paths.dataDir).toBe("/home/user/.local/share/aibridge/dev-main")
+    expect(paths.stateDir).toBe("/home/user/.local/state/aibridge/dev-main")
+  })
+
+  it("succeeds when all XDG overrides are valid absolute paths without HOME", () => {
+    const paths = resolveProfilePaths("dev-main", {
+      XDG_CONFIG_HOME: "/custom/config",
+      XDG_DATA_HOME: "/custom/data",
+      XDG_STATE_HOME: "/custom/state",
+    })
+
+    expect(paths.configDir).toBe("/custom/config/aibridge/dev-main")
+    expect(paths.dataDir).toBe("/custom/data/aibridge/dev-main")
+    expect(paths.stateDir).toBe("/custom/state/aibridge/dev-main")
+  })
+
+  it("throws when HOME is missing and XDG variable is empty or relative", () => {
+    expect(() =>
+      resolveProfilePaths("dev-main", {
+        XDG_CONFIG_HOME: "",
+        XDG_DATA_HOME: "/custom/data",
+        XDG_STATE_HOME: "/custom/state",
+      }),
+    ).toThrow("HOME")
+
+    expect(() =>
+      resolveProfilePaths("dev-main", {
+        XDG_CONFIG_HOME: "relative/path",
+        XDG_DATA_HOME: "/custom/data",
+        XDG_STATE_HOME: "/custom/state",
+      }),
+    ).toThrow("HOME")
+  })
 })
 
 // ── Type-level checks ──────────────────────────────────────────────────

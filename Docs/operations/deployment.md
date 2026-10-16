@@ -156,7 +156,7 @@ AIBridge adheres to the XDG Base Directory specification on both macOS and Linux
 - **Secrets & Data:** `${XDG_DATA_HOME:-$HOME/.local/share}/aibridge`
 - **State (Jobs & Event WAL):** `${XDG_STATE_HOME:-$HOME/.local/state}/aibridge`
 
-*(Note: The listed paths `~/.config/aibridge`, `~/.local/share/aibridge`, and `~/.local/state/aibridge` represent default locations when no XDG environment variables are overridden. If your environment sets custom XDG base directories, substitute your custom paths accordingly).*
+*(Note: Per the XDG specification and `src/host/paths.ts`, if any XDG variable is unset, empty, or set to a relative path, AIBridge falls back to the default path under `$HOME`. The listed paths `~/.config/aibridge`, `~/.local/share/aibridge`, and `~/.local/state/aibridge` represent default locations when no XDG environment variables are overridden. If your environment sets custom absolute XDG base directories, substitute your custom paths accordingly).*
 
 To inspect the resolved directory paths in your active shell:
 

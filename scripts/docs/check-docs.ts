@@ -297,18 +297,36 @@ export function parseMarkdownSections(markdown: string): MarkdownSection[] {
 }
 
 /**
- * Matches broad recursive deletion commands targeting root AIBridge directories without profile scoping:
- * e.g. rm -rf ~/.config/aibridge, rm -rf "${XDG_CONFIG_HOME:-$HOME/.config}/aibridge", rm -rf "$XDG_DATA_HOME/aibridge"
+ * Matches broad recursive deletion commands targeting root AIBridge directories or their contents
+ * without profile scoping:
+ * e.g.:
+ * - `rm -rf ~/.config/aibridge`
+ * - `rm --recursive --force ~/.config/aibridge`
+ * - `rm -rf "$HOME/.config/aibridge"/*`
+ * - `rm -rf "${XDG_CONFIG_HOME:-$HOME/.config}/aibridge"`
+ *
+ * Supported flags: single-dash short options (`-r`, `-rf`, `-f`) and double-dash options
+ * (`--recursive`, `--force`, `--verbose`).
+ *
+ * Limitation note: This static pattern intentionally validates common shell invocations
+ * documented in project guides; complex dynamic shell scripts (e.g. `find ... -delete`,
+ * eval, or variable indirection like `ROOT=...; rm -rf $ROOT`) are not parsed.
  */
 export const BROAD_ROOT_DELETION =
-  /rm\s+(?:-[a-zA-Z]*\s+)*(?:~|\$HOME|\$\{HOME\}|\/home\/[\w.-]+|\/Users\/[\w.-]+|["']?\$\{?(?:XDG_CONFIG_HOME|XDG_DATA_HOME|XDG_STATE_HOME)[^}"]*\}?)(?:\/(?:\.config|\.local\/share|\.local\/state))?\/aibridge\/?["']?(?:\s|$|`|\n)/
+  /rm\s+(?:(?:-[a-zA-Z]+|--[a-zA-Z-]+)\s+)*["']?(?:~|\$HOME|\$\{HOME\}|\/home\/[\w.-]+|\/Users\/[\w.-]+|\$\{?(?:XDG_CONFIG_HOME|XDG_DATA_HOME|XDG_STATE_HOME)[^}"]*\}?)(?:\/(?:\.config|\.local\/share|\.local\/state))?\/aibridge(?:["']?\/\*|\/?\*|\/?)["']?(?:\s|$|`|\n)/
 
+/**
+ * Matches an explicit GitHub-style alert banner (> [!CAUTION] or > [!WARNING]) that specifically warns
+ * about destructive data, configuration, profile, or persistent state removal/wiping.
+ * Unrelated warnings (e.g. regarding network exposure, daemon restarts, or API key rotation)
+ * will not satisfy this check.
+ */
 export const DESTRUCTIVE_WARNING =
-  />\s*\[!(?:CAUTION|WARNING)\][\s\S]*?(?:destructive|irreversible|permanently delete|wipe)/i
+  />\s*\[!(?:CAUTION|WARNING)\][\s\S]*?(?:(?:permanently\s+(?:delete|remove)|wipe\s+all|(?:destructive|irreversible)[\s\S]*?(?:data|profile|config|state|secret|database|store|directory|file|cleanup|removal)|(?:delete|remove|wipe|purge|destroy)[\s\S]*?(?:all\s+(?:data|profile|config)|all\s+AIBridge)))/i
 
 /**
  * Validates that any destructive root deletion command is strictly enclosed within a section
- * that contains an explicit caution or warning banner ([!CAUTION] or [!WARNING]).
+ * that contains an explicit caution or warning banner ([!CAUTION] or [!WARNING]) preceding the command.
  */
 export function validateMarkdownUninstallSafety(
   content: string,
@@ -320,12 +338,15 @@ export function validateMarkdownUninstallSafety(
   const sections = parseMarkdownSections(content)
 
   for (const section of sections) {
-    if (BROAD_ROOT_DELETION.test(section.content)) {
-      const hasWarning = DESTRUCTIVE_WARNING.test(section.content)
+    const deletionMatch = BROAD_ROOT_DELETION.exec(section.content)
+    if (deletionMatch) {
+      // The relevant caution/warning banner must appear in this section before the destructive command
+      const contentBeforeCommand = section.content.slice(0, deletionMatch.index)
+      const hasPrecedingWarning = DESTRUCTIVE_WARNING.test(contentBeforeCommand)
 
-      if (!hasWarning) {
+      if (!hasPrecedingWarning) {
         errors.push(
-          `${filePath}:${section.startLine}: documents un-warned recursive deletion of root ~/.config/aibridge or ~/.local/{share,state}/aibridge in section '${section.heading || "<preamble>"}'. Root data removal must be isolated in an explicitly marked destructive section with a caution/warning banner.`,
+          `${filePath}:${section.startLine}: documents un-warned recursive deletion of root ~/.config/aibridge or ~/.local/{share,state}/aibridge in section '${section.heading || "<preamble>"}'. Root data removal must be preceded by an explicit caution or warning banner ([!CAUTION] or [!WARNING]) specifically addressing data deletion.`,
         )
       }
     }

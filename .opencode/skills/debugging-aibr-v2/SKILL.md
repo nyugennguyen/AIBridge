@@ -13,7 +13,7 @@ description: Use when debugging, diagnosing, or testing the aibr / AIBridge v2 a
 
 **The documentation lies. The source is the only truth.**
 
-`README.md`, `AGENTS.md`, and `Docs/architecture/failure-modes-and-recovery.md` describe commands,
+`README.md`, `AGENTS.md`, and `Docs/archive/failure-modes-and-recovery.md` describe commands,
 flags, and file paths that do not exist in v3.0.0. Every trap below was confirmed by reading
 `src/`. Before you repeat an instruction found in a doc, grep for it.
 
@@ -25,7 +25,7 @@ grep -n "COMMANDS = " src/cli.ts   # line 152 — the real command table
 
 ## Non-existent commands — never suggest these
 
-`Docs/architecture/failure-modes-and-recovery.md` documents all of these. **None are implemented.**
+`Docs/archive/failure-modes-and-recovery.md` documents all of these. **None are implemented.**
 Each returns `Error: unknown command` / `unknown flag`.
 
 | Documented but fake | Real substitute |

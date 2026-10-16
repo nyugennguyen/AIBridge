@@ -9,7 +9,7 @@
 
 This document defines the as-built architecture of AIBridge 3.0.0. Every statement in this guide describes running code in the repository; planned extensions or historical prototypes are explicitly labeled as such.
 
-For historical design notes and earlier recovery surface proposals, see [`Docs/architecture/failure-modes-and-recovery.md`](failure-modes-and-recovery.md) (marked with status *Needs revalidation*). For executable command syntax, see the generated [`Docs/cli-reference.md`](../cli-reference.md).
+For historical design notes and earlier recovery surface proposals, see [`Docs/archive/failure-modes-and-recovery.md`](../archive/failure-modes-and-recovery.md) (marked with status *Archived*). For executable command syntax, see the generated [`Docs/reference/cli-reference.md`](../reference/cli-reference.md).
 
 ## 2. Component responsibilities and trust boundaries
 
@@ -271,7 +271,7 @@ Five binary targets are compiled by `scripts/build-matrix.sh:31-37`:
 2. **Diagnostics bundle router version probe:** Because `aibr-router` lacks `--version`, `aibr bundle` diagnostics probe (`src/diagnostics/bundle.ts:47-58`) fails to obtain a version string and records `routerVersion: null`.
 3. **Arm64 GNU Linux platform packaging:** The platform package `@nyugennguyen/aibridge-linux-arm64-gnu` is defined in `src/host/binaries.ts:24-27,96-99`, but `scripts/build-matrix.sh:31-37` does not compile `aarch64-unknown-linux-gnu` (it builds `aarch64-unknown-linux-musl`).
 4. **Setup wizard port 4095 probe:** Setup step network probing (`src/cli/setup-step-widgets.ts:127`) defaults to checking port 4095 as an old router probe default; in production, no service binds 4095. Bridge binds 8787 and OpenCode binds 4096.
-5. **Historical recovery runbooks:** The operational runbook at [`Docs/architecture/failure-modes-and-recovery.md`](failure-modes-and-recovery.md) documents an intended recovery surface (`aibr db`, `aibr sessions`, `aibr lease`) that is not implemented in the current CLI. It is retained as a historical design record.
+5. **Historical recovery runbooks:** The operational runbook at [`Docs/archive/failure-modes-and-recovery.md`](../archive/failure-modes-and-recovery.md) documents an intended recovery surface (`aibr db`, `aibr sessions`, `aibr lease`) that is not implemented in the current CLI. It is retained as a historical design record.
 
 ## 9. Source files and tests validating architectural claims
 

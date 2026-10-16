@@ -12,9 +12,10 @@
  *   2. internal Markdown links and anchors resolve
  *   3. mirrored skill trees match the canonical `.opencode/skills/`
  *   4. `ci.yml` stays validation-only (no publish commands or npm credentials)
- *   5. `Docs/cli-reference.md` matches the executable `aibr --help`
+ *   5. `Docs/reference/cli-reference.md` matches the executable `aibr --help`
  *   6. every `aibr <command>` documented in a fenced block exists in the CLI
  *   7. `config/*.example.json` parses with the application's config schema
+ *   8. archived documents in `Docs/archive/` contain required status markers
  *
  * Usage: bun scripts/docs/check-docs.ts
  */
@@ -30,15 +31,27 @@ const REPOSITORY_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../.."
 
 const REQUIRED_ENTRY_POINTS = [
   "README.md",
+  "CONTRIBUTING.md",
   "AGENTS.md",
   "CHANGELOG.md",
+  "Docs/README.md",
+  "Docs/getting-started.md",
   "Docs/CONTRIBUTING.md",
   "Docs/architecture/current-state.md",
-  "Docs/cli-reference.md",
+  "Docs/architecture/decisions/README.md",
+  "Docs/guides/configuration.md",
+  "Docs/guides/development.md",
+  "Docs/guides/integrations.md",
+  "Docs/operations/deployment.md",
+  "Docs/operations/monitoring.md",
+  "Docs/operations/troubleshooting.md",
+  "Docs/security/security-model.md",
+  "Docs/reference/cli-reference.md",
+  "Docs/archive/README.md",
 ]
 
 const SCAN_DIRECTORIES = ["Docs", ".opencode/skills", ".claude/skills", ".agents/skills"]
-const SCAN_ROOT_FILES = ["README.md", "AGENTS.md", "CHANGELOG.md"]
+const SCAN_ROOT_FILES = ["README.md", "CONTRIBUTING.md", "AGENTS.md", "CHANGELOG.md"]
 
 /** A fenced code block, from opening fence to closing fence. */
 const FENCE_BLOCK = /^(?:```|~~~)[^\n]*\n[\s\S]*?^(?:```|~~~)\s*$/gm
@@ -48,7 +61,7 @@ const FENCE_BLOCK = /^(?:```|~~~)[^\n]*\n[\s\S]*?^(?:```|~~~)\s*$/gm
  * historical records and design docs kept as evidence. The command check holds
  * current-state docs to the executable standard and leaves these to history.
  */
-const UNVERIFIED_STATUS = />\s*\*\*Status:\*\*\s*(Historical|Superseded|Needs revalidation)/i
+const UNVERIFIED_STATUS = />\s*\*\*Status:\*\*\s*(Historical|Superseded|Needs revalidation|Archived)/i
 
 // ── helpers ──────────────────────────────────────────────────────────────
 
@@ -171,9 +184,10 @@ function checkCliReference(help: string): string[] {
   if (!existsSync(CLI_REFERENCE_PATH)) return [] // entry-point check already reports this
   const reference = readFileSync(CLI_REFERENCE_PATH, "utf8")
   const documented = /\`\`\`text\n([\s\S]*?)\`\`\`/.exec(reference)?.[1]?.trimEnd()
-  if (documented === undefined) return ["Docs/cli-reference.md has no ```text block generated from aibr --help"]
+  const displayPath = relative(REPOSITORY_ROOT, CLI_REFERENCE_PATH)
+  if (documented === undefined) return [`${displayPath} has no \`\`\`text block generated from aibr --help`]
   if (documented !== help.trimEnd()) {
-    return ["Docs/cli-reference.md is stale: run `bun scripts/docs/generate-cli-reference.ts` (aibr --help is the truth)"]
+    return [`${displayPath} is stale: run \`bun scripts/docs/generate-cli-reference.ts\` (aibr --help is the truth)`]
   }
   return []
 }
@@ -218,6 +232,21 @@ function checkConfigExamples(): string[] {
   return errors
 }
 
+function checkArchiveStatusMarkers(): string[] {
+  const errors: string[] = []
+  const archiveDir = join(REPOSITORY_ROOT, "Docs", "archive")
+  if (!existsSync(archiveDir)) return errors
+  for (const entry of readdirSync(archiveDir, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.endsWith(".md")) continue
+    if (entry.name === "README.md") continue
+    const content = readFileSync(join(archiveDir, entry.name), "utf8")
+    if (!/>\s*\*\*Status:\*\*\s*(Archived|Superseded|Historical|Needs revalidation)/i.test(content)) {
+      errors.push(`Docs/archive/${entry.name}: missing required archive status marker (> **Status:** Archived|Superseded|Historical)`)
+    }
+  }
+  return errors
+}
+
 // ── main ─────────────────────────────────────────────────────────────────
 
 function main(): void {
@@ -234,6 +263,7 @@ function main(): void {
     "CLI reference": checkCliReference(help),
     "documented commands": checkDocumentedCommands(help),
     "config examples": checkConfigExamples(),
+    "archive status markers": checkArchiveStatusMarkers(),
   }
 
   let failed = false

@@ -1,7 +1,7 @@
 /**
  * scripts/docs/generate-cli-reference.ts
  *
- * Generates `Docs/cli-reference.md` from the executable CLI help, so the
+ * Generates `Docs/reference/cli-reference.md` from the executable CLI help, so the
  * command list is never maintained in prose twice. `check-docs.ts` fails when
  * the committed reference and `aibr --help` disagree.
  *
@@ -13,7 +13,8 @@ import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
 const REPOSITORY_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..")
-export const CLI_REFERENCE_PATH = join(REPOSITORY_ROOT, "Docs", "cli-reference.md")
+export const CLI_REFERENCE_PATH = join(REPOSITORY_ROOT, "Docs", "reference", "cli-reference.md")
+export const LEGACY_CLI_REFERENCE_PATH = join(REPOSITORY_ROOT, "Docs", "cli-reference.md")
 
 /** The exact `aibr --help` output. This is the executable truth. */
 export function cliHelp(): string {
@@ -46,9 +47,21 @@ ${help}
 `
 }
 
+export function renderLegacyPointer(): string {
+  return `# CLI reference
+
+> **Moved:** The canonical CLI reference has been consolidated to:
+> [\`Docs/reference/cli-reference.md\`](reference/cli-reference.md)
+
+Please see [\`Docs/reference/cli-reference.md\`](reference/cli-reference.md) for the executable command and flag reference generated from \`aibr --help\`.
+`
+}
+
 // `import.meta.main` is Bun-only; the argv comparison keeps this runnable under
 // tsx/node too (same pattern as scripts/package-binaries.ts).
 if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) {
   writeFileSync(CLI_REFERENCE_PATH, renderCliReference())
   console.log(`wrote ${CLI_REFERENCE_PATH}`)
+  writeFileSync(LEGACY_CLI_REFERENCE_PATH, renderLegacyPointer())
+  console.log(`wrote ${LEGACY_CLI_REFERENCE_PATH}`)
 }

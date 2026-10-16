@@ -2,7 +2,7 @@
 
 Status: M0.6 security-review artifact for contract family `aibridge.orchestration`, schema version `1`. This is a review of the frozen architecture and contracts, not a claim that production controls exist. The milestone lead and M0.9 reviewer own the integrated gate decision.
 
-Sources: [current-state inventory](../architecture/milestone-0-current-state-inventory.md), [ADR 0001](../adr/0001-canonical-domain-and-module-boundaries.md), [ADR 0002](../adr/0002-versioned-contracts-and-adapter-boundaries.md), [ADR 0003](../adr/0003-event-store-and-idempotency.md), [ADR 0004](../adr/0004-controller-leases-and-recovery.md), [M0 plan](../implementation-plans/milestone-0-architecture-and-migration.md), and the orchestration/runtime/terminal schemas and interfaces under `src/`.
+Sources: [current-state inventory](../archive/milestone-0-current-state-inventory.md), [ADR 0001](../adr/0001-canonical-domain-and-module-boundaries.md), [ADR 0002](../adr/0002-versioned-contracts-and-adapter-boundaries.md), [ADR 0003](../adr/0003-event-store-and-idempotency.md), [ADR 0004](../adr/0004-controller-leases-and-recovery.md), [M0 plan](../implementation-plans/milestone-0-architecture-and-migration.md), and the orchestration/runtime/terminal schemas and interfaces under `src/`.
 
 ## Scope and trust assumptions
 

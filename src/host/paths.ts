@@ -60,6 +60,32 @@ export function validateProfileName(name: string): string {
 // ── Path resolution ────────────────────────────────────────────────────
 
 /**
+ * Resolves an XDG base directory per the XDG Base Directory Specification:
+ * - If the environment variable is set to a non-empty absolute path, it is used directly.
+ * - If unset, empty, or set to a relative path, it falls back to the default subdirectory beneath $HOME.
+ * - If fallback is needed but $HOME is unset, empty, or relative, an error is thrown.
+ */
+function resolveXdgBase(
+  override: string | undefined,
+  home: string | undefined,
+  defaultSubdir: string,
+): string {
+  if (typeof override === "string" && override.trim().length > 0) {
+    if (isAbsolute(override)) {
+      return override
+    }
+  }
+
+  if (!home || home.trim().length === 0 || !isAbsolute(home)) {
+    throw new Error(
+      "HOME environment variable must be set to an absolute path when XDG overrides are unset, empty, or relative",
+    )
+  }
+
+  return join(home, defaultSubdir)
+}
+
+/**
  * Resolve XDG-compliant profile directories for AIBridge.
  *
  * Lookup order (per XDG Base Directory spec):
@@ -78,24 +104,11 @@ export function resolveProfilePaths(
 ): ProfilePaths {
   const validated = validateProfileName(profile)
   const e = env ?? process.env
-
   const home = e.HOME
 
-  // At least one base directory must be resolvable.
-  if (
-    !home &&
-    !e.XDG_CONFIG_HOME &&
-    !e.XDG_DATA_HOME &&
-    !e.XDG_STATE_HOME
-  ) {
-    throw new Error(
-      "HOME environment variable is required when no XDG overrides are set",
-    )
-  }
-
-  const configBase = e.XDG_CONFIG_HOME ?? join(home!, ".config")
-  const dataBase = e.XDG_DATA_HOME ?? join(home!, ".local", "share")
-  const stateBase = e.XDG_STATE_HOME ?? join(home!, ".local", "state")
+  const configBase = resolveXdgBase(e.XDG_CONFIG_HOME, home, ".config")
+  const dataBase = resolveXdgBase(e.XDG_DATA_HOME, home, join(".local", "share"))
+  const stateBase = resolveXdgBase(e.XDG_STATE_HOME, home, join(".local", "state"))
 
   const paths: ProfilePaths = Object.freeze({
     configDir: join(configBase, "aibridge", validated),

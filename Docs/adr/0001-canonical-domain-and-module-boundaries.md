@@ -4,7 +4,7 @@ Status: accepted for the Milestone 0 contract freeze (M0.2).
 
 Contract family: `aibridge.orchestration`, schema version `1`.
 
-Inputs: [product brainstorm](../aibridge-tui-agent-orchestrator-brainstorm.md), [M0 plan](../implementation-plans/milestone-0-architecture-and-migration.md), and [baseline inventory](../architecture/milestone-0-current-state-inventory.md).
+Inputs: [product brainstorm](../archive/aibridge-tui-agent-orchestrator-brainstorm.md), [M0 plan](../implementation-plans/milestone-0-architecture-and-migration.md), and [baseline inventory](../archive/milestone-0-current-state-inventory.md).
 
 ## Context and decision
 
@@ -103,7 +103,7 @@ This is the exact M0.2–M0.8 layout. A listed directory is not permission to cr
 | M0.4 | `src/runtime/schemas.ts`; `src/runtime/types.ts`; `src/terminal/schemas.ts`; `src/terminal/types.ts`; `tests/contracts/runtime-terminal-contracts.test.ts` |
 | M0.5 | `Docs/adr/0003-event-store-and-idempotency.md`; `Docs/adr/0004-controller-leases-and-recovery.md` |
 | M0.6 | `Docs/security/milestone-0-threat-model.md` |
-| M0.7 | `src/orchestration/legacy/schemas.ts`; `src/orchestration/legacy/types.ts`; `src/orchestration/legacy/migration.ts`; `tests/contracts/legacy-migration.test.ts`; `tests/contracts/fixtures/legacy/config.json`; `tests/contracts/fixtures/legacy/jobs.json`; `tests/contracts/fixtures/legacy/tasks.md`; `tests/contracts/fixtures/legacy/memory.json`; `Docs/architecture/milestone-0-legacy-migration.md` |
+| M0.7 | `src/orchestration/legacy/schemas.ts`; `src/orchestration/legacy/types.ts`; `src/orchestration/legacy/migration.ts`; `tests/contracts/legacy-migration.test.ts`; `tests/contracts/fixtures/legacy/config.json`; `tests/contracts/fixtures/legacy/jobs.json`; `tests/contracts/fixtures/legacy/tasks.md`; `tests/contracts/fixtures/legacy/memory.json`; `Docs/archive/milestone-0-legacy-migration.md` |
 | M0.8 | `tests/contracts/helpers.ts`; `tests/contracts/fakes.ts`; `tests/contracts/conformance.test.ts`; `tests/contracts/examples.test.ts`; the exact example files in the following paragraph |
 
 M0.8 canonical example files are `tests/contracts/examples/mesh.v1.json`, `node.v1.json`, `project.v1.json`, `run.v1.json`, `task.v1.json`, `dispatch.v1.json`, `approval.v1.json`, `session.v1.json`, `role.v1.json`, `rule.v1.json`, `memory.v1.json`, `artifact.v1.json`, `controller-lease.v1.json`, `event.v1.json`, and `command.v1.json`, all in that same `examples/` directory. The root owns the final `Docs/implementation-reports/milestone-0-completion.md` and integration; M0.9 supplies independent findings to the root. M0.4's initial type/fake smoke cases stay local to its own test file; M0.8 owns reusable fake adapters and conformance fixtures later.

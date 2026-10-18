@@ -3,7 +3,8 @@
   "bridge": {
     "host": "100.64.0.2",
     "port": 8787,
-    "public_url": "http://test-vps.tailnet:8787"
+    "public_url": "http://test-vps.tailnet:8787",
+    "ingress_mode": "router"
   },
   "opencode": {
     "base_url": "http://127.0.0.1:4096",

@@ -12,9 +12,10 @@
  *   2. internal Markdown links and anchors resolve
  *   3. mirrored skill trees match the canonical `.opencode/skills/`
  *   4. `ci.yml` stays validation-only (no publish commands or npm credentials)
- *   5. `Docs/cli-reference.md` matches the executable `aibr --help`
+ *   5. `Docs/reference/cli-reference.md` matches the executable `aibr --help`
  *   6. every `aibr <command>` documented in a fenced block exists in the CLI
  *   7. `config/*.example.json` parses with the application's config schema
+ *   8. archived documents in `Docs/archive/` contain required status markers
  *
  * Usage: bun scripts/docs/check-docs.ts
  */
@@ -30,15 +31,28 @@ const REPOSITORY_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../.."
 
 const REQUIRED_ENTRY_POINTS = [
   "README.md",
+  "CONTRIBUTING.md",
   "AGENTS.md",
   "CHANGELOG.md",
+  "Docs/README.md",
+  "Docs/getting-started.md",
   "Docs/CONTRIBUTING.md",
   "Docs/architecture/current-state.md",
-  "Docs/cli-reference.md",
+  "Docs/architecture/decisions/README.md",
+  "Docs/adr/README.md",
+  "Docs/guides/configuration.md",
+  "Docs/guides/development.md",
+  "Docs/guides/integrations.md",
+  "Docs/operations/deployment.md",
+  "Docs/operations/monitoring.md",
+  "Docs/operations/troubleshooting.md",
+  "Docs/security/security-model.md",
+  "Docs/reference/cli-reference.md",
+  "Docs/archive/README.md",
 ]
 
 const SCAN_DIRECTORIES = ["Docs", ".opencode/skills", ".claude/skills", ".agents/skills"]
-const SCAN_ROOT_FILES = ["README.md", "AGENTS.md", "CHANGELOG.md"]
+const SCAN_ROOT_FILES = ["README.md", "CONTRIBUTING.md", "AGENTS.md", "CHANGELOG.md"]
 
 /** A fenced code block, from opening fence to closing fence. */
 const FENCE_BLOCK = /^(?:```|~~~)[^\n]*\n[\s\S]*?^(?:```|~~~)\s*$/gm
@@ -48,7 +62,7 @@ const FENCE_BLOCK = /^(?:```|~~~)[^\n]*\n[\s\S]*?^(?:```|~~~)\s*$/gm
  * historical records and design docs kept as evidence. The command check holds
  * current-state docs to the executable standard and leaves these to history.
  */
-const UNVERIFIED_STATUS = />\s*\*\*Status:\*\*\s*(Historical|Superseded|Needs revalidation)/i
+const UNVERIFIED_STATUS = />\s*\*\*Status:\*\*\s*(Historical|Superseded|Needs revalidation|Archived)/i
 
 // ── helpers ──────────────────────────────────────────────────────────────
 
@@ -171,9 +185,10 @@ function checkCliReference(help: string): string[] {
   if (!existsSync(CLI_REFERENCE_PATH)) return [] // entry-point check already reports this
   const reference = readFileSync(CLI_REFERENCE_PATH, "utf8")
   const documented = /\`\`\`text\n([\s\S]*?)\`\`\`/.exec(reference)?.[1]?.trimEnd()
-  if (documented === undefined) return ["Docs/cli-reference.md has no ```text block generated from aibr --help"]
+  const displayPath = relative(REPOSITORY_ROOT, CLI_REFERENCE_PATH)
+  if (documented === undefined) return [`${displayPath} has no \`\`\`text block generated from aibr --help`]
   if (documented !== help.trimEnd()) {
-    return ["Docs/cli-reference.md is stale: run `bun scripts/docs/generate-cli-reference.ts` (aibr --help is the truth)"]
+    return [`${displayPath} is stale: run \`bun scripts/docs/generate-cli-reference.ts\` (aibr --help is the truth)`]
   }
   return []
 }
@@ -218,6 +233,251 @@ function checkConfigExamples(): string[] {
   return errors
 }
 
+function checkArchiveStatusMarkers(): string[] {
+  const errors: string[] = []
+  const archiveDir = join(REPOSITORY_ROOT, "Docs", "archive")
+  if (!existsSync(archiveDir)) return errors
+  for (const entry of readdirSync(archiveDir, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.endsWith(".md")) continue
+    if (entry.name === "README.md") continue
+    const content = readFileSync(join(archiveDir, entry.name), "utf8")
+    if (!/>\s*\*\*Status:\*\*\s*(Archived|Superseded|Historical|Needs revalidation)/i.test(content)) {
+      errors.push(`Docs/archive/${entry.name}: missing required archive status marker (> **Status:** Archived|Superseded|Historical)`)
+    }
+  }
+  return errors
+}
+
+export interface MarkdownSection {
+  heading: string
+  content: string
+  startLine: number
+}
+
+/**
+ * Splits a Markdown document into heading-delimited sections, preserving line numbers
+ * and ignoring headings nested inside fenced code blocks.
+ */
+export function parseMarkdownSections(markdown: string): MarkdownSection[] {
+  const lines = markdown.split("\n")
+  const sections: MarkdownSection[] = []
+  let currentHeading = ""
+  let currentLines: string[] = []
+  let currentStartLine = 1
+  let inFence = false
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!
+    if (/^\s*(```|~~~)/.test(line)) {
+      inFence = !inFence
+    }
+    if (!inFence && /^#{1,6}\s+(.*)$/.test(line)) {
+      if (currentLines.length > 0 || currentHeading !== "") {
+        sections.push({
+          heading: currentHeading,
+          content: currentLines.join("\n"),
+          startLine: currentStartLine,
+        })
+      }
+      currentHeading = line
+      currentLines = [line]
+      currentStartLine = i + 1
+    } else {
+      currentLines.push(line)
+    }
+  }
+  if (currentLines.length > 0 || currentHeading !== "") {
+    sections.push({
+      heading: currentHeading,
+      content: currentLines.join("\n"),
+      startLine: currentStartLine,
+    })
+  }
+  return sections
+}
+
+/**
+ * Matches broad recursive deletion commands targeting root AIBridge directories or their contents
+ * without profile scoping:
+ * e.g.:
+ * - `rm -rf ~/.config/aibridge`
+ * - `rm --recursive --force ~/.config/aibridge`
+ * - `rm -rf "$HOME/.config/aibridge"/*`
+ * - `rm -rf "${XDG_CONFIG_HOME:-$HOME/.config}/aibridge"`
+ *
+ * Supported flags: single-dash short options (`-r`, `-rf`, `-f`) and double-dash options
+ * (`--recursive`, `--force`, `--verbose`).
+ *
+ * Limitation note: This static pattern intentionally validates common shell invocations
+ * documented in project guides; complex dynamic shell scripts (e.g. `find ... -delete`,
+ * eval, or variable indirection like `ROOT=...; rm -rf $ROOT`) are not parsed.
+ */
+export const BROAD_ROOT_DELETION =
+  /rm\s+(?:(?:-[a-zA-Z]+|--[a-zA-Z-]+)\s+)*["']?(?:~|\$HOME|\$\{HOME\}|\/home\/[\w.-]+|\/Users\/[\w.-]+|\$\{?(?:XDG_CONFIG_HOME|XDG_DATA_HOME|XDG_STATE_HOME)[^}"]*\}?)(?:\/(?:\.config|\.local\/share|\.local\/state))?\/aibridge(?:["']?\/\*|\/?\*|\/?)["']?(?:\s|$|`|\n)/
+
+export interface MarkdownAlert {
+  kind: "CAUTION" | "WARNING"
+  content: string
+  raw: string
+  startLine: number
+}
+
+/**
+ * Extracts GitHub-style Markdown alert blocks (> [!CAUTION] or > [!WARNING]) from markdown text,
+ * capturing contiguous blockquoted lines while ignoring alerts nested inside code fences.
+ */
+export function extractMarkdownAlerts(markdown: string): MarkdownAlert[] {
+  const lines = markdown.split("\n")
+  const alerts: MarkdownAlert[] = []
+  let inAlert = false
+  let currentKind: "CAUTION" | "WARNING" = "CAUTION"
+  let currentLines: string[] = []
+  let currentRawLines: string[] = []
+  let currentStartLine = 1
+  let inFence = false
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!
+    if (/^\s*(```|~~~)/.test(line)) {
+      inFence = !inFence
+      if (inAlert) {
+        alerts.push({
+          kind: currentKind,
+          content: currentLines.join("\n"),
+          raw: currentRawLines.join("\n"),
+          startLine: currentStartLine,
+        })
+        inAlert = false
+        currentLines = []
+        currentRawLines = []
+      }
+      continue
+    }
+    if (inFence) continue
+
+    const alertHeaderMatch = /^\s*>\s*\[!(CAUTION|WARNING)\](.*)$/i.exec(line)
+    if (alertHeaderMatch) {
+      if (inAlert) {
+        alerts.push({
+          kind: currentKind,
+          content: currentLines.join("\n"),
+          raw: currentRawLines.join("\n"),
+          startLine: currentStartLine,
+        })
+      }
+      inAlert = true
+      currentKind = alertHeaderMatch[1]!.toUpperCase() as "CAUTION" | "WARNING"
+      currentStartLine = i + 1
+      currentLines = []
+      currentRawLines = [line]
+      const trailing = alertHeaderMatch[2]?.trim()
+      if (trailing) {
+        currentLines.push(trailing)
+      }
+      continue
+    }
+
+    if (inAlert) {
+      const quoteMatch = /^\s*>\s?(.*)$/.exec(line)
+      if (quoteMatch) {
+        currentLines.push(quoteMatch[1] ?? "")
+        currentRawLines.push(line)
+      } else {
+        alerts.push({
+          kind: currentKind,
+          content: currentLines.join("\n"),
+          raw: currentRawLines.join("\n"),
+          startLine: currentStartLine,
+        })
+        inAlert = false
+        currentLines = []
+        currentRawLines = []
+      }
+    }
+  }
+
+  if (inAlert) {
+    alerts.push({
+      kind: currentKind,
+      content: currentLines.join("\n"),
+      raw: currentRawLines.join("\n"),
+      startLine: currentStartLine,
+    })
+  }
+
+  return alerts
+}
+
+const DESTRUCTIVE_ACTION_STEM =
+  /(?:delet(?:e[ds]?|ing|ion)s?|remov(?:e[ds]?|ing|al)s?|wip(?:e[ds]?|ing)s?|purg(?:e[ds]?|ing)s?|destroy(?:s|ed|ing)?|destruct(?:ion|ive))/
+
+const TARGET_PERSISTENT_RESOURCE =
+  /(?:all\s+AIBridge|(?:all\s+)?(?:AIBridge\s+)?(?:data|profiles?|config(?:uration)?s?|secrets?|databases?|stores?|storage)\b|(?:persistent\s+state|state\s+(?:files?|databases?|stores?|director(?:y|ies)))\b|(?:user\s+data|configuration|profile|state|storage)\s+director(?:y|ies)\b)/
+
+const DESTRUCTIVE_QUALIFIERS =
+  /(?:\s+(?:of\s+)?(?:[*_`"'-]*(?:all|the|these|any|its|every|user|persistent|local|AIBridge)[*_`"'-]*\s+){0,4})/
+
+/**
+ * Matches language specifically warning about permanent deletion or wiping of AIBridge persistent
+ * resources (configuration, profiles, persistent state, secrets, databases, storage, or data directories).
+ * Checked strictly against the internal content of a Markdown alert block.
+ *
+ * General destructive phrases alone (e.g. "permanently delete all active sessions" or "irreversible action")
+ * without explicitly targeting persistent AIBridge resources will not satisfy this check.
+ */
+export const DESTRUCTIVE_ALERT_CONTENT = new RegExp(
+  `(?:${DESTRUCTIVE_ACTION_STEM.source}${DESTRUCTIVE_QUALIFIERS.source}${TARGET_PERSISTENT_RESOURCE.source}|${TARGET_PERSISTENT_RESOURCE.source}(?:\\s+and\\s+[^.!?\\n]+)?\\s+(?:will\\s+be\\s+|are\\s+)?(?:permanently\\s+|completely\\s+)?${DESTRUCTIVE_ACTION_STEM.source})`,
+  "i",
+)
+
+/** Exported for backward compatibility with existing tests and imports. */
+export const DESTRUCTIVE_WARNING = DESTRUCTIVE_ALERT_CONTENT
+
+/**
+ * Validates that any destructive root deletion command is strictly preceded within its section
+ * by an explicit Markdown caution or warning alert block ([!CAUTION] or [!WARNING]) whose internal
+ * content directly addresses data, configuration, or profile deletion.
+ */
+export function validateMarkdownUninstallSafety(
+  content: string,
+  filePath = "document.md",
+): string[] {
+  if (UNVERIFIED_STATUS.test(content)) return []
+
+  const errors: string[] = []
+  const sections = parseMarkdownSections(content)
+
+  for (const section of sections) {
+    const deletionMatch = BROAD_ROOT_DELETION.exec(section.content)
+    if (deletionMatch) {
+      // The relevant caution/warning banner must appear in this section before the destructive command
+      const contentBeforeCommand = section.content.slice(0, deletionMatch.index)
+      const precedingAlerts = extractMarkdownAlerts(contentBeforeCommand)
+      const hasPrecedingWarning = precedingAlerts.some((alert) =>
+        DESTRUCTIVE_ALERT_CONTENT.test(alert.content),
+      )
+
+      if (!hasPrecedingWarning) {
+        errors.push(
+          `${filePath}:${section.startLine}: documents un-warned recursive deletion of root ~/.config/aibridge or ~/.local/{share,state}/aibridge in section '${section.heading || "<preamble>"}'. Root data removal must be preceded by an explicit caution or warning banner ([!CAUTION] or [!WARNING]) specifically addressing data deletion.`,
+        )
+      }
+    }
+  }
+
+  return errors
+}
+
+export function checkSafeUninstallation(): string[] {
+  const errors: string[] = []
+  for (const file of markdownFiles()) {
+    const content = readFileSync(join(REPOSITORY_ROOT, file), "utf8")
+    const fileErrors = validateMarkdownUninstallSafety(content, file)
+    errors.push(...fileErrors)
+  }
+  return errors
+}
+
 // ── main ─────────────────────────────────────────────────────────────────
 
 function main(): void {
@@ -234,6 +494,8 @@ function main(): void {
     "CLI reference": checkCliReference(help),
     "documented commands": checkDocumentedCommands(help),
     "config examples": checkConfigExamples(),
+    "archive status markers": checkArchiveStatusMarkers(),
+    "safe uninstallation guidance": checkSafeUninstallation(),
   }
 
   let failed = false

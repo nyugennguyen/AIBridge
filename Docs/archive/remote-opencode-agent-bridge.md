@@ -1,13 +1,17 @@
 # Draft Design: Remote Opencode Agent Bridge / Multi-Agent Mesh
 
+> **Status:** Archived
+> **Applies to:** Earliest POC Draft Design
+> **Owner:** Maintainers
+
 ## Status
 
-- **Document type**: Brainstorming and system architecture draft
-- **Project**: `AIBrigde` / remote opencode agent bridge
-- **Current phase**: Design approval before implementation planning
-- **Implementation status**: Not started
+- **Document type**: Brainstorming and system architecture draft (Historical)
+- **Project**: `AIBridge` / remote opencode agent bridge
+- **Current phase**: Historical POC design (Superseded by `Docs/architecture/current-state.md`)
+- **Implementation status:** Superseded
 - **Primary constraint**: POC first, mesh-ready architecture later
-- **Canonical design location**: `Docs/remote-opencode-agent-bridge.md`
+- **Canonical design location**: `Docs/archive/remote-opencode-agent-bridge.md`
 
 ## Original Idea
 

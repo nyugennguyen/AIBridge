@@ -1,5 +1,9 @@
 # AIBridge current-state inventory (M0.1)
 
+> **Status:** Archived
+> **Applies to:** Milestone 0 Baseline Inventory
+> **Owner:** Maintainers
+
 Status: baseline inventory only. This records the pre-orchestration implementation and migration obligations; it introduces no new contracts or behavior.
 
 ## Baseline and scope

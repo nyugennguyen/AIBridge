@@ -1,5 +1,9 @@
 # Milestone 0 legacy compatibility and migration map
 
+> **Status:** Archived
+> **Applies to:** Milestone 0 Legacy Migration Contract
+> **Owner:** Maintainers
+
 Status: M0.7 contract and dry-run design. This document defines migration behavior before a file reader, SQLite importer, route adapter, or destructive upgrade command exists.
 
 Depends on [ADR 0001](../adr/0001-canonical-domain-and-module-boundaries.md), [ADR 0002](../adr/0002-versioned-contracts-and-adapter-boundaries.md), [ADR 0003](../adr/0003-event-store-and-idempotency.md), [ADR 0004](../adr/0004-controller-leases-and-recovery.md), and the [current-state inventory](./milestone-0-current-state-inventory.md).

@@ -1,16 +1,20 @@
 # AIBridge TUI Agent Orchestrator
 
+> **Status:** Archived
+> **Applies to:** Historical Pre-Milestone 0 Brainstorm
+> **Owner:** Maintainers
+
 ## Status
 
-- **Document type:** Product brainstorm and architecture direction
+- **Document type:** Product brainstorm and architecture direction (Historical)
 - **Product:** AIBridge
 - **Target:** Major upgrade from an OpenCode bridge to a distributed CLI-agent orchestrator
-- **Implementation status:** Proposed
+- **Implementation status:** Superseded by current architecture (`Docs/architecture/current-state.md`)
 - **Primary network:** Private Tailscale mesh
 - **Initial runtimes:** OpenCode, Claude Code, and Codex
 - **Initial platforms:** macOS and Debian/Ubuntu
 
-Detailed execution plans for every milestone are indexed in [`Docs/implementation-plans/README.md`](./implementation-plans/README.md).
+Detailed execution plans for every milestone are indexed in [`Docs/implementation-plans/README.md`](../implementation-plans/README.md).
 
 ## Executive Summary
 
@@ -600,8 +604,8 @@ Exit criteria:
 ### Milestone 7: Hardening and Ecosystem
 
 > **Renumbered to Milestone 8.** Milestone 7 is now
-> [Polyglot ingress and durable admission](./implementation-plans/milestone-7-polyglot-ingress.md),
-> inserted per [ADR 0008](./adr/0008-polyglot-ingress-and-admission.md). The
+> [Polyglot ingress and durable admission](../implementation-plans/milestone-7-polyglot-ingress.md),
+> inserted per [ADR 0008](../adr/0008-polyglot-ingress-and-admission.md). The
 > executable plans in `Docs/implementation-plans/` are authoritative for
 > numbering; the section below is retained as the original product direction.
 

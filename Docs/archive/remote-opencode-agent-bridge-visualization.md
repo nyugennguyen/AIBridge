@@ -1,5 +1,9 @@
 # HTML Visualization: Remote Opencode Agent Bridge / Multi-Agent Mesh
 
+> **Status:** Archived
+> **Applies to:** Early POC Architectural Visualization
+> **Owner:** Maintainers
+
 > Prometheus note: this workspace is in planning mode, so artifacts are saved under `.omo/drafts/*.md`. The content below is a self-contained HTML document. To view it as HTML, copy everything inside the fenced block into a local `.html` file when you are ready to preview outside planning mode.
 
 ```html

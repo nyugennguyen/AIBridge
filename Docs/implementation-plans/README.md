@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This directory turns the product direction in [`Docs/aibridge-tui-agent-orchestrator-brainstorm.md`](../aibridge-tui-agent-orchestrator-brainstorm.md) into executable milestone plans. Each milestone has its own dependency-ordered tasks, Codex model and sub-agent assignments, verification steps, completion criteria, and guardrails.
+This directory turns the product direction in [`Docs/archive/aibridge-tui-agent-orchestrator-brainstorm.md`](../archive/aibridge-tui-agent-orchestrator-brainstorm.md) into executable milestone plans. Each milestone has its own dependency-ordered tasks, Codex model and sub-agent assignments, verification steps, completion criteria, and guardrails.
 
 The plans are designed for a root Codex agent coordinating isolated implementation sub-agents. The root agent remains accountable for scope, integration, final verification, and the milestone gate. Sub-agents own bounded tasks; they do not independently change product contracts or declare a milestone complete.
 

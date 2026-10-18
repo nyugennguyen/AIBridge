@@ -1,14 +1,18 @@
 # AIBridge Failure Mode Inventory and Operator Recovery Runbooks
 
-> **Status:** Needs revalidation
+> **Status:** Archived
+> **Superseded by:** [`Docs/operations/troubleshooting.md`](../operations/troubleshooting.md) and [`Docs/reference/cli-reference.md`](../reference/cli-reference.md)
+> **Owner:** Maintainers
 >
-> This document describes an operator CLI (`aibr db|sessions|lease|config|preflight`, `--drain-only`, `aibr-router --version|--profile`) that does **not** exist in this repository's CLI (`src/cli.ts:152-153` implements `setup`, `start`, `serve`, `worker`, `status`, `verify`, `update`, `tui`, `bundle`, `discover`; `router/src/main.rs:95-117` accepts `--preflight` and `--init-store` only).
+> **NOTICE — HISTORICAL DESIGN RECORD ONLY:**
+> This document describes an operator recovery CLI (`aibr db|sessions|lease|config|preflight`, `--drain-only`, `aibr-router --version|--profile`) that was **never implemented** in this repository (`src/cli.ts` implements `setup`, `start`, `serve`, `worker`, `status`, `verify`, `update`, `tui`, `bundle`, `discover`).
 >
-> The original text is preserved below in full as a design record of the intended recovery surface, not current operating procedure.
+> The text is preserved below in full as a design record of proposed recovery surfaces. It **must not** be treated as current operational guidance.
 >
-> For current triage and executable commands, see:
-> - [`Docs/architecture/current-state.md`](current-state.md)
-> - [`Docs/cli-reference.md`](../cli-reference.md)
+> For current operational troubleshooting and verified commands, see:
+> - [`Docs/operations/troubleshooting.md`](../operations/troubleshooting.md)
+> - [`Docs/reference/cli-reference.md`](../reference/cli-reference.md)
+> - [`Docs/architecture/current-state.md`](../architecture/current-state.md)
 > - The `debugging-aibr-v2` skill (`.opencode/skills/debugging-aibr-v2/SKILL.md`)
 
 Document version: 1.0.0 (Milestone 8 Hardening and Ecosystem)

@@ -1,5 +1,9 @@
 # Milestone 2: Adapter Capability and Conformance Specification
 
+> **Status:** Archived
+> **Applies to:** Milestone 2 Adapter Conformance Specification
+> **Owner:** Maintainers
+
 Status: Frozen for Milestone 2 implementation; verified by M2.9 gate review.
 
 Scope: Universal contract specifications, lifecycle normalization rules, capability reporting, error mappings, prompt idempotency boundaries, and verification test matrix for all AIBridge runtime adapters (`opencode`, `claude`, `codex`).

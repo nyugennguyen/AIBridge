@@ -1,5 +1,9 @@
 # Milestone 1 UX state machine and keymap
 
+> **Status:** Archived
+> **Applies to:** Milestone 1 Standalone TUI UX Specification (Superseded by ADR 0011)
+> **Owner:** Maintainers
+
 Status: frozen for M1.1 implementation handoff; subject to the independent M1.9 gate.
 
 Scope: the local, one-task OpenCode workflow in [the Milestone 1 plan](../implementation-plans/milestone-1-single-node-tui.md). This document consumes the [M0 completion report](../implementation-reports/milestone-0-completion.md), [domain boundaries](../adr/0001-canonical-domain-and-module-boundaries.md), [versioned contracts](../adr/0002-versioned-contracts-and-adapter-boundaries.md), [idempotency decisions](../adr/0003-event-store-and-idempotency.md), and [recovery decisions](../adr/0004-controller-leases-and-recovery.md).

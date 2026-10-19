@@ -138,6 +138,37 @@ Read-only inspection of `aibr-manager`, `aibr-herdr-bridge`, `herdr`
   read-only scout inspection (C7); verdicts recorded in `findings-register.md` rows
   MNT-105/109/301/302/315 and the cross-repo couplings section.
 
+### C8 — Pre-refactoring verification audit (separate report; register untouched)
+
+New report: `pre-refactor-verification-report.md` (Deliverables A–F) at commit `e7dd900`
+(code identical to `6dc9b04`). All 21 mandated candidates (ID-01…ID-10, REG-01…REG-11)
+were verified against current source by three read-only scouts plus first-hand auditor
+traces; every verdict is recorded there with statuses per the verification vocabulary
+(`CONFIRMED_BUG` etc.), not re-graded into the MNT series. Material outcomes relative
+to the existing artifacts:
+
+- **Corrections to prior evidence:** REG-04's failure scenario refined (recovery occurs
+  only when the node's counter exceeds the stored high-water mark; crash-loops never
+  converge — the prior "permanent rejection" wording overstated it); MNT-205's
+  invariant anchor: `AGENTS.md:135` still carries "Never expose opencode serve
+  publicly", the loopback claim lives at `Docs/architecture/current-state.md:85`.
+- **New findings (not in the register):** N-01 (WS test flake, reproduced),
+  **N-02 (budget enforcement fail-open in the only production coordinator wiring — P1,
+  qualifies MNT-108)**, N-03 (milestone-7 bound comment), N-04 (`contracts:check`
+  undeclared `rg` dependency), N-05 (headless path runs the Node dev entry).
+- **MNT revalidations:** all still valid at `e7dd900` except MNT-108 (closed as
+  intentionally deferred; the real budget gap is N-02). MNT-201 vitest failures
+  re-confirmed by execution at this commit.
+- **Backlog impact:** proposal in Deliverable E adds V-items (Phase 0–4) with the
+  existing B-items preserved; kernel/identity refactors marked
+  `BLOCKED_BY_CONFIRMED_FINDINGS` pending V16/V1/V3/V2/V7/V9.
+- The `findings-register.md`, `final-report.md`, and `implementation-backlog.md` are
+  deliberately **not** rewritten: the verification report supersedes their statuses for
+  planning purposes and preserves the original audit trail unchanged.
+
+Changed paths for this pass: `pre-refactor-verification-report.md` (new),
+`audit-changelog.md` (this entry).
+
 ## Unresolved after v2 (see register "Open questions")
 
 1. npm download/consumer history for `@nyugennguyen/aibridge` deep imports (no registry

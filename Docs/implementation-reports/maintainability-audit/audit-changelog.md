@@ -169,6 +169,49 @@ to the existing artifacts:
 Changed paths for this pass: `pre-refactor-verification-report.md` (new),
 `audit-changelog.md` (this entry).
 
+### C9 — Report finalization & revision metadata (docs-only)
+
+`pre-refactor-verification-report.md` marked **FINAL — Audit Complete** and given
+explicit revision provenance:
+
+- **Audit target / source revision:** `e7dd900dd8a21bd7246142d1016c530bbb8b21a5` —
+  all evidence, verdicts, and test results were captured here.
+- **Report publication revision:** `a3b8b16e4d45133fc28965a4d14aa7fc35c844b7` —
+  docs-only (`git diff e7dd900..a3b8b16` over `src tests router crates scripts config
+  package.json .github` is empty, verified), so the evidence describes the same code,
+  but no command was re-executed at that revision. Stated explicitly in the report
+  header and §D so test evidence is never read as belonging to another commit.
+
+Consistency check performed between the executive summary, findings matrix, readiness
+gate, and this changelog (findings IDs/statuses/evidence preserved; no reclassification):
+
+1. Matrix recount (mechanical): 35 rows — 6 CONFIRMED_BUG / 1
+   CONFIRMED_SECURITY_RISK / 9 CONFIRMED_DESIGN_RISK / 6
+   CONFIRMED_MAINTAINABILITY_ISSUE / 11 PARTIALLY_CONFIRMED / 2 NOT_A_BUG (E-1 counted
+   once despite its dual cell — footnote added) / 0 STALE-NOT_REPRODUCED-UNVERIFIABLE;
+   severity 2 P1 / 10 P2 / 20 P3 / 3 INFO. Matches Deliverable A.
+2. Readiness per-area blockers realigned to the matrix's `Refactor gate` labels —
+   **narrowed**, not broadened: the Kernel row now lists only N-02 (the sole
+   `BLOCKING (kernel refactors)` finding); REG-04/REG-06 remain listed only under
+   Identity/enrollment/registry (`BLOCKING (registry refactors)`); REG-01 added to
+   Gateways/transport because its gate names transport; MNT-201/305 added to the
+   test-infra row (`BLOCKING (baseline trust)`) and MNT-205/307 to the same row
+   (`BLOCKING (ops path changes)`). REG-01/REG-02 appear in the B16 row as
+   **refactor dependencies** (Deliverable E gates the extraction on V7/V8 decisions),
+   which is not an area blocker.
+3. Deliverable E and the readiness transition conditions were already consistent
+   (V16, V0/B4, V1, V3, V2/V7/V9, B1/B7/V15); the exec summary's loose "V1–V9" wording
+   was replaced with that exact list.
+4. No CI-passed claim exists anywhere in the report (§D: CI status "not
+   accessible/not checked").
+
+Changed paths for this pass (documentation only):
+
+- `Docs/implementation-reports/maintainability-audit/pre-refactor-verification-report.md`
+  (status → FINAL; revision provenance block; §D target-revision statement; Deliverable
+  A count footnote + V-item wording; Deliverable F blocker alignment).
+- `Docs/implementation-reports/maintainability-audit/audit-changelog.md` (this entry).
+
 ## Unresolved after v2 (see register "Open questions")
 
 1. npm download/consumer history for `@nyugennguyen/aibridge` deep imports (no registry

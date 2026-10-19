@@ -1,7 +1,17 @@
 # AIBridge Pre-Refactoring Verification Audit — Findings Validation & Implementation Readiness
 
-**Status:** DRAFT (sections being filled; candidate verification in progress)
+**Status:** FINAL — Audit Complete
 **Report path:** `Docs/implementation-reports/maintainability-audit/pre-refactor-verification-report.md`
+**Audit target / source revision:** `e7dd900dd8a21bd7246142d1016c530bbb8b21a5`
+**Report publication revision:** `a3b8b16e4d45133fc28965a4d14aa7fc35c844b7`
+(finalization metadata edit applied afterwards — see `audit-changelog.md` C9 for the
+exact commit and changed paths)
+**Revision note:** all source evidence, verdicts, and test results in this report were
+captured **against the audit target `e7dd900`**. The publication revision `a3b8b16` is
+docs-only (`git diff e7dd900..a3b8b16 -- src tests router crates scripts config
+package.json .github` is empty — verified), so the evidence describes the same code, but
+**no command was re-executed at `a3b8b16`**; nothing here should be read as a test
+result for any revision other than `e7dd900` (§D).
 **Auditor role:** lead auditor; sub-agent scouts gathered source evidence which the
 auditor re-verified before inclusion. (Note: the harness exposes `scout`/`task`
 sub-agents; a specific "Gemini 3.8 flash" model selector is not available in this
@@ -38,7 +48,10 @@ decision gates and rollback). This report adds per-finding verification STATUS
 ## D. Test and CI evidence (current commit `e7dd900`, executed 2026-10-19)
 
 All commands below were actually executed on this host (macOS arm64) during this
-audit. Exit codes and summaries are copied from the run log
+audit, **against the audit target `e7dd900dd8a21bd7246142d1016c530bbb8b21a5`** — not
+against the report-publication revision `a3b8b16` or any later commit. (`a3b8b16` is
+code-identical to the target — empty diff verified — but the suite was not re-run
+there.) Exit codes and summaries are copied from the run log
 (captured to a temporary log `/tmp/prerefactor-audit-evidence.log`, summarized below;
 the log and its runner script were deleted after capture per the audit's cleanup rule —
 Appendix B). This is
@@ -883,6 +896,10 @@ time: clean except this report and the changelog entry (Appendix B).
 | NOT_A_BUG | 2 (ID-07, REG-03) |
 | STALE / NOT_REPRODUCED / UNVERIFIABLE | 0 |
 
+E-1 is dual-classified in the matrix (`NOT_A_BUG` for the topology claim,
+`PARTIALLY_CONFIRMED` for the validator gap) and is counted once, under
+PARTIALLY_CONFIRMED, in the table above.
+
 | Severity | Count |
 |---|---|
 | P1 | 2 (N-02 budget fail-open in production wiring; MNT-205/307 secrets-in-argv + wildcard bind on the documented headless path) |
@@ -920,7 +937,8 @@ ship), `milestone-7.yml` CI minutes.
 
 **Refactoring readiness recommendation: `OWNER_APPROVAL_REQUIRED`** — with the explicit
 note that **kernel, identity, registry, and ingest refactors are
-`BLOCKED_BY_CONFIRMED_FINDINGS`** until V1–V9 (Deliverable E) are resolved or the owner
+`BLOCKED_BY_CONFIRMED_FINDINGS`** until the named Phase-1 items (V16, V0/B4, V1, V3,
+and the V2/V7/V9 decisions — Deliverable E) are resolved or the owner
 records acceptance of the risk, and that test-infrastructure and documentation work
 (N-01/N-03/N-04, B7–B9) is unblocked. Rationale: the codebase's invariant story is
 strong where tested, but four P1/P2 findings (N-02, MNT-205, REG-01/02, ID-03) sit
@@ -1030,13 +1048,18 @@ is not authorized by this task.)
 
 Per-area gate:
 
-| Refactor area | State | Blocking findings |
+| Refactor area | State | Blocking findings (aligned to matrix `Refactor gate`) |
 |---|---|---|
-| Kernel (`DispatchCoordinator`, scheduler, budgets) | BLOCKED_BY_CONFIRMED_FINDINGS | N-02 (P1), REG-01/REG-02, REG-04, REG-06 |
-| Identity/enrollment/registry | BLOCKED_BY_CONFIRMED_FINDINGS | ID-03, ID-05, ID-08, REG-01/02/04/06 |
-| Gateways/transport | BLOCKED_BY_CONFIRMED_FINDINGS | ID-02, ID-05, ID-09 |
-| Test infrastructure, docs, packaging | OWNER_APPROVAL_REQUIRED (unblocked technically) | N-01, N-03/04, B7–B10 |
-| `DispatchCoordinator` structural split (B16) | BLOCKED | N-02 + Phase 0/2 items |
+| Kernel (`DispatchCoordinator`, scheduler, budgets) | BLOCKED_BY_CONFIRMED_FINDINGS | N-02 (P1) — the only finding whose gate is `BLOCKING (kernel refactors)` |
+| Identity/enrollment/registry | BLOCKED_BY_CONFIRMED_FINDINGS | ID-03, ID-05, ID-08, REG-01, REG-02, REG-04, REG-06 |
+| Gateways/transport | BLOCKED_BY_CONFIRMED_FINDINGS | ID-02, ID-05, ID-09, REG-01 (its gate also names transport) |
+| Test infrastructure, docs, packaging | OWNER_APPROVAL_REQUIRED (unblocked technically) | N-01, MNT-201/305 (baseline trust), N-03/04, B7–B10; MNT-205/307 blocks ops-script changes specifically (`BLOCKING (ops path changes)`) |
+| `DispatchCoordinator` structural split (B16) | BLOCKED | N-02 (V16) + Phase 0/2 items; REG-01/REG-02 appear here as **B16 dependencies** (Deliverable E: the extraction consumes registry/revocation contracts via V7/V8), not as kernel-area blockers |
+
+Scope note (per evidence, not broadened): REG-04/REG-06 block **registry** refactors
+(their matrix gate labels) and are listed only there; REG-01/REG-02 block their
+named areas and additionally constrain B16's contracts, which is a dependency of that
+one refactor, not a general kernel blocker.
 
 **Transition conditions to `READY_TO_IMPLEMENT` (exact):**
 1. V16, V0/B4, V1, V3 resolved (or explicitly risk-accepted in writing by the owner).
@@ -1079,10 +1102,16 @@ multi-node runtime (no production mesh transport exists to exercise).
 ## Appendix B — Changed paths (this audit)
 
 - `Docs/implementation-reports/maintainability-audit/pre-refactor-verification-report.md` (created).
-- `Docs/implementation-reports/maintainability-audit/audit-changelog.md` (appended entry C8).
+- `Docs/implementation-reports/maintainability-audit/audit-changelog.md` (appended entries C8, C9).
+
+Revision provenance: audit evidence targets `e7dd900dd8a21bd7246142d1016c530bbb8b21a5`;
+the report was published in `a3b8b16e4d45133fc28965a4d14aa7fc35c844b7` (docs-only, code
+identical); the finalization metadata edit (status → FINAL, revision distinction,
+readiness alignment) is recorded in `audit-changelog.md` C9 with its commit.
 
 No other paths modified. No tests, production code, configs, package artifacts, or
-workflows were changed; no commits or pushes made. Temporary artifacts created during
+workflows were changed; no pushes made. The only commits attributable to this audit are
+documentation commits of these two files (latest: see `audit-changelog.md` C9). Temporary artifacts created during
 the audit (`/tmp/prerefactor-audit-evidence.sh`, `/tmp/prerefactor-audit-evidence.log`)
 held the raw command output cited in §D and were **deleted after capture**; the §D table
 is the surviving record.

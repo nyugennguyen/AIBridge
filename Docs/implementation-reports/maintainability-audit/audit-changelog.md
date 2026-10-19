@@ -158,7 +158,7 @@ to the existing artifacts:
   undeclared `rg` dependency), N-05 (headless path runs the Node dev entry).
 - **MNT revalidations:** all still valid at `e7dd900` except MNT-108 (closed as
   intentionally deferred; the real budget gap is N-02). MNT-201 vitest failures
-  re-confirmed by execution at this commit.
+  re-confirmed by execution at the audit target `e7dd900`.
 - **Backlog impact:** proposal in Deliverable E adds V-items (Phase 0–4) with the
   existing B-items preserved; kernel/identity refactors marked
   `BLOCKED_BY_CONFIRMED_FINDINGS` pending V16/V1/V3/V2/V7/V9.
@@ -211,6 +211,47 @@ Changed paths for this pass (documentation only):
   (status → FINAL; revision provenance block; §D target-revision statement; Deliverable
   A count footnote + V-item wording; Deliverable F blocker alignment).
 - `Docs/implementation-reports/maintainability-audit/audit-changelog.md` (this entry).
+
+### C10 — Final wording-consistency pass (docs-only)
+
+Scope: `pre-refactor-verification-report.md`, `audit-changelog.md`. No finding
+reclassified; no severity counts changed; no new evidence. Exact edits:
+
+1. **Revision wording de-ambiguated** (nothing may imply the publication commit is the
+   evidence target): §D heading "current commit `e7dd900`" → "audit target `e7dd900`";
+   matrix column "Evidence (current rev)" → "Evidence (audit target revision)";
+   "current-commit evidence" → "audit-target evidence"; "at this commit" → "at the
+   audit target" (3 places: §D contracts-check note, N-01 evidence, MNT-201 note);
+   matrix MNT-201 row "vitest red at HEAD" → "at the audit target"; Deliverable A
+   "**Commit:**" → "**Audit target commit:**"; C8's "at this commit" → "at the audit
+   target `e7dd900`" (historical entry clarified, not rewritten).
+2. **Severity-count wording resolved.** The rationale sentence "four P1/P2 findings
+   (N-02, MNT-205, REG-01/02, ID-03)" conflated risk groups with finding IDs. Now
+   reads: four top-risk groups (N-02 P1; MNT-205/307 P1; REG-01+REG-02 P2 pair; ID-03
+   P2) spanning **five of the twelve P1/P2 findings** (both P1 rows + three P2 rows of
+   the severity table) — risk groups explicitly ≠ finding counts. Severity table
+   untouched: 2 P1 / 10 P2 / 20 P3 / 3 INFO = 35.
+3. **Readiness terminology kept distinct and consistent:** area blockers
+   (`BLOCKED_BY_CONFIRMED_FINDINGS`, matrix `Refactor gate` labels) vs **refactor
+   dependencies** (Deliverable E Phase-4 B16 line reworded from "gated on … and
+   V7/REG-01" to "refactor dependencies on … — dependencies, not area blockers";
+   "Differential behavior gates" → "behavior-equivalence gates", its own concept) vs
+   **decision gates** (V2/V7/V9 fix-or-scope-freeze; B13) vs **owner-approval
+   conditions** (Deliverable F conditions 1–7). The exec-summary rationale now names
+   the V2/V7/V9 items "decision gates" and matches F conditions 1–2 wording. No gate
+   broadened or narrowed — per-area blocker sets are unchanged from the C9 alignment.
+4. **Provenance preserved and made explicit:** audit target `e7dd900…`; report
+   publication revision `a3b8b16…`; finalization revision `b1da743…` now named in the
+   header as containing the status/provenance/readiness edits (C9); header states no
+   command was re-executed at `a3b8b16`, `b1da743`, or any later documentation
+   revision.
+
+Changed paths for this pass (documentation only):
+
+- `Docs/implementation-reports/maintainability-audit/pre-refactor-verification-report.md`
+  (edits 1–4 above).
+- `Docs/implementation-reports/maintainability-audit/audit-changelog.md` (this entry;
+  plus the one-word clarification in C8 noted above).
 
 ## Unresolved after v2 (see register "Open questions")
 

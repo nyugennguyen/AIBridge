@@ -4,14 +4,17 @@
 **Report path:** `Docs/implementation-reports/maintainability-audit/pre-refactor-verification-report.md`
 **Audit target / source revision:** `e7dd900dd8a21bd7246142d1016c530bbb8b21a5`
 **Report publication revision:** `a3b8b16e4d45133fc28965a4d14aa7fc35c844b7`
-(finalization metadata edit applied afterwards — see `audit-changelog.md` C9 for the
-exact commit and changed paths)
+**Finalization revision (contains the status/provenance/readiness edits):**
+`b1da74312075b4bad6fa00a925730896251bacac` (documented in `audit-changelog.md` C9; the
+present wording-consistency pass is documented in C10 and lands in a later docs-only
+revision)
 **Revision note:** all source evidence, verdicts, and test results in this report were
 captured **against the audit target `e7dd900`**. The publication revision `a3b8b16` is
 docs-only (`git diff e7dd900..a3b8b16 -- src tests router crates scripts config
 package.json .github` is empty — verified), so the evidence describes the same code, but
-**no command was re-executed at `a3b8b16`**; nothing here should be read as a test
-result for any revision other than `e7dd900` (§D).
+**no command was re-executed at `a3b8b16`, at `b1da743`, or at any later documentation
+revision**; nothing here should be read as a test result for any revision other than
+`e7dd900` (§D).
 **Auditor role:** lead auditor; sub-agent scouts gathered source evidence which the
 auditor re-verified before inclusion. (Note: the harness exposes `scout`/`task`
 sub-agents; a specific "Gemini 3.8 flash" model selector is not available in this
@@ -45,7 +48,7 @@ decision gates and rollback). This report adds per-finding verification STATUS
 
 ---
 
-## D. Test and CI evidence (current commit `e7dd900`, executed 2026-10-19)
+## D. Test and CI evidence (audit target `e7dd900`, executed 2026-10-19)
 
 All commands below were actually executed on this host (macOS arm64) during this
 audit, **against the audit target `e7dd900dd8a21bd7246142d1016c530bbb8b21a5`** — not
@@ -55,7 +58,7 @@ there.) Exit codes and summaries are copied from the run log
 (captured to a temporary log `/tmp/prerefactor-audit-evidence.log`, summarized below;
 the log and its runner script were deleted after capture per the audit's cleanup rule —
 Appendix B). This is
-**current-commit evidence**, not historical carry-over.
+**audit-target evidence**, not historical carry-over.
 
 | # | Command | Exit | Duration | Outcome |
 |---|---|---|---|---|
@@ -66,7 +69,7 @@ Appendix B). This is
 | 5 | `bun test tests/unit/mesh/registry` | 0 | 1s | pass (focused) |
 | 6 | `bun run docs:check` | 0 | <1s | clean |
 | 7 | `bun run build` | 0 | 6s | clean |
-| 8 | `bun run contracts:check` | 0 | 6s | regenerate + `git diff --exit-code` clean (contracts reproducible at this commit) |
+| 8 | `bun run contracts:check` | 0 | 6s | regenerate + `git diff --exit-code` clean (contracts reproducible at the audit target) |
 | 9 | `cargo fmt --all --check` | 0 | 1s | clean |
 | 10 | `cargo clippy --workspace --all-targets -- -D warnings` | 0 | <1s (warm) | clean |
 | 11 | `cargo test --workspace` | 0 | 11s (warm) | all Rust suites pass (incl. `router/tests/fixtures.rs` contract parity) |
@@ -76,7 +79,7 @@ Appendix B). This is
 Failure classification (per audit rules):
 
 - WS smoke failure (#2, #3): **existing flaky test — timing-sensitive**, not a code
-  regression. Evidence: (a) zero source drift between this commit and the prior
+  regression. Evidence: (a) zero source drift between the audit target and the prior
   audit's fully-green `bun test` run; (b) the test synchronizes with fixed wall-clock
   sleeps (`await setTimeout(40)`, `await setTimeout(120)` at
   `tests/integration/terminal-websocket.test.ts:1196-1201`, and ~20 similar fixed
@@ -87,7 +90,7 @@ Failure classification (per audit rules):
 - `BunProcessRunner` failures (#3): **known existing failure** — the historical
   MNT-201 finding (vitest runs the Bun-only class under Node; `Bun.spawn` is
   undefined and the catch branch returns `{exitCode: null, …}`). Confirmed still
-  present at this commit; unchanged.
+  present at the audit target; unchanged.
 - No environment/tooling failures; no failures related to the ID-/REG- candidate set.
 
 CI status: **not checked / not accessible** — GitHub Actions run state was not
@@ -878,7 +881,7 @@ verification matrix, backlog proposal, readiness gate, and appendices.
 
 ## A. Executive summary
 
-**Commit:** `e7dd900dd8a21bd7246142d1016c530bbb8b21a5`, branch
+**Audit target commit:** `e7dd900dd8a21bd7246142d1016c530bbb8b21a5`, branch
 `asset-project-maintainability`. Working tree at start: **clean**. Code drift vs the
 prior audit's commit `6dc9b04`: **none** (docs-only commits between). Tree at report
 time: clean except this report and the changelog entry (Appendix B).
@@ -937,12 +940,15 @@ ship), `milestone-7.yml` CI minutes.
 
 **Refactoring readiness recommendation: `OWNER_APPROVAL_REQUIRED`** — with the explicit
 note that **kernel, identity, registry, and ingest refactors are
-`BLOCKED_BY_CONFIRMED_FINDINGS`** until the named Phase-1 items (V16, V0/B4, V1, V3,
-and the V2/V7/V9 decisions — Deliverable E) are resolved or the owner
-records acceptance of the risk, and that test-infrastructure and documentation work
-(N-01/N-03/N-04, B7–B9) is unblocked. Rationale: the codebase's invariant story is
-strong where tested, but four P1/P2 findings (N-02, MNT-205, REG-01/02, ID-03) sit
-directly under the areas a refactor would touch, and the behavioral-equivalence
+`BLOCKED_BY_CONFIRMED_FINDINGS`** until the named Phase-1 items (V16, V0/B4, V1, V3)
+are resolved or explicitly risk-accepted **and** the V2/V7/V9 decision gates are
+recorded (fix or scope-freeze — Deliverable F conditions 1–2), and that
+test-infrastructure and documentation work (N-01/N-03/N-04, B7–B9) is unblocked.
+Rationale: the codebase's invariant story is strong where tested, but four top-risk
+groups sit directly under the areas a refactor would touch — N-02 (P1), MNT-205/307
+(P1), REG-01+REG-02 (P2 pair), and ID-03 (P2): **four risk groups spanning five of the
+twelve P1/P2 findings** (both P1 rows plus three P2 rows of the severity table above —
+risk groups are not finding counts) — and the behavioral-equivalence
 baseline (Deliverable F) cannot be trusted while the documented test command is red and
 a suite is flaky.
 
@@ -953,7 +959,7 @@ are fixed or explicitly risk-accepted in writing by the owner.
 
 ## B. Finding verification matrix
 
-| Finding ID | Original claim | Status | Sev | Affected areas | Evidence (current rev) | Impact | Confidence | Action | Backlog | Gate |
+| Finding ID | Original claim | Status | Sev | Affected areas | Evidence (audit target revision) | Impact | Confidence | Action | Backlog | Gate |
 |---|---|---|---|---|---|---|---|---|---|---|
 | ID-01 | Enrollment hash may act as bearer credential | PARTIALLY_CONFIRMED | P3 | identity/enrollment; code issuance trust | `enrollment-code.ts:584-599` (hash-only redeem), `:16-20` (mislabeled comment), `:190-237` (no cancel API); `no-secret-leak.test.ts:124-151` | Pre-redemption theft = identity hijack within TTL; single-use+TTL bound it | High (traced) | Fix docs; add cancel API | V4 | NON-BLOCKING |
 | ID-02 | Revocation may not terminate active sessions | CONFIRMED_DESIGN_RISK | P2 | identity ↔ terminal/SSE gateways | `identity-provider.ts:117-118` (per-request), `gateway/terminal/gateway.ts:1052-1055` (revokeNode, no src caller), SSE has no close path (grep); `terminal-websocket.test.ts:1096-1113` hand-drives close | Compromised node keeps streaming after revoke | High | Fix (wire propagation) | V2 | BLOCKING (gateway work) |
@@ -983,7 +989,7 @@ are fixed or explicitly risk-accepted in writing by the owner.
 | N-05 (new) | — (headless path runs Node dev entry) | CONFIRMED_MAINTAINABILITY_ISSUE | P3 | ops scripts | `tmux-start.sh:22-23` → `package.json:29` (`tsx`) | Documented prod path tests neither `dist/` nor Bun | High | Fix | V18 | NON-BLOCKING |
 | MNT-108 | Durable BudgetLedgerStore absent | PARTIALLY_CONFIRMED | INFO | budgets | deferral documented `ledger.ts:120-138`; simulation-only instantiation `plan.ts:1062`; real gap is N-02 | Deferral itself is sound and documented | High | Close as deferred; fix via V16 | V16 | NON-BLOCKING |
 | MNT-205/307 | tmux-start.sh secrets/0.0.0.0 | CONFIRMED_SECURITY_RISK | **P1** | ops script ↔ security boundary | `tmux-start.sh:18-19` (verified); invariant `tmux.test.ts:165-190,192-229` covers only `src/host/tmux.ts` | Password visible in argv; opencode exposed on shared hosts | High | Fix | B4/V0 | BLOCKING (ops path changes) |
-| MNT-201/305 | Two runners; vitest red at HEAD | CONFIRMED_BUG | P2 | verification | re-executed: `bun run test` 8-fail at e7dd900 (7 BunProcessRunner + N-01), `bun test` 1-flake-fail; `runtime.ts:94-106` silent no-op | Documented command red; CI-green ≠ suite-green | High | Fix | B1 | BLOCKING (baseline trust) |
+| MNT-201/305 | Two runners; vitest red at the audit target | CONFIRMED_BUG | P2 | verification | re-executed: `bun run test` 8-fail at e7dd900 (7 BunProcessRunner + N-01), `bun test` 1-flake-fail; `runtime.ts:94-106` silent no-op | Documented command red; CI-green ≠ suite-green | High | Fix | B1 | BLOCKING (baseline trust) |
 | MNT-308 | release:check ≠ CI | CONFIRMED_MAINTAINABILITY_ISSUE | P2 | release gates | CI-only docs/cargo steps; release omits them (workflows + package.json) | Releases can ship failing cargo tests/docs | High | Fix | B7 | NON-BLOCKING |
 | MNT-310 | Platform-package pipeline unwired | CONFIRMED_DESIGN_RISK | P3 | packaging supply chain | `binaries.ts:21-28`, `package-binaries.ts:25-72` vs `build-matrix.sh:33-38`; no optionalDependencies; publish loop unreachable | Platform packages cannot publish from CI | High | Decision gate | B13 | NON-BLOCKING |
 | MNT-315 | Duplicate router binary in tarball | CONFIRMED_MAINTAINABILITY_ISSUE | P3 | packaging | prior `shasum` identical; no code references `bin/aibr-router-darwin-arm64`; packed via `files` | 1.66 MB/install dead weight | High | Remove (evidence-gated) | B10 | NON-BLOCKING |
@@ -1030,9 +1036,10 @@ test(s) green + the verification command listed.
 Existing B10–B15 unchanged (MNT-315/316 verified still valid; deletion standard unchanged: move-before-delete, npm telemetry unknown). MNT-310 stays a **decision gate** (B13).
 
 ### Phase 4 — Structural refactoring (only after Phases 0–2)
-B16 `DispatchCoordinator` extraction — now additionally gated on **V16** (the refactor
-must not cement budget fail-open) and V7/REG-01 (ingest seam decisions). Differential
-behavior gates unchanged (event-sequence byte-compare, projection snapshots,
+B16 `DispatchCoordinator` extraction — has **refactor dependencies** on **V16** (the
+refactor must not cement budget fail-open) and the V7/REG-01 ingest-seam decision
+(same dependencies as the Deliverable F B16 row — dependencies, not area blockers).
+Behavior-equivalence gates unchanged (event-sequence byte-compare, projection snapshots,
 side-effect counters).
 
 ### Closed/deferred with justification

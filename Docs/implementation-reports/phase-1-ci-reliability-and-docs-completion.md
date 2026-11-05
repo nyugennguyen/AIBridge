@@ -141,3 +141,53 @@ Verified against source (not other prose) and corrected:
 Delivered versus plan Definition of Done: all eleven boxes addressed with the
 evidence above. Status: complete on this branch; two Step-5 confirmations
 (§4.1) require the GitHub-side run after push/merge.
+
+## 6. Re-verification and closeout (2026-11-06)
+
+Phase 1 landed on `asset-project-maintainability` via `a649a43`; later
+documentation-audit commits on the branch did not change the Phase 1 contract.
+Step 5 was completed against the current tree:
+
+- **Second-reviewer pass executed.** An independent reviewer agent (Antigravity
+  CLI, working only from the plan and the source tree) audited all eleven DoD
+  items and recorded evidence in
+  `Docs/implementation-reports/phase-1-second-review.md` — verdict **PASS** on
+  all eleven, with four non-blocking informational findings (D-1..D-4) that
+  match the known limitations already listed in §4 above.
+- **Gates re-run on the current tree (2026-11-06):**
+
+| Command | Result |
+|---|---|
+| `bun run release:check` | PASS (exit 0; frozen install, build, `bun test`, typecheck, shellcheck, `contracts:check`, CLI smoke, `bun pm pack --dry-run`) |
+| `bun test` | 6019 pass, 3 skip, 0 fail (278 files) |
+| `bun run generate:parity-vector` + `cargo fmt --all --check` + `cargo clippy --workspace --all-targets -- -D warnings` + `cargo test --workspace` | PASS (exit 0, all suites) |
+| `bun scripts/docs/sync-skills.ts --check` | PASS — "Skill mirrors match .opencode/skills/ (2 mirrors checked)" |
+| `bun run docs:check` | PASS — all 9 checks, deterministic across repeated runs |
+| `bunx vitest run tests/unit/release tests/unit/documentation` | PASS — 58 tests (second reviewer's run; recorded in `phase-1-second-review.md` §3.2) |
+| `bun src/cli.ts --help` vs `Docs/reference/cli-reference.md` | byte-identical (orchestrator diff) |
+
+- **Corrections applied in this pass:**
+  - `Docs/architecture/current-state.md` toolchain citations fixed: the
+    previous citation `.github/workflows/ci.yml:68` named a workflow step that
+    pins no toolchain (`ci.yml` resolves Rust through rustup and
+    `rust-toolchain.toml`); replaced with `rust-toolchain.toml:15` plus the
+    explicit workflow pins `publish.yml:57` and `milestone-7.yml:34`. Bun pin
+    citation `publish.yml:26` corrected to `publish.yml:30`.
+  - The plan document's status line updated from "Proposed implementation
+    plan" to "Implemented" with a pointer to this report (plan §C3: facts vs.
+    intent).
+  - **Closeout incident, recorded for traceability:** at 2026-11-06 00:48:43
+    the second-reviewer agent's session cleanup restored tracked files to
+    `HEAD` (single `git restore`-style sweep; file mtimes 0.5 ms apart). This
+    discarded the two in-flight doc corrections above and a pre-existing
+    uncommitted `package.json` authoring change (`\u00a7` → `§` in
+    `_contractsCheckWhy`). All three changes were re-applied verbatim and
+    verified by diff before commit. The lesson for future delegated review
+    runs: instruct the agent to leave the working tree untouched and verify
+    `git status` immediately after a delegated session ends.
+
+- **Still unverified (unchanged from §4.1):** live GitHub-side behavior —
+  that a `main` push publishes nothing and that a real release reaches the
+  preflight/publish path — remains confirmable only after push/merge. Static
+  content, least-privilege permissions, and the regression tests
+  (`tests/unit/release/`) are the local evidence.

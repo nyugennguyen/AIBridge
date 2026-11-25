@@ -15,6 +15,7 @@ import { mkdir, readdir, readFile, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { bridgeConfigSchema } from "../config/schemas.js"
 import { resolveProfilePaths, validateProfileName, type ProfilePaths } from "../host/paths.js"
+import { prepareSignedRequest } from "./signed-http.js"
 
 export type FetchLike = (url: string, init?: RequestInit) => Promise<Response>
 
@@ -296,7 +297,13 @@ export class BridgeTools {
     return peer
   }
 
-  private async http(url: string, init: RequestInit, timeoutMs: number): Promise<Response> {
+  /** `signAs`: sign with the profile's node key and use its per-peer token (Phase 3). */
+  private async http(url: string, init: RequestInit, timeoutMs: number, signAs?: LoadedProfile): Promise<Response> {
+    if (signAs !== undefined) {
+      const prepared = await prepareSignedRequest(signAs, url, init, this.deps)
+      for (const secret of prepared.secrets) if (!this.secretsToRedact.includes(secret)) this.secretsToRedact.push(secret)
+      init = prepared.init
+    }
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), timeoutMs)
     try {
@@ -377,6 +384,7 @@ export class BridgeTools {
       `${trimSlash(peer.url)}/trigger`,
       { method: "POST", headers: { "content-type": "application/json", ...(await this.authHeaders(profile)) }, body: JSON.stringify(body) },
       HTTP_TIMEOUT_MS,
+      profile,
     )
     const payload = await readJson(response)
     if (!response.ok) {
@@ -408,6 +416,7 @@ export class BridgeTools {
       `${trimSlash(peer.url)}/jobs/${encodeURIComponent(jobId)}`,
       { method: "GET", headers: await this.authHeaders(profile) },
       HTTP_TIMEOUT_MS,
+      profile,
     )
     if (response.status === 404) throw new ToolError(`Job ${jobId} not found on ${target}.`, "job_not_found")
     if (!response.ok) throw new ToolError(`Status lookup failed (HTTP ${response.status}).`, "status_failed")
@@ -514,6 +523,7 @@ export class BridgeTools {
         `${trimSlash(peer.url)}/jobs/${encodeURIComponent(entry.job_id)}`,
         { method: "GET", headers: await this.authHeaders(profile) },
         HEALTH_TIMEOUT_MS,
+        profile,
       )
       if (!response.ok) return null
       const body = await readJson(response)

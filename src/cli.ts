@@ -59,6 +59,8 @@ export interface CliDeps {
   readonly runPlugin?: (args: readonly string[]) => Promise<number>
   /** `aibr mcp serve|summary …` handler (tests inject a fake; default: src/cli/mcp.ts). */
   readonly runMcp?: (sub: "serve" | "summary", args: readonly string[]) => Promise<number>
+  /** Overridable for tests; defaults to `runEnrollCommand` (src/cli/enroll.ts). */
+  readonly runEnroll?: (args: readonly string[]) => Promise<number>
   /** Write a string to stdout (or a fake writer in tests). */
   readonly writer: (data: string) => void
   /** Whether the current process stdout is a TTY. */
@@ -270,6 +272,7 @@ function helpText(): string {
     "  plugin   Install/remove the AIBridge plugin for Claude Code",
     "  mcp      MCP server used by the Claude Code plugin (serve, summary)",
     "  discover List tailnet peers and probe their /health (read-only)",
+    "  enroll   Pair nodes with a one-time code (issue, join, list, revoke)",
     "",
     "Options:",
     "  --profile, -p <name>   Profile name (required for start/serve/worker/status/tui)",
@@ -679,6 +682,17 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<Cl
   // `plugin` and `mcp` own their argv (--scope, --marketplace, subcommands), so
   // they are dispatched before the global parser would reject those flags.
   const first = argv[0]
+  // `enroll` owns its argv (subcommand + positional code); see src/cli/enroll.ts.
+  if (first === "enroll") {
+    const rest = argv.slice(1)
+    const enroll = await import("./cli/enroll.js")
+    if (rest.length === 0 || rest.includes("--help") || rest.includes("-h")) {
+      deps.writer(enroll.ENROLL_HELP)
+      return rest.length === 0 ? 1 : 0
+    }
+    const run = deps.runEnroll ?? ((a: readonly string[]) => enroll.runEnrollCommand(a, { ...enroll.defaultEnrollDeps(), write: deps.writer }))
+    return toExitCode(await run(rest))
+  }
   if (first === "plugin" || first === "mcp") {
     const rest = argv.slice(1)
     if (rest.length === 0 || rest.includes("--help") || rest.includes("-h")) {

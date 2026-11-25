@@ -93,7 +93,7 @@ For a typical two-machine setup:
 3. **Bearer token:** generate a 256-bit CSPRNG token (default), paste an existing one, or type `none` (refused unless the bridge binds a Tailscale CGNAT address, and only after an explicit confirmation). Secrets are saved with `0600` permissions and are never echoed while you type or paste them.
 4. **OpenCode password** (OpenCode workers only): press Enter to generate a random one; `aibr start` reads it from the secrets directory.
 5. **Agent ID and project directory:** the project defaults to the git root of the current directory (or the current directory outside a repository). `$HOME`, `/`, and any parent of `$HOME` are refused, because every file below them would be reachable by remote jobs.
-6. **Peer enrolment:** AIBridge bridges that answered `/health` on the tailnet are listed and numbered; every other tailnet device is summarized in one line. Discovery enrols nothing: a peer is written to `agents[]` and `security.allowed_sources[]` only after you pick it, choose its capabilities, and confirm. If nothing is found, you can enter a peer by hand.
+6. **Peer enrolment:** AIBridge bridges that answered `/health` on the tailnet are listed and numbered; every other tailnet device is summarized in one line. Discovery enrols nothing: a peer is written to `agents[]` and `security.allowed_sources[]` only after you pick it, choose its capabilities, and confirm. If nothing is found, you can enter a peer by hand. For the orchestrator role the first question here is a pairing code: run `aibr enroll issue` on the worker and paste the code it prints (see the [Pairing Guide](guides/pairing.md)); no token is copied by hand.
 7. **Save:** press Enter (the default is yes). For a worker, a supervisor unit (launchd on macOS, systemd on Linux) is then written but only started if you answer `y`; an orchestrator gets no unit.
 
 Options:
@@ -189,6 +189,7 @@ unset AIBRIDGE_TOKEN
 
 - **`HTTP 400 Bad Request`**: Success! Authentication passed, and AIBridge rejected only the empty trigger payload.
 - **`HTTP 401 Unauthorized`**: Token mismatch or missing token. Re-verify the shared bearer token in `~/.local/share/aibridge/<profile>/secrets/bearer_token` on both hosts.
+- **`HTTP 401` with `"code": "signature_required"`**: the token was accepted, but the worker requires signed requests (`security.request_signing: "required"`, the default for profiles created by `aibr setup`). `curl` cannot sign; pair the nodes with `aibr enroll` and dispatch from the paired node (Claude Code plugin), as described in the [Pairing Guide](guides/pairing.md).
 
 ---
 

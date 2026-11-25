@@ -20,7 +20,7 @@ use std::ops::Deref;
 use std::path::{Path, PathBuf};
 
 use crate::auth::{Bearer, BearerConfigError};
-use crate::contracts::BridgeConfig;
+use crate::contracts::{BridgeConfig, BridgeConfigSecurityRequestSigning};
 
 /// The name of the config path environment variable.
 ///
@@ -76,6 +76,12 @@ pub enum ConfigError {
     Invalid { path: PathBuf },
     /// `AIBRIDGE_BEARER_TOKEN` was unset or empty. See [`Bearer::new`].
     Bearer(BearerConfigError),
+    /// `security.request_signing` asks for per-request node signatures, which
+    /// this router does not verify: it admits `/trigger` on the bearer alone and
+    /// does not carry signature headers into the admission record. Refused
+    /// rather than silently unenforced (ADR 0012); the TypeScript schema refuses
+    /// the same combination for the engine.
+    RequestSigningUnsupported { path: PathBuf },
 }
 
 impl fmt::Display for ConfigError {
@@ -89,6 +95,11 @@ impl fmt::Display for ConfigError {
                 write!(f, "{} is not a valid bridge configuration", path.display())
             }
             Self::Bearer(source) => write!(f, "{source}"),
+            Self::RequestSigningUnsupported { path } => write!(
+                f,
+                "{}: security.request_signing is not supported by aibr-router; set it to \"off\" or use bridge.ingress_mode \"engine\" (ADR 0012)",
+                path.display()
+            ),
         }
     }
 }
@@ -123,6 +134,17 @@ impl RouterConfig {
             serde_json::from_str(text).map_err(|_| ConfigError::Invalid {
                 path: origin.to_path_buf(),
             })?;
+        if matches!(
+            bridge.security.request_signing,
+            Some(
+                BridgeConfigSecurityRequestSigning::Optional
+                    | BridgeConfigSecurityRequestSigning::Required
+            )
+        ) {
+            return Err(ConfigError::RequestSigningUnsupported {
+                path: origin.to_path_buf(),
+            });
+        }
         let project_roots = canonical_project_roots(&bridge);
         let bearer = Bearer::new(bearer_token).map_err(ConfigError::Bearer)?;
         Ok(Self {

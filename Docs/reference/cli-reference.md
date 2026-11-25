@@ -36,6 +36,7 @@ Commands:
   plugin   Install/remove the AIBridge plugin for Claude Code
   mcp      MCP server used by the Claude Code plugin (serve, summary)
   discover List tailnet peers and probe their /health (read-only)
+  enroll   Pair nodes with a one-time code (issue, join, list, revoke)
 
 Options:
   --profile, -p <name>   Profile name (required for start/serve/worker/status/tui)

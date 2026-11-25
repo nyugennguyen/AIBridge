@@ -659,7 +659,7 @@ describe("node role and runtime", () => {
     const calls: string[] = []
     const { outcome, fileOps, prompter, daemon } = await runWizard(
       {
-        inputs: ["orch", "orchestrator", "", "", "", "/mock/path", "", ""],
+        inputs: ["orch", "orchestrator", "", "", "", "/mock/path", "", "", ""],
         confirms: [""],
       },
       { processRunner: makeFakeProcessRunner({ tmux: false, opencode: false, claude: true, calls }) },
@@ -684,6 +684,68 @@ describe("node role and runtime", () => {
     expect(saved.opencode).toMatchObject({ server_port: 4096 })
     expect(() => bridgeConfigSchema.parse(saved)).not.toThrow()
     expect(fileOps.writtenSecrets[OC_PASSWORD("orch")]).toBeUndefined()
+  })
+
+  it("orchestrator: Step 4 offers pairing by code first and writes the paired worker", async () => {
+    const commits: string[] = []
+    const seen: { code: string; agentId: string }[] = []
+    const { outcome, fileOps, prompter, output } = await runWizard(
+      {
+        inputs: ["orch", "orchestrator", "", "", "", "/mock/path", "aibr1-somecode", ""],
+        confirms: [""],
+      },
+      {
+        processRunner: makeFakeProcessRunner({ tmux: false, opencode: false, claude: true }),
+        pairWithCode: async ({ code, agentId }) => {
+          seen.push({ code, agentId })
+          return {
+            agent: { id: "staging", url: "http://100.64.0.9:8787", capabilities: ["investigate"] },
+            commit: async () => void commits.push("token"),
+          }
+        },
+      },
+    )
+    expect(outcome.kind).toBe("persisted")
+    expect(prompter.inputs.some((label) => label.startsWith("Pair with a worker using an enrolment code"))).toBe(true)
+    expect(seen).toEqual([{ code: "aibr1-somecode", agentId: "orch" }])
+    const saved = fileOps.writtenConfigs[CONFIG("orch")]!
+    expect(saved.agents).toEqual([{ id: "staging", url: "http://100.64.0.9:8787", capabilities: ["investigate"] }])
+    expect(commits).toEqual(["token"])
+    expect(output).toContain("Paired with staging")
+  })
+
+  it("orchestrator: a failed pairing falls back to discovery", async () => {
+    const { outcome, output } = await runWizard(
+      {
+        inputs: ["orch", "orchestrator", "", "", "", "/mock/path", "aibr1-bad", "", ""],
+        confirms: [""],
+      },
+      {
+        processRunner: makeFakeProcessRunner({ tmux: false, opencode: false, claude: true }),
+        pairWithCode: async () => {
+          throw new Error("This pairing code has expired.")
+        },
+      },
+    )
+    expect(outcome.kind).toBe("persisted")
+    expect(output).toContain("Pairing failed: This pairing code has expired.")
+  })
+
+  it("new profiles require signed requests; a re-run keeps the profile's setting", async () => {
+    const fresh = await runWizard({ inputs: ["dev", "", "", "", "", "/mock/path", "", ""], secrets: ["oc"], confirms: ["", "n"] })
+    expect((fresh.fileOps.writtenConfigs[CONFIG("dev")]!.security as Record<string, unknown>).request_signing).toBe("required")
+
+    const fileOps = new TestFileOps()
+    fileOps.existingConfigs[CONFIG("dev")] = {
+      ...structuredClone(fresh.fileOps.writtenConfigs[CONFIG("dev")]!),
+      security: { auth_mode: "bearer-token", allowed_sources: [] },
+    }
+    const rerun = await runWizard(
+      { inputs: ["dev", "", "", "", "", ""], secrets: [""], confirms: ["", "", "n"] },
+      { fileOps, pathExists: async (path) => path.endsWith("/bearer_token") || path.endsWith("/opencode_password") },
+    )
+    expect(rerun.outcome.kind).toBe("persisted")
+    expect(rerun.fileOps.writtenConfigs[CONFIG("dev")]!.security).not.toHaveProperty("request_signing")
   })
 
   it("worker on a Claude-only machine: auto-detects claude and is not blocked on opencode", async () => {

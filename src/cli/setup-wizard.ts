@@ -108,6 +108,48 @@ export interface SetupWizardDeps {
    * pass a collector here and keep their `Prompter` queue as it was.
    */
   readonly write?: (text: string) => void
+  /**
+   * Phase 3: redeem a pairing code for an orchestrator (Step 4's first option).
+   * Overridable for tests; defaults to the `aibr enroll join` code path. The
+   * returned `commit` stores the worker's bearer token (0600) and runs only
+   * after the operator saves.
+   */
+  readonly pairWithCode?: (input: { readonly code: string; readonly agentId: string; readonly paths: ProfilePaths }) => Promise<WizardPairing>
+}
+
+export interface WizardPairing {
+  readonly agent: { readonly id: string; readonly url: string; readonly capabilities: readonly string[] }
+  readonly commit: () => Promise<void>
+}
+
+async function defaultPairWithCode(input: { readonly code: string; readonly agentId: string; readonly paths: ProfilePaths }): Promise<WizardPairing> {
+  const { joinWithPairingCode, storePeerBearerToken } = await import("../pairing/service.js")
+  const joined = await joinWithPairingCode({ code: input.code, agentId: input.agentId, stateDir: input.paths.stateDir, displayName: input.agentId })
+  return { agent: joined.agent, commit: () => storePeerBearerToken(input.paths, joined.agent.id, joined.bearerToken) }
+}
+
+/**
+ * Step 4 for an orchestrator: pair with a worker by one-time code. Enter skips
+ * to discovery; a failed pairing is reported and also falls back to discovery.
+ */
+async function promptPairing(io: WizardIo, agentId: string, paths: ProfilePaths): Promise<WizardPairing | null> {
+  const raw = await io.prompter.promptInput(
+    "Pair with a worker using an enrolment code — paste the code printed by `aibr enroll issue` on the worker " +
+      "(Enter to skip and use discovery):",
+  )
+  const code = raw.trim()
+  if (code === "") return null
+  try {
+    const paired = await (io.pairWithCode ?? defaultPairWithCode)({ code, agentId, paths })
+    io.write(
+      `Paired with ${paired.agent.id} at ${paired.agent.url}; capabilities [${paired.agent.capabilities.join(", ")}]. ` +
+        `Keys are pinned on both sides; its bearer token is stored when you save (never shown).\n`,
+    )
+    return paired
+  } catch (error) {
+    io.write(`Pairing failed: ${error instanceof Error ? error.message : String(error)} Continuing with discovery.\n`)
+    return null
+  }
 }
 
 async function defaultPathExists(path: string): Promise<boolean> {
@@ -1095,12 +1137,20 @@ async function runSetupSteps(io: WizardIo, ctx: SetupContext): Promise<SetupOutc
   // either reports or asks. The only statements that put a peer id into the
   // config live inside a branch guarded by an answer the operator gave, so
   // there is no path from "a peer answered" to "a peer is enrolled".
-  const discovery = await runSetupDiscovery(io, existing, existingBridgePort)
   const existingAgents = Array.isArray(base.agents) ? base.agents.filter(isRecord) : []
   const existingSources = Array.isArray(baseSecurity.allowed_sources)
     ? baseSecurity.allowed_sources.filter(isRecord)
     : []
-  const peers = await configurePeers(io, discovery, existingAgents, existingSources)
+  // Phase 3: an orchestrator's first option is pairing by one-time code
+  // (`aibr enroll join`'s code path); discovery is the fallback.
+  const paired = role === "orchestrator" ? await promptPairing(io, agentId, paths) : null
+  const peers =
+    paired !== null
+      ? {
+          agents: [...existingAgents.filter((a) => a.id !== paired.agent.id), { ...paired.agent, capabilities: [...paired.agent.capabilities] }],
+          sources: existingSources,
+        }
+      : await configurePeers(io, await runSetupDiscovery(io, existing, existingBridgePort), existingAgents, existingSources)
 
   // ── Ports (--advanced only) ─────────────────────────────────────────
   let bridgePort = existingBridgePort
@@ -1169,6 +1219,9 @@ async function runSetupSteps(io: WizardIo, ctx: SetupContext): Promise<SetupOutc
           : "OPENCODE_SERVER_PASSWORD",
     },
     security: {
+      // Phase 3 (ADR 0012): NEW profiles require signed /trigger and /report;
+      // a re-run keeps whatever the profile had (absent = "off").
+      ...(existing === null ? { request_signing: "required" } : {}),
       ...baseSecurity,
       auth_mode: authMode,
       // THE TWO ARRAYS MUST AGREE. `assertSourceAuthorized` authorizes on
@@ -1250,6 +1303,7 @@ async function runSetupSteps(io: WizardIo, ctx: SetupContext): Promise<SetupOutc
       await deps.fileOps.writeSecret(ocPasswordPath, newOcPassword)
     }
   }
+  if (paired !== null) await paired.commit()
 
   // ── Step 5: supervisor unit (not for an orchestrator) ───────────────
   //

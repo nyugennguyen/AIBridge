@@ -23,6 +23,7 @@ This directory is the canonical repository for all formal Architecture Decision 
 | [**ADR 0009**](0009-herdr-terminal-backend-evaluation.md) | Herdr Terminal Backend Evaluation | Deferred | 2026-10-06 | Initial spike evaluation of Herdr terminal primitives (partially superseded by ADR 0011). |
 | [**ADR 0010**](0010-tui-daemon-modernization.md) | TUI & Daemon Modernization | Superseded | 2026-10-07 | Terminal UI state machine and daemon communication (superseded by Herdr plugin in ADR 0011). |
 | [**ADR 0011**](0011-herdr-orchestration-architecture.md) | Herdr Orchestration Architecture | Accepted | 2026-10-08 | Definitive separation: Herdr owns terminal presentation; AIBridge kernel owns intent. |
+| [**ADR 0012**](0012-request-signing-and-pairing.md) | Request Signing & Pairing | Accepted | 2026-11-25 | ed25519 node signatures on `/trigger` and `/report` (`security.request_signing`) and `aibr enroll` pairing; refused in router mode. |
 
 ---
 

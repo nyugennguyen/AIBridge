@@ -5,6 +5,7 @@ import { assertProjectAllowed } from "../../security/allowlist.js"
 import { assertSourceAuthorized } from "../../security/source-authorization.js"
 import { ConfigPlanReviewProvider } from "../../planning/provider.js"
 import { authorizeClaudeCapability } from "../../runtime/claude-job-runner.js"
+import { requireIdentityGuard } from "../../pairing/verifier.js"
 import type { TriggerRequest } from "../../config/types.js"
 import type { AppDependencies } from "../app.js"
 
@@ -20,8 +21,15 @@ export function registerTriggerRoute(app: FastifyInstance, dependencies: AppDepe
   // Optional chaining: a hand-built config object (tests, embedders) may predate the field.
   const runtimeKind = dependencies.config.runtime?.kind ?? "opencode"
 
+  // Phase 3 (ADR 0012): node signatures, after the bearer (defence in depth).
+  const identity = requireIdentityGuard(dependencies.config.security.request_signing, dependencies.requestIdentity)
+
   app.post("/trigger", async (request, reply) => {
     if (!auth.validate(request.headers.authorization)) return reply.code(401).send({ error: "Unauthorized" })
+    if (identity !== undefined) {
+      const verified = await identity.check(request, (request.body as { source_agent_id?: unknown } | null)?.source_agent_id)
+      if (!verified.ok) return reply.code(verified.status).send(verified.body)
+    }
 
     const parsed = triggerRequestSchema.safeParse(request.body)
     if (!parsed.success) {

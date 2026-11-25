@@ -20,7 +20,7 @@ For a single session without installing, run `claude --plugin-dir plugins/aibrid
 
 The plugin has one option, `profile`: the AIBridge profile name. Leave it empty to use the only existing profile. Resolution order is the `--profile` argument, then `AIBR_PROFILE`, then the only profile on disk; with several profiles and none selected, tools return a clear error.
 
-The MCP server reads `config.json` (own `agent_id`, `bridge.public_url`, `agents[]`) and the bearer token in `<data>/aibridge/<profile>/secrets/bearer_token` at call time. Tokens are never placed in tool output or errors.
+The MCP server reads `config.json` (own `agent_id`, `bridge.public_url`, `agents[]`) and the bearer token in `<data>/aibridge/<profile>/secrets/bearer_token` at call time (a per-peer token written by `aibr enroll join` in `secrets/peers/<id>.bearer_token` takes precedence). When the profile has a node key (created by pairing), every request is signed with it; see the [Pairing Guide](pairing.md). Tokens and key material are never placed in tool output or errors.
 
 Optional hardening: `aibr plugin install claude --deny-secrets` asks for confirmation and then prints deny rules for `~/.claude/settings.json` that keep Claude's file tools away from AIBridge secrets. It never writes them for you; plugins cannot ship permission rules.
 

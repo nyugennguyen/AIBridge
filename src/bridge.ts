@@ -1,4 +1,6 @@
+import { join } from "node:path"
 import { createRuntime, type RuntimeOptions } from "./ingress/runtime.js"
+import { FileApprovalLedger } from "./jobs/approval-ledger.js"
 import { createApp, type AppDependencies } from "./server/app.js"
 import type { FastifyInstance } from "fastify"
 import { ShadowIngressMirror } from "./server/shadow.js"
@@ -15,6 +17,9 @@ import {
   type OrchestrationNotificationConsumer,
 } from "./notifications/index.js"
 import type { CommandLog } from "./orchestration/coordinator/types.js"
+import { FilePeerStore } from "./pairing/peer-store.js"
+import { createRequestIdentityGuard } from "./pairing/verifier.js"
+import { createPairingAcceptor } from "./pairing/service.js"
 
 export interface BridgeOptions extends RuntimeOptions {
   /** Force shadow mirroring on regardless of `bridge.ingress_mode`. */
@@ -23,6 +28,8 @@ export interface BridgeOptions extends RuntimeOptions {
   readonly notificationStore?: NotificationStore
   readonly notificationBus?: NotificationBus
   readonly notificationConsumer?: OrchestrationNotificationConsumer
+  /** The profile being served; only used to print an exact `aibr approve` hint. */
+  readonly profileName?: string
 }
 
 export interface BridgeInstance {
@@ -89,7 +96,28 @@ export async function startBridge(options: BridgeOptions): Promise<BridgeInstanc
     options.notificationConsumer ??
     createOrchestrationNotificationConsumer(notificationBus)
 
+  // Phase 3 (ADR 0012): node identity for /trigger and /report, and the
+  // worker side of pairing. Both read `<stateDir>/identity/` per request, so a
+  // pairing or revocation made by `aibr enroll` takes effect without a restart.
+  // No /enroll in router mode (the router owns the listener) or on an
+  // orchestrator (it is the joining side).
+  const requestIdentity = createRequestIdentityGuard({
+    mode: runtime.config.security.request_signing ?? "off",
+    peers: new FilePeerStore(options.stateDir),
+  })
+  const pairing =
+    ingressMode === "engine" && runtime.config.role !== "orchestrator"
+      ? createPairingAcceptor({
+          config: runtime.config,
+          configPath: options.configPath,
+          stateDir: options.stateDir,
+          bearerToken: options.bearerToken,
+        })
+      : undefined
+
   const app = createApp({
+    requestIdentity,
+    ...(pairing !== undefined ? { pairing } : {}),
     config: runtime.config,
     bearerToken: options.bearerToken,
     // The operator credential authorizes user-kind `actor` claims (charter
@@ -102,6 +130,14 @@ export async function startBridge(options: BridgeOptions): Promise<BridgeInstanc
     callbackReporter: runtime.callbackReporter,
     taskGraphSyncer: runtime.taskGraphSyncer,
     monitorSession: runtime.monitorSession,
+    // Present only when `runtime.kind` is `claude`; the OpenCode client above
+    // is then an inert stand-in that is never contacted.
+    ...(runtime.claudeJobRunner ? { claudeJobRunner: runtime.claudeJobRunner } : {}),
+    ...(runtime.repoWorkspaces ? { repoWorkspaces: runtime.repoWorkspaces } : {}),
+    // Approval requests, operator decisions and kill-switch use (ADR 0013).
+    approvalLedger: new FileApprovalLedger(join(options.stateDir, "approvals.jsonl")),
+    reportTerminalJob: runtime.reportTerminalJob,
+    ...(options.profileName !== undefined ? { profileName: options.profileName } : {}),
     shadowMirror,
     orchestration: options.orchestration,
     notificationStore,

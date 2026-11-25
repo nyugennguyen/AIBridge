@@ -63,8 +63,12 @@ describe("install.sh — supervision units behind an opt-in flag", () => {
   })
 
   it("documents the flag, its root requirement, and the store provisioning in --help", async () => {
-    const s = await read()
-    const help = s.slice(s.indexOf("--help|-h)"), s.indexOf("--version)"))
+    // The help text now lives in a usage() heredoc, so assert on what --help
+    // actually prints rather than on a slice of the script source.
+    const { execFileSync } = await import("node:child_process")
+    const help = execFileSync("bash", [new URL("../../../scripts/install.sh", import.meta.url).pathname, "--help"], {
+      encoding: "utf8",
+    })
     expect(help).toContain("--with-units")
     expect(help).toMatch(/root/i)
     expect(help).toMatch(/ingress_outbox|init-store/i)

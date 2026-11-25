@@ -34,8 +34,10 @@ export class InMemoryJobStore implements JobStore {
 export function testConfig(): BridgeConfig {
   return {
     agent_id: "test-vps",
+    role: "worker",
     bridge: { host: "0.0.0.0", port: 8787, public_url: "http://test-vps.tailnet:8787", ingress_mode: "engine" },
     terminal: { backend: "tmux" },
+    runtime: { kind: "opencode" },
     opencode: { base_url: "http://127.0.0.1:4096", server_port: 4096, username: "opencode", password_env: "OPENCODE_SERVER_PASSWORD" },
     security: {
       auth_mode: "bearer-token",
@@ -139,6 +141,14 @@ export interface BuildTestAppOverrides {
    * compatibility suite passes one to prove the contract is identical either way.
    */
   orchestration?: AppDependencies["orchestration"]
+  /** The Claude job runner, for a config whose `runtime.kind` is `claude`. */
+  claudeJobRunner?: AppDependencies["claudeJobRunner"]
+  /** Phase 4/5 seams: repository pinning, approval ledger, reporting, same-host check. */
+  repoWorkspaces?: AppDependencies["repoWorkspaces"]
+  approvalLedger?: AppDependencies["approvalLedger"]
+  reportTerminalJob?: AppDependencies["reportTerminalJob"]
+  profileName?: string
+  localAddresses?: AppDependencies["localAddresses"]
 }
 
 export async function buildTestApp(overrides: BuildTestAppOverrides = {}) {
@@ -156,6 +166,12 @@ export async function buildTestApp(overrides: BuildTestAppOverrides = {}) {
     monitorSession: async () => undefined,
     taskGraphSyncer,
     ...(overrides.orchestration === undefined ? {} : { orchestration: overrides.orchestration }),
+    ...(overrides.claudeJobRunner === undefined ? {} : { claudeJobRunner: overrides.claudeJobRunner }),
+    ...(overrides.repoWorkspaces === undefined ? {} : { repoWorkspaces: overrides.repoWorkspaces }),
+    ...(overrides.approvalLedger === undefined ? {} : { approvalLedger: overrides.approvalLedger }),
+    ...(overrides.reportTerminalJob === undefined ? {} : { reportTerminalJob: overrides.reportTerminalJob }),
+    ...(overrides.profileName === undefined ? {} : { profileName: overrides.profileName }),
+    ...(overrides.localAddresses === undefined ? {} : { localAddresses: overrides.localAddresses }),
   })
   return { app, config, opencode, taskGraphSyncer, jobManager }
 }

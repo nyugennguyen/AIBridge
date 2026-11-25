@@ -3,6 +3,7 @@ import type { AgentDiscoveryDeps, AgentDiscoveryResult } from "./setup-step-widg
 import { resolveProfilePaths, type ProfilePaths } from "../host/paths.js"
 import { readConfig } from "../host/profile-store.js"
 import { planPreflight } from "../host/preflight.js"
+import { nodeRoleFromConfig, parseNodeRole, prereqsFor } from "../host/node-role.js"
 import { bridgeConfigSchema } from "../config/schemas.js"
 import type { BridgeConfig } from "../config/types.js"
 import { lstat, readFile, access } from "node:fs/promises"
@@ -127,7 +128,40 @@ export async function runVerify(profileName: string, deps?: VerifyDeps): Promise
     })
   }
 
-  // ── 2. Check Host Prerequisites (tmux, opencode, tailscale) ────────
+  // ── Config, read once up front ──────────────────────────────────────
+  //
+  // Read before the prerequisite check because what is required depends on the
+  // profile's role: an orchestrator needs neither tmux nor opencode, a Claude
+  // Code worker needs `claude` instead of `opencode`. The config checks are still
+  // reported in their usual place below.
+  const fileOps: VerifyFileOps = deps?.fileOps ?? {
+    readConfig: (p) => readConfig(p),
+    stat: defaultStat,
+    readFile: (p, enc) => readFile(p, enc),
+    pathExists: defaultPathExists,
+  }
+
+  let configData: Record<string, unknown> | null = null
+  let configReadError: unknown = null
+  try {
+    configData = await fileOps.readConfig(configPath)
+  } catch (err) {
+    configReadError = err
+  }
+
+  // A profile without `role`/`runtime` keys predates them and is worker + opencode.
+  const { role, runtime } = nodeRoleFromConfig(configData)
+  checks.push({
+    name: "node-role",
+    status: "pass",
+    message: `Node role: ${role}${runtime !== null ? ` (runtime: ${runtime})` : ""}`,
+    detail:
+      configData !== null && parseNodeRole(configData.role) !== null
+        ? undefined
+        : "No role in the profile; checking as a worker running OpenCode.",
+  })
+
+  // ── 2. Check Host Prerequisites (per role) ─────────────────────────
   let processRunner = deps?.processRunner
   let platformInspector = deps?.platformInspector
 
@@ -140,6 +174,7 @@ export async function runVerify(profileName: string, deps?: VerifyDeps): Promise
   const preflight = await planPreflight({
     platformInspector,
     processRunner,
+    prereqs: prereqsFor(role, runtime),
   })
 
   for (const check of preflight.checks) {
@@ -218,27 +253,18 @@ export async function runVerify(profileName: string, deps?: VerifyDeps): Promise
   }
 
   // ── 4. Check Config File & Schema ───────────────────────────────────
-  const fileOps: VerifyFileOps = deps?.fileOps ?? {
-    readConfig: (p) => readConfig(p),
-    stat: defaultStat,
-    readFile: (p, enc) => readFile(p, enc),
-    pathExists: defaultPathExists,
-  }
-
-  let configData: Record<string, unknown> | null = null
+  //
   // The parsed profile, carried forward so the secret checks below can read
   // `security.auth_mode` and `bridge.host` without a second schema parse: two
   // parses are two opinions about the same file, and only one of them is the one
   // that decided the checks are safe to run.
   let parsedConfig: BridgeConfig | null = null
-  try {
-    configData = await fileOps.readConfig(configPath)
-  } catch (err) {
+  if (configReadError !== null) {
     checks.push({
       name: "config-readable",
       status: "fail",
       message: `Failed to read config file: ${configPath}`,
-      detail: err instanceof Error ? err.message : String(err),
+      detail: configReadError instanceof Error ? configReadError.message : String(configReadError),
     })
   }
 
@@ -362,8 +388,11 @@ export async function runVerify(profileName: string, deps?: VerifyDeps): Promise
   }
   }
 
+  // Only an OpenCode worker runs `opencode serve`, so only it needs the password.
+  // A Claude Code worker or an orchestrator has none by construction, and
+  // reporting it missing would be a check that is always wrong for them.
   const ocPasswordPath = `${paths.secretsDir}/opencode_password`
-  try {
+  if (runtime === "opencode") try {
     const stat = await fileOps.stat(ocPasswordPath)
     if (stat.isSymbolicLink()) {
       checks.push({

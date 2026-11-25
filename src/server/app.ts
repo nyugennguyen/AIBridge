@@ -15,6 +15,13 @@ import { registerReportRoute } from "./routes/report.js"
 import { registerTriggerRoute } from "./routes/trigger.js"
 import { registerOrchestrationRoutes } from "./routes/orchestration.js"
 import type { ShadowIngressMirror } from "./shadow.js"
+import type { ClaudeJobRunner } from "../runtime/claude-job-runner.js"
+import { registerEnrollRoute } from "./routes/enroll.js"
+import type { RequestIdentityGuard } from "../pairing/verifier.js"
+import type { PairingAcceptor } from "../pairing/service.js"
+import type { RepoWorkspaceManager } from "../runtime/repo-workspace.js"
+import { InMemoryApprovalLedger, type ApprovalLedger } from "../jobs/approval-ledger.js"
+import { registerOperatorRoutes } from "./routes/operator.js"
 import type {
   NotificationBus,
   NotificationStore,
@@ -49,6 +56,29 @@ export interface AppDependencies {
   opencodeClient: OpencodeClient
   callbackReporter: CallbackReporter
   monitorSession: (job: JobRecord) => Promise<void>
+  /**
+   * Executes `/trigger` jobs when `config.runtime.kind` is `claude`. Absent on
+   * an OpenCode node; a Claude node without one answers 503 rather than
+   * falling back to OpenCode.
+   */
+  claudeJobRunner?: Pick<ClaudeJobRunner, "start" | "monitor"> & Partial<Pick<ClaudeJobRunner, "hasCapacity" | "stopAll">>
+  /**
+   * Resolves a trigger's `repo` + `ref` to a pinned sha (Phase 5). Absent: a
+   * trigger naming a `repo` is answered 503.
+   */
+  repoWorkspaces?: Pick<RepoWorkspaceManager, "resolveSha">
+  /**
+   * Audit log of approval requests, operator decisions and kill-switch use
+   * (ADR 0013). Absent: an in-memory ledger (tests); `startBridge` always
+   * supplies the file-backed one.
+   */
+  approvalLedger?: ApprovalLedger
+  /** Delivers the report of a job an operator ended (reject / expiry). Defaults to one built from `callbackReporter`. */
+  reportTerminalJob?: (job: JobRecord) => Promise<void>
+  /** The profile this bridge serves; only used to print an exact `aibr approve` hint. */
+  profileName?: string
+  /** This host's own addresses, for the operator endpoints' same-host check. Injectable for tests. */
+  localAddresses?: () => ReadonlySet<string>
   taskGraphSyncer: TaskGraphSyncer
   shadowMirror?: ShadowIngressMirror
   /**
@@ -74,14 +104,27 @@ export interface AppDependencies {
   readonly notificationStore?: NotificationStore
   readonly notificationBus?: NotificationBus
   readonly notificationConsumer?: OrchestrationNotificationConsumer
+  /**
+   * Phase 3 (ADR 0012): verifies ed25519 node signatures on `/trigger` and
+   * `/report`. Required when `security.request_signing` is not `off`; one
+   * instance is shared by both routes so they share one replay guard.
+   */
+  readonly requestIdentity?: RequestIdentityGuard
+  /** Serves `POST /enroll` (pairing) when present. */
+  readonly pairing?: PairingAcceptor
 }
 
 export function createApp(dependencies: AppDependencies): FastifyInstance {
   const app = Fastify({ bodyLimit: 1_048_576, logger: false })
+  // One ledger for the trigger route (approval requested) and the operator
+  // routes (decisions), so the chain is a single sequence.
+  if (dependencies.approvalLedger === undefined) dependencies = { ...dependencies, approvalLedger: new InMemoryApprovalLedger() }
   registerHealthRoute(app, dependencies)
   registerTriggerRoute(app, dependencies)
   registerJobsRoute(app, dependencies)
   registerReportRoute(app, dependencies)
   registerOrchestrationRoutes(app, dependencies)
+  registerEnrollRoute(app, dependencies)
+  registerOperatorRoutes(app, dependencies)
   return app
 }

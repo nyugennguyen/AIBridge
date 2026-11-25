@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest"
 import type { Prompter, SelectOption } from "../../../src/host/types.js"
 import {
   BunPrompter,
+  PromptAbortedError,
+  createStreamLineReader,
 } from "../../../src/host/runtime.js"
 import type {
   StreamWriter,
@@ -201,8 +203,152 @@ describe("Prompter", () => {
         "promptSecret requires a TTY",
       )
     })
+
+    it("defaults an empty confirm to 'y' only when defaultYes is requested", async () => {
+      const { output, ...prompter } = createTestPrompter(["", ""])
+
+      expect(await prompter.promptConfirm("Save?", { defaultYes: true })).toBe("y")
+      expect(await prompter.promptConfirm("Overwrite?")).toBe("n")
+      expect(output[0]).toBe("Save? (Y/n) ")
+      expect(output[1]).toBe("Overwrite? (y/n) ")
+    })
+
+    it("still honours an explicit 'n' when defaultYes is requested", async () => {
+      const { ...prompter } = createTestPrompter(["n", "yes"])
+
+      expect(await prompter.promptConfirm("Save?", { defaultYes: true })).toBe("n")
+      expect(await prompter.promptConfirm("Save?", { defaultYes: true })).toBe("y")
+    })
+  })
+
+  // ── C2: real no-echo secret entry ──────────────────────────────────────
+
+  describe("BunPrompter secret entry (raw mode)", () => {
+    it("handles Backspace and DEL by removing the last character", async () => {
+      const { output, ...prompter } = createTestPrompter([], {
+        chars: chunks(["a", "b", "\u007f", "c", "\b", "d", "\r"]),
+      })
+
+      const value = await prompter.promptSecret("Token:")
+
+      expect(value).toBe("ad")
+      expect(output.join("")).toContain("\b \b")
+    })
+
+    it("aborts on Ctrl-C with an error instead of returning a partial secret", async () => {
+      const { ...prompter } = createTestPrompter([], { chars: chunks(["s", "e", "\u0003", "x"]) })
+
+      await expect(prompter.promptSecret("Token:")).rejects.toThrow(PromptAbortedError)
+    })
+
+    it("aborts on Ctrl-D with nothing typed, submits on Ctrl-D after input", async () => {
+      const empty = createTestPrompter([], { chars: chunks(["\u0004"]) })
+      await expect(empty.promptSecret("Token:")).rejects.toThrow(/Ctrl-D/)
+
+      const typed = createTestPrompter([], { chars: chunks(["o", "k", "\u0004", "ignored"]) })
+      expect(await typed.promptSecret("Token:")).toBe("ok")
+    })
+
+    it("accepts a pasted secret arriving as one chunk and drops escape sequences", async () => {
+      const { output, ...prompter } = createTestPrompter([], {
+        chars: chunks(["\u001b[200~paste-me\u001b[201~", "\u001b[A", "!\r"]),
+      })
+
+      const value = await prompter.promptSecret("Token:")
+
+      expect(value).toBe("paste-me!")
+      expect(output.join("")).not.toContain("paste-me")
+    })
+
+    it("production path: turns raw mode on, never echoes the secret, restores the mode", async () => {
+      const modes: boolean[] = []
+      const { writer, output } = fakeStreamWriter()
+      const prompter = new BunPrompter({
+        reader: fakeChunkReader(["s3", "cr", "et\r", "next line\n"]),
+        writer,
+        isTTY: true,
+        setRawMode: (enabled) => void modes.push(enabled),
+      })
+
+      const value = await prompter.promptSecret("Password:")
+
+      expect(value).toBe("s3cret")
+      expect(modes).toEqual([true, false])
+      expect(output.join("")).not.toContain("s3cret")
+      expect(output.join("")).toBe("Password:******\n")
+    })
+
+    it("production path: restores the terminal mode even when the operator aborts", async () => {
+      const modes: boolean[] = []
+      const { writer } = fakeStreamWriter()
+      const prompter = new BunPrompter({
+        reader: fakeChunkReader(["ab\u0003"]),
+        writer,
+        isTTY: true,
+        setRawMode: (enabled) => void modes.push(enabled),
+      })
+
+      await expect(prompter.promptSecret("Password:")).rejects.toThrow(PromptAbortedError)
+      expect(modes).toEqual([true, false])
+    })
+
+    it("production path: refuses rather than echo when raw mode is unavailable", async () => {
+      const { writer } = fakeStreamWriter()
+      const prompter = new BunPrompter({
+        reader: fakeChunkReader(["secret\r"]),
+        writer,
+        isTTY: true,
+      })
+
+      await expect(prompter.promptSecret("Password:")).rejects.toThrow(/raw-mode/)
+    })
+
+    it("createStreamLineReader serves lines and raw chunks from one stream", async () => {
+      const encoder = new TextEncoder()
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(encoder.encode("first\nbuffered"))
+          controller.enqueue(encoder.encode("raw"))
+          controller.close()
+        },
+      })
+      const reader = createStreamLineReader(stream)
+
+      expect(await reader.readLine()).toBe("first")
+      expect(await reader.readChunk?.()).toBe("buffered")
+      expect(await reader.readChunk?.()).toBe("raw")
+      expect(await reader.readChunk?.()).toBeNull()
+    })
   })
 })
+
+/** Keystroke chunks for the injected `secretChars` seam. */
+function chunks(values: string[]): AsyncIterable<string> {
+  return {
+    [Symbol.asyncIterator]() {
+      let i = 0
+      return {
+        async next(): Promise<IteratorResult<string>> {
+          if (i < values.length) return { value: values[i++] as string, done: false }
+          return { value: undefined, done: true }
+        },
+      }
+    },
+  }
+}
+
+/** A LineReader whose `readChunk` yields the given raw chunks in order. */
+function fakeChunkReader(values: string[]): LineReader {
+  let i = 0
+  return {
+    async readLine(): Promise<string | null> {
+      return i < values.length ? (values[i++] ?? null) : null
+    },
+    async readChunk(): Promise<string | null> {
+      return i < values.length ? (values[i++] ?? null) : null
+    },
+  }
+}
 
 // ── Type compatibility ──────────────────────────────────────────────────
 
@@ -274,7 +420,7 @@ function createTestPrompter(
 ): {
   promptInput: (message: string) => Promise<string>
   promptSecret: (message: string) => Promise<string>
-  promptConfirm: (message: string) => Promise<string>
+  promptConfirm: (message: string, options?: { defaultYes?: boolean }) => Promise<string>
   promptSelect: (message: string, options: readonly SelectOption[]) => Promise<string>
   prompt: (options: import("../../../src/host/types.js").PromptOptions) => Promise<import("../../../src/host/types.js").PromptResult>
   output: string[]
@@ -289,7 +435,7 @@ function createTestPrompter(
   return {
     promptInput: (msg: string) => prompter.promptInput(msg),
     promptSecret: (msg: string) => prompter.promptSecret(msg),
-    promptConfirm: (msg: string) => prompter.promptConfirm(msg),
+    promptConfirm: (msg: string, o?: { defaultYes?: boolean }) => prompter.promptConfirm(msg, o),
     promptSelect: (msg: string, o: readonly SelectOption[]) => prompter.promptSelect(msg, o),
     prompt: (o: import("../../../src/host/types.js").PromptOptions) => prompter.prompt(o),
     output,

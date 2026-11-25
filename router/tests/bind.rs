@@ -520,3 +520,30 @@ fn an_ipv6_bind_host_is_bracketed() {
 
     assert_eq!(config.bind_address(), "[::1]:8787");
 }
+
+/// ADR 0012: the router does not verify node signatures, so a config that asks
+/// for them is refused at load instead of being admitted bearer-only.
+#[test]
+fn request_signing_is_refused_by_the_router() {
+    let scratch = TempDir::new("config-signing");
+    for mode in ["optional", "required"] {
+        let mut config = config_with_host(scratch.path(), "127.0.0.1");
+        config["security"]["request_signing"] = Value::String(mode.to_owned());
+        let error = aibr_router::config::RouterConfig::from_json(
+            &config.to_string(),
+            "a-token-for-this-test",
+            &scratch.path().join("config.json"),
+        )
+        .err()
+        .expect("request_signing must be refused by the router");
+        assert!(error.to_string().contains("request_signing"), "{error}");
+    }
+    let mut off = config_with_host(scratch.path(), "127.0.0.1");
+    off["security"]["request_signing"] = Value::String("off".to_owned());
+    assert!(aibr_router::config::RouterConfig::from_json(
+        &off.to_string(),
+        "a-token-for-this-test",
+        &scratch.path().join("config.json"),
+    )
+    .is_ok());
+}

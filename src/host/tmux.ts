@@ -5,9 +5,26 @@ import type { ProcessRunner, HttpProbe } from "./types.js"
 export interface TmuxProfile {
   readonly name: string
   readonly bridgePort: number
-  readonly opencodePort: number
+  /**
+   * The address the bridge binds (`bridge.host`, normally the Tailscale IP).
+   * `aibr status` must probe THIS address: the bridge deliberately does not
+   * listen on loopback, so probing 127.0.0.1 reported every correctly configured
+   * node as `bridge_unavailable`. Absent → 127.0.0.1 (legacy behaviour).
+   */
+  readonly bridgeHost?: string
+  /** Required for the OpenCode runtime; ignored (and usually absent) for Claude. */
+  readonly opencodePort?: number
   readonly sessionName: string
+  /**
+   * The profile's `runtime.kind`. Absent means `opencode`, the released
+   * behaviour. A Claude profile starts only the bridge window: there is no
+   * `opencode serve` to supervise.
+   */
+  readonly runtimeKind?: "opencode" | "claude"
 }
+
+/** Provider credentials the Claude Code child needs; forwarded to the bridge window via env, never argv. */
+const CLAUDE_PROVIDER_ENV_KEYS = ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"] as const
 
 export interface TmuxDeps {
   readonly processRunner: ProcessRunner
@@ -60,8 +77,16 @@ function buildOpencodeEnv(
 
 function buildBridgeEnv(
   env: Record<string, string | undefined>,
+  runtimeKind: "opencode" | "claude" = "opencode",
 ): Record<string, string> {
   const result: Record<string, string> = {}
+
+  if (runtimeKind === "claude") {
+    for (const key of CLAUDE_PROVIDER_ENV_KEYS) {
+      const value = env[key]
+      if (value !== undefined) result[key] = value
+    }
+  }
 
   const config = env.AIBRIDGE_CONFIG
   if (config !== undefined) {
@@ -90,6 +115,28 @@ export async function startProfile(
 ): Promise<StartProfileResult> {
   if (await sessionExists(deps.processRunner, profile.sessionName)) {
     return { kind: "already_running", sessionName: profile.sessionName }
+  }
+
+  if (profile.runtimeKind === "claude") {
+    // No `opencode` window: the bridge is the session's only window, and it
+    // spawns Claude Code per job.
+    const bridgeResult = await deps.processRunner.exec(
+      ["tmux", "new-session", "-d", "-s", profile.sessionName, "-n", "bridge",
+        "aibr", "serve", "--profile", profile.name],
+      { env: buildBridgeEnv(deps.env, "claude") },
+    )
+    if (bridgeResult.exitCode !== 0) {
+      return { kind: "tmux_error", sessionName: profile.sessionName, stderr: bridgeResult.stderr }
+    }
+    return { kind: "started", sessionName: profile.sessionName }
+  }
+
+  if (profile.opencodePort === undefined) {
+    return {
+      kind: "tmux_error",
+      sessionName: profile.sessionName,
+      stderr: "OpenCode runtime profile has no opencode.server_port",
+    }
   }
 
   const ocEnv = buildOpencodeEnv(deps.env, profile.opencodePort)
@@ -135,7 +182,8 @@ export async function statusProfile(
     return { kind: "session_missing", sessionName: profile.sessionName }
   }
 
-  const url = `http://127.0.0.1:${profile.bridgePort}/health`
+  const host = profile.bridgeHost ?? "127.0.0.1"
+  const url = `http://${host.includes(":") ? `[${host}]` : host}:${profile.bridgePort}/health`
   const probe = await deps.httpProbe.probe(url)
 
   if (probe.ok) {

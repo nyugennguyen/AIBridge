@@ -57,7 +57,8 @@ TARGETS=(
 #     bytes, byte-identical to the default. No win.
 #
 # RESOLUTION (M8.9 / M7-C6): Resolved via formal ADR 0008 §12 amendment.
-# The static musl bound is formally amended to <= 2,359,296 bytes (2.25 MiB),
+# The static musl bound is formally amended to <= 2,359,296 bytes (2.25 MiB)
+# (ADR 0008 §12), and later to <= 3,145,728 bytes (3.00 MiB, ADR 0008 §13),
 # preserving zero `NEEDED` shared libraries on musl Linux targets and full bundled
 # SQLite WAL/JSON1 support without sidecars or dynamic libc dependencies.
 export LIBSQLITE3_FLAGS="${LIBSQLITE3_FLAGS:-}"

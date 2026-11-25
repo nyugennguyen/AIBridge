@@ -39,7 +39,7 @@ fn main() -> ExitCode {
 /// admission router.
 ///
 /// WHY THE PARTITION EXISTS, and it is a size bound rather than taste. The
-/// router's release binary is gated at 2.25 MiB by
+/// router's release binary is gated at 3.00 MiB (ADR 0008 §13) by
 /// `.github/workflows/milestone-7.yml`, and the typify output for these thirteen
 /// families is tens of thousands of lines of validation and construction code
 /// for messages the router never receives. Compiling them into

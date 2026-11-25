@@ -23,6 +23,7 @@ import {
   type AgentOriginConfig,
 } from "./origin.js"
 import type { ReportCallback } from "./types.js"
+import type { RequestSigner } from "../pairing/signer.js"
 import {
   backoffDelayMs,
   exceedsMaxAttempts,
@@ -273,23 +274,30 @@ export class EgressOutboxStore {
     options?: {
       readonly fetcher?: (url: string, init?: RequestInit) => Promise<Response>
       readonly nowMs?: number
+      /** Phase 3: node-signature headers, minted per delivery attempt. */
+      readonly signer?: RequestSigner
     },
   ): Promise<void> {
     const fetcher = options?.fetcher ?? fetch
     const nowMs = options?.nowMs ?? Date.now()
 
     try {
+      const signature = options?.signer
+        ? await options.signer.headersFor("POST", row.destination_url, row.payload_json)
+        : {}
+      const hasSignature = Object.keys(signature).length > 0
       const response = await safeEgressFetch(
         fetcher,
         row.destination_url,
         {
           method: "POST",
-          ...(bearerToken === null
+          ...(bearerToken === null && !hasSignature
             ? {}
             : {
                 headers: {
-                  Authorization: `Bearer ${bearerToken}`,
+                  ...(bearerToken === null ? {} : { Authorization: `Bearer ${bearerToken}` }),
                   "Content-Type": "application/json",
+                  ...signature,
                 },
               }),
           body: row.payload_json,

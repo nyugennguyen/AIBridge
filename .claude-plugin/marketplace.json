@@ -1,0 +1,13 @@
+{
+  "name": "aibridge",
+  "description": "AIBridge plugins for Claude Code.",
+  "owner": { "name": "AIBridge" },
+  "plugins": [
+    {
+      "name": "aibridge",
+      "source": "./plugins/aibridge",
+      "description": "Use Claude Code as the orchestrator that dispatches work to remote AIBridge worker nodes.",
+      "version": "3.0.0"
+    }
+  ]
+}

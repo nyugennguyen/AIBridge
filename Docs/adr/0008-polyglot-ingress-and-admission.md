@@ -598,3 +598,37 @@ the router's five build targets in addition to the npm package.
    - *Dynamic SQLite linkage on Linux distros:* While reducing binary size to ~1.1 MiB on glibc targets, dynamic linking on musl targets violates the zero `NEEDED` standalone requirement, making deployment dependent on host libc/SQLite versions.
    - *Outbox store sidecar:* Rejected as it reintroduces multiple process coordination complexity, contrary to ADR 0008 §2.1.
 3. Retaining bundled static SQLite ensures zero `NEEDED` shared libraries on musl, guarantees exact SQLite WAL and JSON1 compatibility, and leaves binary size comfortably within the 32 MiB `MemoryMax` boundary (+5.9% difference vs original budget).
+
+## 13. Second Amendment: Router Binary Bound After the Claude Runtime Config Contract (2026-11-25)
+
+**Context:** The router parses `config.json` as the generated `contracts::BridgeConfig`. The type is generated from `bridgeConfigSchema` with `deny_unknown_fields`, which is how §2.3 makes the router strictly stricter than the engine. The Claude Code runtime work added these keys to that schema:
+- `role` and `runtime`
+- `capability_profiles` (allow/deny/pre/post/script/budget fields)
+- `claude`
+- `repositories`
+- `limits`
+- `security.request_signing`
+- `security.approval_from_loopback_only`
+
+It also added `repo`/`ref` to the trigger request, `sha`/`approve_hint`/`runtime_session_id` to the trigger response, and `script_results` to the report callback.
+
+typify turns these into 29 new types with serde, validation and builder code. The router reads none of their contents, but it must still recognise them in order to reject everything else. The router grew as follows:
+
+| Target | Before (`main` @ 9402bd9) | After | Delta |
+|---|---|---|---|
+| `x86_64-unknown-linux-musl` | 2,227,424 B | 2,801,680 B | +574,256 B |
+| `aarch64-unknown-linux-musl` | 2,089,904 B | 2,616,144 B | +526,240 B |
+
+`regress` is not the cause: it was already linked for the pre-existing patterns, and the change adds four more. Both binaries still have zero `NEEDED` libraries.
+
+**Decision:**
+1. Amend the static musl binary size bound from 2,359,296 bytes (2.25 MiB, §12) to **3,145,728 bytes (3.00 MiB)**. The worst target now sits 343,048 bytes (about 11%) below it.
+2. The bound's purpose is unchanged. §2.1 sizes the router against a 32 MiB systemd `MemoryMax`, and a 2.8 MB binary uses under 9% of that cap. The bound remains a regression alarm, enforced by `.github/workflows/milestone-7.yml`, and remains measured on the root `[profile.release]` (`opt-level = "z"`, `lto`, `codegen-units = 1`, `panic = "abort"`).
+
+**Alternative considered and deferred: an opaque "router view" of the config.** The contract generator could emit the engine-only blocks (`capability_profiles`, `repositories`, `claude`, `limits`) as opaque JSON values in the router partition, the way `IPC_CONTRACT_FILES` already keeps the IPC families out of the router. That would recover most of the growth. The cost is that the router would no longer reject unknown keys inside those blocks, which weakens the §2.3 "strictly stricter" property for exactly the operator-authored policy the Claude runtime depends on. Because a fail-closed parse is worth more here than about 0.5 MB of binary, the opaque view was not adopted.
+
+**Revisit when:**
+- the bound is crossed again, or
+- the router gains a reason to read capability profiles itself, which is not planned while it refuses `runtime.kind: "claude"` and `request_signing` (ADR 0012).
+
+Either way, re-measure before adding headroom; do not raise the number on its own.

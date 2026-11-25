@@ -307,8 +307,8 @@ describe("milestone-7 workflow — verification that can fail", () => {
     // the job, so every check reports AND the job still ends red.
     const workflow = await load()
 
-    const measureAt = workflow.indexOf("Measure binary size")
-    const enforceAt = workflow.indexOf("Enforce the 2 MiB binary bound")
+    const measureAt = workflow.indexOf("Measure router binary size")
+    const enforceAt = workflow.indexOf("Enforce the router binary size bound")
     const systemdAt = workflow.indexOf("Verify systemd unit files")
     const provisioningAt = workflow.indexOf("Exercise the provisioning contract")
 
@@ -325,6 +325,16 @@ describe("milestone-7 workflow — verification that can fail", () => {
     expect(measureStep).toContain("GITHUB_OUTPUT")
     // ...and the enforcing step must run even when an earlier step failed.
     expect(workflow.slice(enforceAt, enforceAt + 400)).toContain("if: always()")
+  })
+
+  it("gates at the bound ADR 0008 §13 records, and nowhere else", async () => {
+    // The number is a design decision (ADR 0008 §12, then §13), not a tunable:
+    // the workflow's output, comparison and message must all agree on it.
+    const workflow = await load()
+    const measureStep = workflow.slice(workflow.indexOf("Measure router binary size"), workflow.indexOf("Verify systemd unit files"))
+    expect(measureStep).toContain('echo "size_bound_bytes=3145728"')
+    expect(measureStep).toContain('if [ "$worst" -gt 3145728 ]')
+    expect(measureStep).not.toContain("2359296 ]")
   })
 
   it("says which checks genuinely cannot run in CI", async () => {

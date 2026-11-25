@@ -492,7 +492,11 @@ print_next_steps() {
       ;;
   esac
   echo ""
-  echo "Bridge binds Tailscale-only (never public Internet). opencode on 127.0.0.1 only."
+  if [ "$ROLE" != "orchestrator" ] && [ "$(worker_runtime_tool)" = "opencode" ]; then
+    echo "Bridge binds Tailscale-only (never public Internet). opencode on 127.0.0.1 only."
+  else
+    echo "Bridge binds Tailscale-only (never public Internet)."
+  fi
   echo "Private network via Tailscale — no public exposure."
 }
 

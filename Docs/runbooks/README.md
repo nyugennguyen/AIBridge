@@ -11,3 +11,8 @@
 > - **Security Model:** [`Docs/security/security-model.md`](../security/security-model.md)
 > - **CLI Reference:** [`Docs/reference/cli-reference.md`](../reference/cli-reference.md)
 > - **Documentation Hub:** [`Docs/README.md`](../README.md)
+
+## Runbooks kept here
+
+- [`claude-dev-staging.md`](claude-dev-staging.md) — operator runbook for a Claude Code orchestrator (dev) dispatching to a Claude Code worker (staging): install, pairing, signed requests, operator approval, kill switch, audit, rotation, capability profiles, troubleshooting.
+- [`tailscale-policy.example.hujson`](tailscale-policy.example.hujson) — Tailscale policy example for the `tag:aibr-dev` / `tag:aibr-staging` setup.

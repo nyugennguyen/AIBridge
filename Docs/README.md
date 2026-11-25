@@ -16,15 +16,19 @@ Docs/
 ├── architecture/
 │   └── current-state.md            # Canonical as-built architecture and trust boundaries
 ├── adr/
-│   └── README.md                   # Architecture Decision Records (ADRs 0001–0011)
+│   └── README.md                   # Architecture Decision Records (ADRs 0001–0012)
 ├── guides/
 │   ├── configuration.md            # Zod config schema, profile storage, and token rotation
 │   ├── development.md              # Build, test, typecheck, contract parity, and release gate
-│   └── integrations.md             # OpenCode, Claude Code, Codex, Herdr, and Tailscale
+│   ├── integrations.md             # OpenCode, Claude Code, Codex, Herdr, and Tailscale
+│   └── pairing.md                  # aibr enroll pairing and security.request_signing
 ├── operations/
 │   ├── deployment.md               # Tmux, macOS launchd, Linux systemd, and multi-node mesh
 │   ├── monitoring.md               # Health probes, diagnostics bundles, and queue telemetry
 │   └── troubleshooting.md          # Real triage ladder, HTTP error matrix, and recovery
+├── runbooks/
+│   ├── claude-dev-staging.md       # Operator runbook: Claude dev -> staging worker
+│   └── tailscale-policy.example.hujson  # Tailscale ACL example for dev/staging tags
 ├── security/
 │   └── security-model.md           # Inviolable security invariants and threat boundaries
 ├── reference/
@@ -38,21 +42,23 @@ Docs/
 ## 2. Navigating the Documentation
 
 ### Getting Started
-- [**Getting Started Guide**](getting-started.md) — Prerequisites, automated installation, 5-step interactive onboarding wizard, starting services, and verifying cross-host task triggers.
+- [**Getting Started Guide**](getting-started.md) — Prerequisites, automated installation, the `aibr setup` onboarding wizard, starting services, and verifying cross-host task triggers.
 
 ### Architecture
 - [**Current Architecture Guide**](architecture/current-state.md) — The authoritative description of the implemented system: components, trust boundaries, event stores, and polyglot ingress separation.
-- [**Architecture Decision Records (ADRs)**](adr/README.md) — Index of all 11 accepted and evaluated architectural decisions governing AIBridge.
+- [**Architecture Decision Records (ADRs)**](adr/README.md) — Index of all 12 accepted and evaluated architectural decisions governing AIBridge.
 
 ### User & Developer Guides
 - [**Configuration Guide**](guides/configuration.md) — Detailed reference for `config.json`, profile XDG paths, environment variables, and token management.
 - [**Developer Guide**](guides/development.md) — Contributor instructions for building, running tests, regenerating contracts, and validating documentation.
 - [**Integrations Guide**](guides/integrations.md) — Connecting with OpenCode, Claude Code, Codex, the Herdr presentation substrate, and Tailscale networking.
+- [**Pairing Guide**](guides/pairing.md) — Pair an orchestrator with a worker using a one-time code (`aibr enroll`) and require signed requests.
 
 ### Operations & Maintenance
 - [**Deployment & Operations Guide**](operations/deployment.md) — Managing nodes via tmux, systemd, launchd, and multi-node mesh topologies.
 - [**Monitoring & Diagnostics Guide**](operations/monitoring.md) — Probing node status, reading `/health`, generating redacted support bundles (`aibr bundle`), and tracking queues.
 - [**Operational Troubleshooting Guide**](operations/troubleshooting.md) — Step-by-step triage ladder, root-cause fixes for HTTP 400/401/403/409/503 errors, and warnings on non-existent commands.
+- [**Claude Dev → Staging Runbook**](runbooks/claude-dev-staging.md) — Install and pair a Claude worker and orchestrator, Tailscale ACLs, operator approval, kill switch, audit, key rotation, and capability profile design.
 
 ### Security
 - [**Security Model & Architecture**](security/security-model.md) — The 8 core security invariants, commit-before-202 WAL, constant-time authentication, and project filesystem containment.

@@ -80,6 +80,7 @@ Below are focused, schema-conforming partial examples illustrating each major se
 - **`auth_mode`** *(enum, default: `"bearer-token"`)*:
   - `"bearer-token"`: All protected routes require a matching `Authorization: Bearer <token>` header verified using constant-time comparison. Token is read from the secrets file (`~/.local/share/aibridge/<profile>/secrets/bearer_token`).
   - `"none"`: Disables token authentication. Allowed only when bound to a validated Tailscale CGNAT address.
+- **`request_signing`** *(enum `"off"` | `"optional"` | `"required"`, absent = `"off"`)*: ed25519 node signatures on `/trigger` and `/report`, checked in addition to the bearer. `required` refuses unsigned (401), unpinned or revoked keys (403) and replays, and binds `source_agent_id` to the signing key. New profiles from `aibr setup` get `required`. Not allowed with `ingress_mode: "router"`. Peers get pinned keys by pairing; see the [Pairing Guide](pairing.md) and [ADR 0012](../adr/0012-request-signing-and-pairing.md).
 - **`allowed_sources`** *(array of objects)*: Declares which remote agents are authorized to trigger tasks on this node.
   - `source_agent_id` *(string)*: Identifier of the remote calling agent.
   - `capabilities` *(array of strings)*: Work kinds this caller may request (e.g. `["testing", "code"]`).
@@ -200,7 +201,7 @@ The bearer token is saved in `~/.local/share/aibridge/<profile>/secrets/bearer_t
 
 1. Stop AIBridge on all participating nodes:
    ```bash
-   tmux kill-session -t aibridge-<profile>
+   aibr stop --profile <profile>
    ```
 2. Remove the existing secret file:
    ```bash

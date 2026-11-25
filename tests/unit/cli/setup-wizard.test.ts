@@ -4,17 +4,35 @@ import {
   generateBearerToken,
   parseBearerTokenChoice,
   parsePeerSelection,
+  projectPathProblem,
+  renderDiscoverySummary,
   resolveEnrolmentCapabilities,
   REACHABILITY_NOT_AUTHENTICATION,
   StepperFSM,
+  type SetupWizardDeps,
 } from "../../../src/cli/setup-wizard.js"
 import type { AgentDiscoveryResult, DiscoveredAgent } from "../../../src/cli/setup-step-widgets.js"
 import { bridgeConfigSchema } from "../../../src/config/schemas.js"
-import { generateLaunchdPlist, generateSystemdUnit, installDaemonUnit } from "../../../src/host/daemonizer.js"
+import {
+  daemonCommandArgs,
+  generateLaunchdPlist,
+  generateSystemdUnit,
+  installDaemonUnit,
+  loadDaemonUnit,
+  type DaemonUnitResult,
+} from "../../../src/host/daemonizer.js"
 import { mkdtemp, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import type { PlatformInspector, ProcessRunner, Prompter, PromptOptions, PromptResult, SelectOption } from "../../../src/host/types.js"
+import type {
+  ConfirmOptions,
+  PlatformInspector,
+  ProcessRunner,
+  Prompter,
+  PromptOptions,
+  PromptResult,
+  SelectOption,
+} from "../../../src/host/types.js"
 import type { SetupFileOps } from "../../../src/host/setup.js"
 import type { ProfilePaths } from "../../../src/host/paths.js"
 
@@ -22,6 +40,7 @@ class TestPrompter implements Prompter {
   public inputs: string[] = []
   public secrets: string[] = []
   public confirms: string[] = []
+  public confirmOptions: Array<ConfirmOptions | undefined> = []
 
   private readonly inputQueue: string[]
   private readonly secretQueue: string[]
@@ -51,8 +70,9 @@ class TestPrompter implements Prompter {
     return val
   }
 
-  async promptConfirm(message: string): Promise<string> {
+  async promptConfirm(message: string, options?: ConfirmOptions): Promise<string> {
     this.confirms.push(message)
+    this.confirmOptions.push(options)
     const val = this.confirmQueue.shift()
     if (val === undefined) throw new Error(`TestPrompter: no more confirms for: ${message}`)
     return val
@@ -79,6 +99,7 @@ class TestPrompter implements Prompter {
 class TestFileOps implements SetupFileOps {
   public writtenConfigs: Record<string, Record<string, unknown>> = {}
   public writtenSecrets: Record<string, string> = {}
+  public replacedSecrets: Record<string, string> = {}
   public ensuredDirs: ProfilePaths[] = []
   public existingConfigs: Record<string, Record<string, unknown>> = {}
 
@@ -88,6 +109,10 @@ class TestFileOps implements SetupFileOps {
 
   async writeSecret(path: string, value: string): Promise<void> {
     this.writtenSecrets[path] = value
+  }
+
+  async replaceSecret(path: string, value: string): Promise<void> {
+    this.replacedSecrets[path] = value
   }
 
   async ensureProfileDirs(paths: ProfilePaths): Promise<void> {
@@ -102,12 +127,18 @@ class TestFileOps implements SetupFileOps {
 function makeFakeProcessRunner(params?: {
   tmux?: boolean
   opencode?: boolean
+  claude?: boolean
   tailscale?: boolean
   tailscaleIp?: string
   tailscaleBackend?: string
+  gitToplevel?: string
+  calls?: string[]
 }): ProcessRunner {
   const tmux = params?.tmux ?? true
   const opencode = params?.opencode ?? true
+  // Absent by default, so the runtime is auto-detected as opencode and the
+  // runtime question is not asked: the queues below stay about what they test.
+  const claude = params?.claude ?? false
   const tailscale = params?.tailscale ?? true
   const tsIp = params?.tailscaleIp ?? "100.64.0.1"
   const tsBackend = params?.tailscaleBackend ?? "Running"
@@ -115,9 +146,16 @@ function makeFakeProcessRunner(params?: {
   return {
     async exec(argv) {
       const cmd = argv.join(" ")
+      params?.calls?.push(cmd)
       if (cmd === "which tmux") return { exitCode: tmux ? 0 : 1, stdout: "", stderr: "" }
       if (cmd === "which opencode") return { exitCode: opencode ? 0 : 1, stdout: "", stderr: "" }
+      if (cmd === "which claude") return { exitCode: claude ? 0 : 1, stdout: "", stderr: "" }
       if (cmd === "which tailscale") return { exitCode: tailscale ? 0 : 1, stdout: "", stderr: "" }
+      if (argv[0] === "git" && argv.includes("--show-toplevel")) {
+        return params?.gitToplevel !== undefined
+          ? { exitCode: 0, stdout: params.gitToplevel, stderr: "" }
+          : { exitCode: 128, stdout: "", stderr: "not a git repository" }
+      }
       if (cmd === "tailscale status --json") {
         return {
           exitCode: 0,
@@ -139,175 +177,173 @@ function makePlatformInspector(): PlatformInspector {
   }
 }
 
-describe("runSetupWizard", () => {
-  const env = { HOME: "/mock/home" }
+/**
+ * A daemon installer that records its calls and writes nothing. Injected into
+ * every wizard run here so no test can write into the real ~/Library/LaunchAgents.
+ */
+function fakeDaemon(): {
+  installDaemon: NonNullable<SetupWizardDeps["installDaemon"]>
+  loadDaemon: NonNullable<SetupWizardDeps["loadDaemon"]>
+  installs: Array<Parameters<typeof installDaemonUnit>[0]>
+  loads: number
+} {
+  const record = {
+    installs: [] as Array<Parameters<typeof installDaemonUnit>[0]>,
+    loads: 0,
+  }
+  return {
+    get installs() {
+      return record.installs
+    },
+    get loads() {
+      return record.loads
+    },
+    installDaemon: async (options): Promise<DaemonUnitResult> => {
+      record.installs.push(options)
+      const unitPath = "/mock/home/Library/LaunchAgents/com.aibridge.daemon.plist"
+      return {
+        platform: "darwin",
+        installed: true,
+        unitPath,
+        command: `launchctl bootstrap gui/501 ${unitPath}`,
+        stopCommand: `launchctl bootout gui/501 ${unitPath}`,
+        message: "fake",
+      }
+    },
+    loadDaemon: async () => {
+      record.loads++
+      return { platform: "darwin", loaded: true, message: "fake" }
+    },
+  }
+}
 
+const HOME = "/mock/home"
+const BEARER = (profile: string) => `${HOME}/.local/share/aibridge/${profile}/secrets/bearer_token`
+const OC_PASSWORD = (profile: string) => `${HOME}/.local/share/aibridge/${profile}/secrets/opencode_password`
+const CONFIG = (profile: string) => `${HOME}/.config/aibridge/${profile}/config.json`
+
+/** Run the wizard with test defaults; anything in `overrides` wins. */
+async function runWizard(
+  queues: { inputs?: string[]; secrets?: string[]; confirms?: string[] },
+  overrides?: Partial<SetupWizardDeps> & { fileOps?: TestFileOps },
+) {
+  const fileOps = overrides?.fileOps ?? new TestFileOps()
+  const prompter = new TestPrompter(queues)
+  const daemon = fakeDaemon()
+  const output: string[] = []
+  const outcome = await runSetupWizard({
+    platformInspector: makePlatformInspector(),
+    processRunner: makeFakeProcessRunner(),
+    env: { HOME },
+    cwd: "/mock/work/repo",
+    discoverAgents: async () => ({ agents: [], peersFound: 0, reachableCount: 0, enrolledCount: 0 }),
+    installDaemon: daemon.installDaemon,
+    loadDaemon: daemon.loadDaemon,
+    write: (text) => void output.push(text),
+    ...overrides,
+    prompter,
+    fileOps,
+  })
+  return { outcome, fileOps, prompter, daemon, output: output.join("") }
+}
+
+describe("runSetupWizard", () => {
   it("completes full setup generating a new bearer token", async () => {
-    const fileOps = new TestFileOps()
-    const prompter = new TestPrompter({
+    const { outcome, fileOps } = await runWizard({
       inputs: [
         "dev", // profile name
-        "", // default config path
-        "y", // generate token?
+        "", // role -> worker
+        "y", // generate token
         "", // acknowledged token display
         "my-agent", // agent ID
         "/mock/path", // project path
-        "peer-agent", // peer ID
+        "peer-agent", // peer ID (manual: nothing discovered)
         "http://100.64.0.2:8787", // peer URL
-        "8787", // bridge port
-        "4096", // opencode port
       ],
-      secrets: [
-        "super-secret-oc", // opencode password
-      ],
+      secrets: ["super-secret-oc"], // opencode password
       confirms: [
         "y", // final save confirm
         "n", // do not start the daemon
       ],
     })
 
-    const outcome = await runSetupWizard({
-      platformInspector: makePlatformInspector(),
-      processRunner: makeFakeProcessRunner(),
-      prompter,
-      fileOps,
-      env,
-    })
-
     expect(outcome.kind).toBe("persisted")
     if (outcome.kind !== "persisted") return
     expect(outcome.profileName).toBe("dev")
-    expect(outcome.configPath).toBe("/mock/home/.config/aibridge/dev/config.json")
+    expect(outcome.configPath).toBe(CONFIG("dev"))
+    expect(outcome.role).toBe("worker")
+    expect(outcome.runtime).toBe("opencode")
+    expect(outcome.updated).toBe(false)
 
-    // Check secrets persisted
-    const bearerSecret = fileOps.writtenSecrets["/mock/home/.local/share/aibridge/dev/secrets/bearer_token"]
+    const bearerSecret = fileOps.writtenSecrets[BEARER("dev")]
     expect(bearerSecret).toBeDefined()
     expect(bearerSecret).toHaveLength(64) // 32 bytes in hex = 64 hex chars
+    expect(fileOps.writtenSecrets[OC_PASSWORD("dev")]).toBe("super-secret-oc")
 
-    const ocSecret = fileOps.writtenSecrets["/mock/home/.local/share/aibridge/dev/secrets/opencode_password"]
-    expect(ocSecret).toBe("super-secret-oc")
-
-    // Check config persisted
-    const savedConfig = fileOps.writtenConfigs["/mock/home/.config/aibridge/dev/config.json"]
+    const savedConfig = fileOps.writtenConfigs[CONFIG("dev")]
     expect(savedConfig).toBeDefined()
-    expect(savedConfig.agent_id).toBe("my-agent")
+    expect(savedConfig?.agent_id).toBe("my-agent")
+    expect(savedConfig?.role).toBe("worker")
+    expect(savedConfig?.runtime).toEqual({ kind: "opencode" })
+    // Ports were not asked (no --advanced): the defaults are written.
+    expect(savedConfig?.bridge).toMatchObject({ port: 8787 })
+    expect(savedConfig?.opencode).toMatchObject({ server_port: 4096 })
+    // The extra keys do not break the current schema.
+    expect(() => bridgeConfigSchema.parse(savedConfig)).not.toThrow()
   })
 
   it("supports entering an existing bearer token when user chooses 'n'", async () => {
-    const fileOps = new TestFileOps()
-    const prompter = new TestPrompter({
-      inputs: [
-        "prod",
-        "",
-        "n", // do not generate token
-        "", // agent ID default
-        "", // project path default
-        "", // peer ID default
-        "", // peer URL default
-        "", // bridge port default
-        "", // oc port default
-      ],
+    const { outcome, fileOps } = await runWizard({
+      inputs: ["prod", "", "n", "", "/mock/path", "", ""],
       secrets: [
-        "existing-bearer-token-1234567890abcdef", // existing token
+        "existing-bearer-token-1234567890abcdef", // pasted token
         "oc-password", // opencode password
       ],
-      confirms: [
-        "y", // save confirm
-        "n", // do not start the daemon
-      ],
-    })
-
-    const outcome = await runSetupWizard({
-      platformInspector: makePlatformInspector(),
-      processRunner: makeFakeProcessRunner(),
-      prompter,
-      fileOps,
-      env,
+      confirms: ["y", "n"],
     })
 
     expect(outcome.kind).toBe("persisted")
-    expect(fileOps.writtenSecrets["/mock/home/.local/share/aibridge/prod/secrets/bearer_token"]).toBe(
-      "existing-bearer-token-1234567890abcdef",
-    )
+    expect(fileOps.writtenSecrets[BEARER("prod")]).toBe("existing-bearer-token-1234567890abcdef")
   })
 
-  it("supports custom config file path", async () => {
-    const fileOps = new TestFileOps()
+  it("does not ask for the config path, and honours --config when given", async () => {
     const customPath = "/custom/dir/my-aibridge.json"
-    const prompter = new TestPrompter({
-      inputs: [
-        "dev",
-        customPath, // custom config path
-        "y",
-        "",
-        "",
-        "",
-        "",
-        "",
-        "",
-        "",
-      ],
-      secrets: [
-        "oc-pw",
-      ],
-      confirms: [
-        "y",
-        "n", // do not start the daemon
-      ],
-    })
-
-    const outcome = await runSetupWizard({
-      platformInspector: makePlatformInspector(),
-      processRunner: makeFakeProcessRunner(),
-      prompter,
-      fileOps,
-      env,
-    })
+    const { outcome, fileOps, prompter } = await runWizard(
+      {
+        inputs: ["dev", "", "y", "", "", "/mock/path", "", ""],
+        secrets: ["oc-pw"],
+        confirms: ["", "n"],
+      },
+      { configPath: customPath },
+    )
 
     expect(outcome.kind).toBe("persisted")
     if (outcome.kind !== "persisted") return
     expect(outcome.configPath).toBe(customPath)
     expect(fileOps.writtenConfigs[customPath]).toBeDefined()
+    expect(prompter.inputs.some((label) => label.includes("config file path"))).toBe(false)
   })
 
-  it("declines when existing profile overwrite is declined", async () => {
+  it("declines when the operator answers no to updating an existing profile", async () => {
     const fileOps = new TestFileOps()
-    const configPath = "/mock/home/.config/aibridge/dev/config.json"
-    fileOps.existingConfigs[configPath] = { agent_id: "old" }
+    fileOps.existingConfigs[CONFIG("dev")] = { agent_id: "old" }
 
-    const prompter = new TestPrompter({
-      inputs: [
-        "dev",
-        "",
-      ],
-      confirms: [
-        "n", // decline overwrite
-      ],
-    })
-
-    const outcome = await runSetupWizard({
-      platformInspector: makePlatformInspector(),
-      processRunner: makeFakeProcessRunner(),
-      prompter,
-      fileOps,
-      env,
-    })
+    const { outcome, prompter } = await runWizard(
+      { inputs: ["dev"], confirms: ["n"] },
+      { fileOps },
+    )
 
     expect(outcome.kind).toBe("declined")
+    expect(prompter.confirms[0]).toContain("Update existing profile?")
+    expect(prompter.confirmOptions[0]).toEqual({ defaultYes: true })
+    expect(fileOps.writtenConfigs).toEqual({})
   })
 
   it("blocks when prereqs are missing", async () => {
-    const fileOps = new TestFileOps()
-    const prompter = new TestPrompter({
-      confirms: ["n"], // decline installing tmux
-    })
-    const outcome = await runSetupWizard({
-      platformInspector: makePlatformInspector(),
-      processRunner: makeFakeProcessRunner({ tmux: false }),
-      prompter,
-      fileOps,
-      env,
-    })
+    const { outcome } = await runWizard(
+      { inputs: ["", ""], confirms: ["n"] }, // profile, role; decline installing tmux
+      { processRunner: makeFakeProcessRunner({ tmux: false }) },
+    )
 
     expect(outcome.kind).toBe("blocked")
     if (outcome.kind !== "blocked") return
@@ -315,16 +351,10 @@ describe("runSetupWizard", () => {
   })
 
   it("blocks when Tailscale is inactive", async () => {
-    const fileOps = new TestFileOps()
-    const prompter = new TestPrompter()
-
-    const outcome = await runSetupWizard({
-      platformInspector: makePlatformInspector(),
-      processRunner: makeFakeProcessRunner({ tailscaleBackend: "Stopped" }),
-      prompter,
-      fileOps,
-      env,
-    })
+    const { outcome } = await runWizard(
+      { inputs: ["", ""] },
+      { processRunner: makeFakeProcessRunner({ tailscaleBackend: "Stopped" }) },
+    )
 
     expect(outcome.kind).toBe("blocked")
     if (outcome.kind !== "blocked") return
@@ -332,32 +362,530 @@ describe("runSetupWizard", () => {
   })
 })
 
-describe("bearer authentication mode", () => {
-  const env = { HOME: "/mock/home" }
+// ── M3: the final save defaults to yes ─────────────────────────────────
 
+describe("save confirmation (M3)", () => {
+  const queues = (save: string) => ({
+    inputs: ["dev", "", "", "", "", "/mock/path", "", ""],
+    secrets: ["oc"],
+    confirms: [save, "n"],
+  })
+
+  it("saves on Enter: the final confirm is default-yes", async () => {
+    const { outcome, prompter } = await runWizard(queues(""))
+
+    expect(outcome.kind).toBe("persisted")
+    const saveIndex = prompter.confirms.findIndex((label) => label.startsWith("Save configuration"))
+    expect(prompter.confirmOptions[saveIndex]).toEqual({ defaultYes: true })
+  })
+
+  it("still declines on an explicit 'n'", async () => {
+    const { outcome, fileOps } = await runWizard(queues("n"))
+
+    expect(outcome.kind).toBe("declined")
+    expect(fileOps.writtenConfigs).toEqual({})
+  })
+
+  it("keeps the daemon start an explicit opt-in", async () => {
+    const { outcome, daemon } = await runWizard({ ...queues(""), confirms: ["", ""] })
+
+    expect(outcome.kind).toBe("persisted")
+    if (outcome.kind !== "persisted") return
+    expect(outcome.daemon?.started).toBe(false)
+    expect(daemon.loads).toBe(0)
+  })
+})
+
+// ── C3: re-running setup updates, it does not rotate ───────────────────
+
+describe("re-running setup on an existing profile (C3)", () => {
+  const existingConfig = {
+    agent_id: "dev-main",
+    role: "worker",
+    runtime: { kind: "opencode" },
+    bridge: { host: "100.64.0.1", port: 9797, public_url: "http://myhost.ts.net:9797", ingress_mode: "engine" },
+    terminal: { backend: "tmux" },
+    opencode: {
+      base_url: "http://127.0.0.1:4545",
+      server_port: 4545,
+      username: "opencode",
+      password_env: "OPENCODE_SERVER_PASSWORD",
+    },
+    security: {
+      auth_mode: "bearer-token",
+      allowed_sources: [{ source_agent_id: "test-vps", capabilities: ["testing"], requires_plan_approval: [] }],
+    },
+    permissions: { default_response: "reject", allow_tools: ["read"], require_plan_approval_for_tools: ["bash"] },
+    projects: [{ id: "app", path: "/srv/app", capabilities: ["testing"] }],
+    agents: [{ id: "test-vps", url: "http://100.64.0.9:8787", capabilities: ["testing"] }],
+    timeouts: { default_job_seconds: 900, callback_retry_attempts: 2 },
+    planning: { plan_annotator_enabled: false, require_approval_for: [] },
+  }
+
+  function existingProfile(): TestFileOps {
+    const fileOps = new TestFileOps()
+    fileOps.existingConfigs[CONFIG("dev")] = structuredClone(existingConfig)
+    return fileOps
+  }
+
+  const secretsExist = async (path: string) =>
+    path.endsWith("/bearer_token") || path.endsWith("/opencode_password")
+
+  it("keeps the bearer token and OpenCode password on Enter and writes no secret", async () => {
+    const { outcome, fileOps, prompter, output } = await runWizard(
+      {
+        inputs: [
+          "dev", // profile
+          "", // role -> current (worker)
+          "", // token -> KEEP (default on a re-run)
+          "", // agent id -> current
+          "", // project path -> current
+          "", // peers -> keep current
+        ],
+        secrets: [""], // OpenCode password -> keep
+        confirms: ["", "", "n"], // update (default yes), save (default yes), no daemon
+      },
+      { fileOps: existingProfile(), pathExists: secretsExist },
+    )
+
+    expect(outcome.kind).toBe("persisted")
+    if (outcome.kind !== "persisted") return
+    expect(outcome.updated).toBe(true)
+    // THE C3 GATE: the secret files are untouched.
+    expect(fileOps.writtenSecrets).toEqual({})
+    expect(fileOps.replacedSecrets).toEqual({})
+    expect(prompter.inputs[2]).toContain("[K]eep existing (default)")
+    expect(prompter.inputs[2]).toContain("peers using the old token will get 401")
+    expect(prompter.secrets[0]).toContain("Enter = keep the existing one")
+    expect(output).toContain("Keeping the existing bearer token")
+  })
+
+  it("offers every existing value as the default and preserves what it does not ask about", async () => {
+    const { fileOps, prompter } = await runWizard(
+      { inputs: ["dev", "", "", "", "", ""], secrets: [""], confirms: ["", "", "n"] },
+      { fileOps: existingProfile(), pathExists: secretsExist },
+    )
+
+    expect(prompter.inputs).toContain("Enter agent ID [dev-main]:")
+    expect(prompter.inputs).toContain("Enter project path [/srv/app]:")
+    expect(prompter.inputs.at(-1)).toContain("Enter = keep current peers (test-vps)")
+
+    const saved = fileOps.writtenConfigs[CONFIG("dev")]!
+    expect(saved.agent_id).toBe("dev-main")
+    // Ports are kept, not reset to 8787/4096.
+    expect(saved.bridge).toMatchObject({ port: 9797, ingress_mode: "engine" })
+    expect(saved.opencode).toMatchObject({ server_port: 4545 })
+    // The enrolled peer survives in both arrays.
+    expect(saved.agents).toEqual(existingConfig.agents)
+    expect((saved.security as { allowed_sources: unknown }).allowed_sources).toEqual(
+      existingConfig.security.allowed_sources,
+    )
+    // Keys the wizard does not author are preserved verbatim.
+    expect(saved.projects).toEqual(existingConfig.projects)
+    expect(saved.permissions).toEqual(existingConfig.permissions)
+    expect(saved.timeouts).toEqual(existingConfig.timeouts)
+    expect(saved.terminal).toEqual(existingConfig.terminal)
+    expect(() => bridgeConfigSchema.parse(saved)).not.toThrow()
+  })
+
+  it("rotates only on an explicit [G]enerate, replaces the secret, and warns about peers", async () => {
+    const { fileOps, prompter } = await runWizard(
+      { inputs: ["dev", "", "g", "", "", "", ""], secrets: [""], confirms: ["", "", "n"] },
+      { fileOps: existingProfile(), pathExists: secretsExist },
+    )
+
+    expect(fileOps.writtenSecrets).toEqual({})
+    expect(fileOps.replacedSecrets[BEARER("dev")]).toMatch(/^[0-9a-f]{64}$/)
+    expect(prompter.inputs[3]).toContain("REPLACES the existing token")
+    expect(prompter.inputs[3]).toContain("HTTP 401")
+  })
+
+  it("adds a newly enrolled peer next to the existing one instead of replacing it", async () => {
+    const alpha: DiscoveredAgent = {
+      ip: "100.64.0.4",
+      hostname: "alpha.ts.net",
+      os: "linux",
+      online: true,
+      bridgeUrl: "http://100.64.0.4:8787",
+      reachable: true,
+      agentId: "alpha-agent",
+      capabilities: ["deployment"],
+      opencodeReachable: true,
+      enrolled: false,
+    }
+    const { fileOps } = await runWizard(
+      { inputs: ["dev", "", "", "", "", "1", ""], secrets: [""], confirms: ["", "y", "", "n"] },
+      {
+        fileOps: existingProfile(),
+        pathExists: secretsExist,
+        discoverAgents: async () => ({ agents: [alpha], peersFound: 1, reachableCount: 1, enrolledCount: 0 }),
+      },
+    )
+
+    const saved = fileOps.writtenConfigs[CONFIG("dev")]!
+    expect((saved.agents as Array<{ id: string }>).map((a) => a.id)).toEqual(["test-vps", "alpha-agent"])
+    expect(
+      (saved.security as { allowed_sources: Array<{ source_agent_id: string }> }).allowed_sources.map(
+        (s) => s.source_agent_id,
+      ),
+    ).toEqual(["test-vps", "alpha-agent"])
+  })
+
+  it("removes every peer only on an explicit 'clear'", async () => {
+    const { fileOps } = await runWizard(
+      { inputs: ["dev", "", "", "", "", "clear"], secrets: [""], confirms: ["", "", "n"] },
+      { fileOps: existingProfile(), pathExists: secretsExist },
+    )
+
+    const saved = fileOps.writtenConfigs[CONFIG("dev")]!
+    expect(saved.agents).toEqual([])
+    expect((saved.security as { allowed_sources: unknown }).allowed_sources).toEqual([])
+  })
+
+  it("reads an existing token's choices fail-safe: only g/generate rotates", () => {
+    const existing = { hasExisting: true }
+    expect(parseBearerTokenChoice("", existing)).toBe("keep")
+    expect(parseBearerTokenChoice("k", existing)).toBe("keep")
+    expect(parseBearerTokenChoice("y", existing)).toBe("keep")
+    expect(parseBearerTokenChoice("whatever", existing)).toBe("keep")
+    expect(parseBearerTokenChoice("g", existing)).toBe("generate")
+    expect(parseBearerTokenChoice("Generate", existing)).toBe("generate")
+    expect(parseBearerTokenChoice("p", existing)).toBe("paste")
+    expect(parseBearerTokenChoice("none", existing)).toBe("none")
+  })
+})
+
+// ── M1: fewer, safer questions ─────────────────────────────────────────
+
+describe("question defaults (M1)", () => {
+  it("defaults the project path to the git toplevel of the working directory", async () => {
+    const { fileOps, prompter } = await runWizard(
+      { inputs: ["dev", "", "", "", "", "", "", ""], secrets: ["oc"], confirms: ["", "n"] },
+      { processRunner: makeFakeProcessRunner({ gitToplevel: "/mock/work/repo-root" }) },
+    )
+
+    expect(prompter.inputs).toContain("Enter project path [/mock/work/repo-root]:")
+    const saved = fileOps.writtenConfigs[CONFIG("dev")]!
+    expect((saved.projects as Array<{ path: string }>)[0]?.path).toBe("/mock/work/repo-root")
+  })
+
+  it("falls back to the working directory outside a git repository", async () => {
+    const { prompter } = await runWizard({
+      inputs: ["dev", "", "", "", "", "", "", ""],
+      secrets: ["oc"],
+      confirms: ["", "n"],
+    })
+
+    expect(prompter.inputs).toContain("Enter project path [/mock/work/repo]:")
+  })
+
+  it("refuses $HOME, / and ancestors of $HOME, then accepts a project directory", async () => {
+    const { fileOps, output } = await runWizard({
+      inputs: ["dev", "", "", "", "", HOME, "/", "/mock", "/mock/home/code/app", "", ""],
+      secrets: ["oc"],
+      confirms: ["", "n"],
+    })
+
+    expect(output).toContain("is your home directory")
+    expect(output).toContain("filesystem root")
+    expect(output).toContain("contains your home directory")
+    const saved = fileOps.writtenConfigs[CONFIG("dev")]!
+    expect((saved.projects as Array<{ path: string }>)[0]?.path).toBe("/mock/home/code/app")
+  })
+
+  it("does not offer $HOME as the default when setup runs from the home directory", async () => {
+    const { prompter } = await runWizard(
+      {
+        inputs: ["dev", "", "", "", "", "", "/mock/home/code/app", "", ""],
+        secrets: ["oc"],
+        confirms: ["", "n"],
+      },
+      { cwd: HOME },
+    )
+
+    expect(prompter.inputs).toContain(
+      "Enter project path (a project directory, not your home directory):",
+    )
+  })
+
+  it("projectPathProblem accepts a subdirectory of $HOME and rejects relative paths", () => {
+    expect(projectPathProblem("/mock/home/src/app", HOME)).toBeNull()
+    expect(projectPathProblem("/mock/home/", HOME)).toContain("home directory")
+    expect(projectPathProblem("relative/dir", HOME)).toContain("not an absolute path")
+  })
+
+  it("generates a random OpenCode password on Enter", async () => {
+    const { fileOps, prompter, output } = await runWizard({
+      inputs: ["dev", "", "", "", "", "/mock/path", "", ""],
+      secrets: [""],
+      confirms: ["", "n"],
+    })
+
+    expect(prompter.secrets[0]).toContain("Enter = generate a random one")
+    const generated = fileOps.writtenSecrets[OC_PASSWORD("dev")]
+    expect(generated).toMatch(/^[A-Za-z0-9_-]{32}$/)
+    expect(output).toContain("Generated a random OpenCode password")
+    expect(output).not.toContain(generated!)
+  })
+
+  it("asks for ports only with --advanced", async () => {
+    const plain = await runWizard({
+      inputs: ["dev", "", "", "", "", "/mock/path", "", ""],
+      secrets: ["oc"],
+      confirms: ["", "n"],
+    })
+    expect(plain.prompter.inputs.some((label) => label.includes("port"))).toBe(false)
+
+    const advanced = await runWizard(
+      {
+        inputs: ["dev", "", "", "", "", "/mock/path", "", "", "9000", "5000"],
+        secrets: ["oc"],
+        confirms: ["", "n"],
+      },
+      { advanced: true },
+    )
+    expect(advanced.prompter.inputs).toContain("Enter bridge port [8787]:")
+    expect(advanced.prompter.inputs).toContain("Enter OpenCode server port [4096]:")
+    const saved = advanced.fileOps.writtenConfigs[CONFIG("dev")]!
+    expect(saved.bridge).toMatchObject({ port: 9000, public_url: "http://myhost.ts.net:9000" })
+    expect(saved.opencode).toMatchObject({ server_port: 5000, base_url: "http://127.0.0.1:5000" })
+  })
+})
+
+// ── Roles and runtimes ─────────────────────────────────────────────────
+
+describe("node role and runtime", () => {
+  it("orchestrator: checks only claude + tailscale, asks no OpenCode questions, writes no unit", async () => {
+    const calls: string[] = []
+    const { outcome, fileOps, prompter, daemon } = await runWizard(
+      {
+        inputs: ["orch", "orchestrator", "", "", "", ""],
+        confirms: [""],
+      },
+      { processRunner: makeFakeProcessRunner({ tmux: false, opencode: false, claude: true, calls }) },
+    )
+
+    expect(outcome.kind).toBe("persisted")
+    if (outcome.kind !== "persisted") return
+    expect(outcome.role).toBe("orchestrator")
+    expect(outcome.runtime).toBeNull()
+    expect(outcome.daemon).toBeUndefined()
+    expect(daemon.installs).toHaveLength(0)
+    // Preflight never looked for tmux or opencode.
+    expect(calls).toContain("which claude")
+    expect(calls).not.toContain("which tmux")
+    expect(calls).not.toContain("which opencode")
+    expect(prompter.secrets).toEqual([])
+
+    const saved = fileOps.writtenConfigs[CONFIG("orch")]!
+    expect(saved.role).toBe("orchestrator")
+    expect(saved).not.toHaveProperty("runtime")
+    // The opencode block is still written so the current schema parses.
+    expect(saved.opencode).toMatchObject({ server_port: 4096 })
+    expect(() => bridgeConfigSchema.parse(saved)).not.toThrow()
+    expect(fileOps.writtenSecrets[OC_PASSWORD("orch")]).toBeUndefined()
+    // No bridge runs on an orchestrator: no token prompt ("copy this to your
+    // peer" was wrong advice) and no project to allowlist.
+    expect(prompter.inputs.some((label) => label.startsWith("Bearer authentication"))).toBe(false)
+    expect(prompter.inputs.some((label) => label.includes("project path"))).toBe(false)
+    expect(saved.projects).toEqual([])
+  })
+
+  it("orchestrator: Step 4 offers pairing by code first and writes the paired worker", async () => {
+    const commits: string[] = []
+    const seen: { code: string; agentId: string }[] = []
+    const { outcome, fileOps, prompter, output } = await runWizard(
+      {
+        inputs: ["orch", "orchestrator", "", "aibr1-somecode", ""],
+        confirms: [""],
+      },
+      {
+        processRunner: makeFakeProcessRunner({ tmux: false, opencode: false, claude: true }),
+        pairWithCode: async ({ code, agentId }) => {
+          seen.push({ code, agentId })
+          return {
+            agent: { id: "staging", url: "http://100.64.0.9:8787", capabilities: ["investigate"] },
+            commit: async () => void commits.push("token"),
+          }
+        },
+      },
+    )
+    expect(outcome.kind).toBe("persisted")
+    expect(prompter.inputs.some((label) => label.startsWith("Pair with a worker using an enrolment code"))).toBe(true)
+    expect(seen).toEqual([{ code: "aibr1-somecode", agentId: "orch" }])
+    const saved = fileOps.writtenConfigs[CONFIG("orch")]!
+    expect(saved.agents).toEqual([{ id: "staging", url: "http://100.64.0.9:8787", capabilities: ["investigate"] }])
+    expect(commits).toEqual(["token"])
+    expect(output).toContain("Paired with staging")
+  })
+
+  it("orchestrator: a failed pairing falls back to discovery", async () => {
+    const { outcome, output } = await runWizard(
+      {
+        inputs: ["orch", "orchestrator", "", "aibr1-bad", "", ""],
+        confirms: [""],
+      },
+      {
+        processRunner: makeFakeProcessRunner({ tmux: false, opencode: false, claude: true }),
+        pairWithCode: async () => {
+          throw new Error("This pairing code has expired.")
+        },
+      },
+    )
+    expect(outcome.kind).toBe("persisted")
+    expect(output).toContain("Pairing failed: This pairing code has expired.")
+  })
+
+  it("new profiles require signed requests; a re-run keeps the profile's setting", async () => {
+    const fresh = await runWizard({ inputs: ["dev", "", "", "", "", "/mock/path", "", ""], secrets: ["oc"], confirms: ["", "n"] })
+    expect((fresh.fileOps.writtenConfigs[CONFIG("dev")]!.security as Record<string, unknown>).request_signing).toBe("required")
+
+    const fileOps = new TestFileOps()
+    fileOps.existingConfigs[CONFIG("dev")] = {
+      ...structuredClone(fresh.fileOps.writtenConfigs[CONFIG("dev")]!),
+      security: { auth_mode: "bearer-token", allowed_sources: [] },
+    }
+    const rerun = await runWizard(
+      { inputs: ["dev", "", "", "", "", ""], secrets: [""], confirms: ["", "", "n"] },
+      { fileOps, pathExists: async (path) => path.endsWith("/bearer_token") || path.endsWith("/opencode_password") },
+    )
+    expect(rerun.outcome.kind).toBe("persisted")
+    expect(rerun.fileOps.writtenConfigs[CONFIG("dev")]!.security).not.toHaveProperty("request_signing")
+  })
+
+  it("worker on a Claude-only machine: auto-detects claude and is not blocked on opencode", async () => {
+    const { outcome, fileOps, prompter } = await runWizard(
+      { inputs: ["w", "", "", "", "", "/mock/path", "", ""], confirms: ["", "n"] },
+      { processRunner: makeFakeProcessRunner({ opencode: false, claude: true }) },
+    )
+
+    expect(outcome.kind).toBe("persisted")
+    const saved = fileOps.writtenConfigs[CONFIG("w")]!
+    expect(saved.runtime).toEqual({ kind: "claude" })
+    expect(prompter.secrets).toEqual([])
+    expect(prompter.inputs.some((label) => label.includes("Agent runtime"))).toBe(false)
+    // A new Claude worker must be usable without hand-editing JSON: without
+    // capability_profiles every /trigger is a 403 "Unknown capability profile".
+    expect(Object.keys(saved.capability_profiles as object)).toEqual(["investigate", "run-tests"])
+    const projects = saved.projects as Array<{ capabilities: string[] }>
+    expect(projects[0]!.capabilities).toEqual(["investigate", "run-tests"])
+    expect(bridgeConfigSchema.safeParse(saved).success).toBe(true)
+  })
+
+  it("asks for the runtime only when both are installed", async () => {
+    const { fileOps, prompter } = await runWizard(
+      { inputs: ["w", "", "claude", "", "", "", "/mock/path", "", ""], confirms: ["", "n"] },
+      { processRunner: makeFakeProcessRunner({ claude: true }) },
+    )
+
+    expect(prompter.inputs[2]).toBe("Agent runtime for jobs on this node — opencode or claude [opencode]:")
+    expect(fileOps.writtenConfigs[CONFIG("w")]?.runtime).toEqual({ kind: "claude" })
+  })
+
+  it("both: requires tmux, the runtime, claude and tailscale", async () => {
+    const { outcome } = await runWizard(
+      { inputs: ["b", "both"], confirms: [] },
+      { processRunner: makeFakeProcessRunner({ claude: false, opencode: true }) },
+    )
+
+    expect(outcome.kind).toBe("blocked")
+    if (outcome.kind !== "blocked") return
+    expect(outcome.reason).toBe("Prerequisites missing: claude")
+  })
+
+  it("re-prompts on an unknown role", async () => {
+    const { outcome, output } = await runWizard({
+      inputs: ["dev", "manager", "w", "", "", "", "/mock/path", "", ""],
+      secrets: ["oc"],
+      confirms: ["", "n"],
+    })
+
+    expect(outcome.kind).toBe("persisted")
+    expect(output).toContain('"manager" is not a role')
+  })
+})
+
+// ── H1: the supervisor unit matches the ingress mode ───────────────────
+
+describe("supervisor unit (H1)", () => {
+  it("writes no unit when the operator does not ask to start the service", async () => {
+    const { outcome, daemon } = await runWizard({
+      inputs: ["dev", "", "", "", "", "/mock/path", "", ""],
+      secrets: ["oc"],
+      confirms: ["", "n"],
+    })
+
+    // Wave C: one run model. A unit nobody started would be a second way of
+    // running the node, so declining writes nothing and points at aibr start.
+    expect(daemon.installs).toEqual([])
+    if (outcome.kind !== "persisted") return
+    expect(outcome.daemon).toMatchObject({ installed: false, started: false, command: "aibr start --profile dev" })
+  })
+
+  it("installs the per-profile unit for the profile's ingress mode under the env HOME on a yes", async () => {
+    const { daemon } = await runWizard({
+      inputs: ["dev", "", "", "", "", "/mock/path", "", ""],
+      secrets: ["oc"],
+      confirms: ["", "y"],
+    })
+
+    expect(daemon.installs).toHaveLength(1)
+    expect(daemon.installs[0]).toMatchObject({
+      profile: "dev",
+      skipLoad: true,
+      ingressMode: "engine",
+      withOpencode: true,
+      homeDir: HOME,
+      logPath: `${HOME}/.local/state/aibridge/dev/logs/aibridge.log`,
+    })
+    expect(daemon.installs[0]?.environment).toMatchObject({ HOME, AIBR_SERVICE: "1" })
+  })
+
+  it("keeps the router drain path for a profile in router ingress mode", async () => {
+    const fileOps = new TestFileOps()
+    fileOps.existingConfigs[CONFIG("dev")] = {
+      agent_id: "dev",
+      bridge: { host: "100.64.0.1", port: 8787, public_url: "http://myhost.ts.net:8787", ingress_mode: "router" },
+    }
+    const { daemon } = await runWizard(
+      { inputs: ["dev", "", "", "", "", "/mock/path", "", ""], secrets: ["oc"], confirms: ["", "", "y"] },
+      { fileOps },
+    )
+
+    expect(daemon.installs[0]?.ingressMode).toBe("router")
+    expect(daemon.installs[0]?.withOpencode).toBe(false)
+  })
+
+  it("asks to start the bridge as the user service and loads it on an explicit yes", async () => {
+    const { outcome, daemon, prompter } = await runWizard({
+      inputs: ["dev", "", "", "", "", "/mock/path", "", ""],
+      secrets: ["oc"],
+      confirms: ["", "y"],
+    })
+
+    expect(prompter.confirms.at(-1)).toContain("aibr start --profile dev")
+    expect(daemon.loads).toBe(1)
+    if (outcome.kind !== "persisted") return
+    expect(outcome.daemon?.started).toBe(true)
+    expect(outcome.daemon?.stopCommand).toBe("aibr stop --profile dev")
+  })
+})
+
+describe("bearer authentication mode", () => {
   /**
    * Answers for a full run in `none` mode. Confirms are the risky ordering:
    * confirming the no-auth exposure comes FIRST, before the two that finish setup.
    */
   function noneModeQueues() {
     return {
-      inputs: ["open", "", "none", "", "", "", "", "", "", ""],
+      inputs: ["open", "", "none", "", "", "", "", ""],
       secrets: ["oc-password"],
       confirms: ["y", "y", "n"],
     }
   }
 
   it("persists auth_mode none and writes no bearer secret", async () => {
-    const fileOps = new TestFileOps()
-    const prompter = new TestPrompter(noneModeQueues())
-
-    const outcome = await runSetupWizard({
-      platformInspector: makePlatformInspector(),
-      processRunner: makeFakeProcessRunner(),
-      prompter,
-      fileOps,
-      env,
-    })
+    const { outcome, fileOps } = await runWizard(noneModeQueues())
 
     expect(outcome.kind).toBe("persisted")
     if (outcome.kind !== "persisted") return
@@ -365,29 +893,19 @@ describe("bearer authentication mode", () => {
     expect(saved).toBeDefined()
     expect(saved?.security).toMatchObject({ auth_mode: "none" })
     // The OpenCode password is still written -- only the bearer secret is skipped.
-    expect(fileOps.writtenSecrets["/mock/home/.local/share/aibridge/open/secrets/opencode_password"]).toBe("oc-password")
+    expect(fileOps.writtenSecrets[OC_PASSWORD("open")]).toBe("oc-password")
     expect(
       Object.keys(fileOps.writtenSecrets).some((k) => k.endsWith("/bearer_token")),
     ).toBe(false)
   })
 
   it("refuses no-auth on a bridge that is not bound to a CGNAT address", async () => {
-    const fileOps = new TestFileOps()
     // 10.0.0.0/8 is RFC1918, not 100.64.0.0/10: nothing network-level stands in
     // for the bearer token here, so the mode is not authorable.
-    const prompter = new TestPrompter({
-      inputs: ["open", "", "none"],
-      secrets: [],
-      confirms: [],
-    })
-
-    const outcome = await runSetupWizard({
-      platformInspector: makePlatformInspector(),
-      processRunner: makeFakeProcessRunner({ tailscaleIp: "10.0.0.5" }),
-      prompter,
-      fileOps,
-      env,
-    })
+    const { outcome, fileOps } = await runWizard(
+      { inputs: ["open", "", "none"] },
+      { processRunner: makeFakeProcessRunner({ tailscaleIp: "10.0.0.5" }) },
+    )
 
     expect(outcome.kind).toBe("blocked")
     if (outcome.kind !== "blocked") return
@@ -396,23 +914,12 @@ describe("bearer authentication mode", () => {
   })
 
   it("refuses no-auth when a stale bearer token secret already exists", async () => {
-    const fileOps = new TestFileOps()
-    // writeSecret is write-once and never re-read, so a leftover secret would be
+    // The bridge never reads a token in `none` mode, so a leftover secret would be
     // silently ignored while the operator believed it was protecting the node.
-    const prompter = new TestPrompter({
-      inputs: ["open", "", "none"],
-      secrets: [],
-      confirms: [],
-    })
-
-    const outcome = await runSetupWizard({
-      platformInspector: makePlatformInspector(),
-      processRunner: makeFakeProcessRunner(),
-      prompter,
-      fileOps,
-      env,
-      pathExists: async (path) => path.endsWith("/bearer_token"),
-    })
+    const { outcome } = await runWizard(
+      { inputs: ["open", "", "none"] },
+      { pathExists: async (path) => path.endsWith("/bearer_token") },
+    )
 
     expect(outcome.kind).toBe("blocked")
     if (outcome.kind !== "blocked") return
@@ -420,27 +927,17 @@ describe("bearer authentication mode", () => {
   })
 
   it("falls back to a generated token when the no-auth exposure is declined", async () => {
-    const fileOps = new TestFileOps()
-    const prompter = new TestPrompter({
-      inputs: ["open", "", "none", "", "", "", "", "", "", ""],
+    const { outcome, fileOps } = await runWizard({
+      inputs: ["open", "", "none", "", "", "", "", ""],
       secrets: ["oc-password"],
       confirms: ["n", "y", "n"], // decline no-auth, then save
-    })
-
-    const outcome = await runSetupWizard({
-      platformInspector: makePlatformInspector(),
-      processRunner: makeFakeProcessRunner(),
-      prompter,
-      fileOps,
-      env,
     })
 
     expect(outcome.kind).toBe("persisted")
     if (outcome.kind !== "persisted") return
     const saved = fileOps.writtenConfigs[outcome.configPath]
     expect(saved?.security).toMatchObject({ auth_mode: "bearer-token" })
-    const bearerSecret = fileOps.writtenSecrets["/mock/home/.local/share/aibridge/open/secrets/bearer_token"]
-    expect(bearerSecret).toHaveLength(64)
+    expect(fileOps.writtenSecrets[BEARER("open")]).toHaveLength(64)
   })
 
   it("still reads a bare 'n' as 'paste my own token'", () => {
@@ -456,6 +953,7 @@ describe("bearer authentication mode", () => {
     expect(parseBearerTokenChoice("NOAUTH")).toBe("none")
   })
 })
+
 
 describe("generateBearerToken", () => {
   it("generates a 64-character hex string", () => {
@@ -610,22 +1108,40 @@ describe("StepperFSM mouse hit-testing", () => {
 })
 
 describe("Service Daemonizer & Preflight Outbox", () => {
-  it("generates valid macOS launchd plist structure", () => {
-    const plist = generateLaunchdPlist({ profile: "dev" })
-    expect(plist).toContain("com.aibridge.daemon")
-    expect(plist).toContain("<string>worker</string>")
-    expect(plist).toContain("<string>--profile</string>")
+  it("runs `aibr serve` in the default engine ingress mode (launchd)", () => {
+    const plist = generateLaunchdPlist({ profile: "dev", homeDir: "/mock/home" })
+    // One label per profile, so two profiles on one machine never collide.
+    expect(plist).toContain("<string>com.aibridge.dev</string>")
+    expect(plist).toContain("<string>serve</string>")
+    expect(plist).not.toContain("<string>worker</string>")
+    expect(plist).not.toContain("--ipc-publish")
     expect(plist).toContain("<string>dev</string>")
-    expect(plist).toContain("<string>--ipc-publish</string>")
     expect(plist).toContain("<key>KeepAlive</key>")
+    expect(plist).toContain("/mock/home/Library/Logs/aibridge-dev.log")
   })
 
-  it("generates valid Linux systemd service structure", () => {
-    const unit = generateSystemdUnit({ profile: "prod" })
-    expect(unit).toContain("Description=AIBridge Distributed Mesh Agent Worker Daemon (prod)")
-    expect(unit).toContain("ExecStart=aibr worker --profile prod --ipc-publish")
-    expect(unit).toContain("Restart=always")
-    expect(unit).toContain("MemoryMax=64M")
+  it("keeps the router drain worker for router ingress mode (launchd)", () => {
+    const plist = generateLaunchdPlist({ profile: "dev", ingressMode: "router" })
+    expect(plist).toContain("<string>worker</string>")
+    expect(plist).toContain("<string>--ipc-publish</string>")
+  })
+
+  it("runs `aibr serve` in engine mode and the worker in router mode (systemd)", () => {
+    const engine = generateSystemdUnit({ profile: "prod" })
+    expect(engine).toContain("Description=AIBridge Bridge Server (prod)")
+    expect(engine).toContain("ExecStart=aibr serve --profile prod")
+    expect(engine).toContain("Restart=on-failure")
+    // A cgroup memory cap would kill every Claude Code job the bridge spawns.
+    expect(engine).not.toContain("MemoryMax")
+
+    const router = generateSystemdUnit({ profile: "prod", ingressMode: "router" })
+    expect(router).toContain("Description=AIBridge Ingress Drain Worker (prod)")
+    expect(router).toContain("ExecStart=aibr worker --profile prod --ipc-publish")
+  })
+
+  it("matches what `aibr start` runs in its bridge window", () => {
+    expect(daemonCommandArgs("dev")).toEqual(["serve", "--profile", "dev"])
+    expect(daemonCommandArgs("dev", "router")).toEqual(["worker", "--profile", "dev", "--ipc-publish"])
   })
 
   it("refuses a profile name it cannot represent safely in a unit file", () => {
@@ -649,50 +1165,64 @@ describe("Service Daemonizer & Preflight Outbox", () => {
     try {
       const res = await installDaemonUnit({ platform: "linux", profile: "dev", homeDir: tempDir })
       expect(res.installed).toBe(true)
-      expect(res.unitPath).toBe(join(tempDir, ".config", "systemd", "user", "aibridge.service"))
+      expect(res.unitPath).toBe(join(tempDir, ".config", "systemd", "user", "aibridge-dev.service"))
       // Writing is not starting: the unit exists on disk and nothing was enabled.
       const written = await readFile(res.unitPath!, "utf8")
-      expect(written).toContain("ExecStart=aibr worker --profile dev --ipc-publish")
+      expect(written).toContain("ExecStart=aibr serve --profile dev")
+      expect(res.stopCommand).toBe("systemctl --user disable --now aibridge-dev.service")
     } finally {
       await rm(tempDir, { recursive: true, force: true })
     }
   })
 
-  it("reports the unit as installed but not started when the operator declines", async () => {
-    const fileOps = new TestFileOps()
-    const prompter = new TestPrompter({
-      inputs: [
-        "dev", // profile name
-        "", // default config path
-        "y", // generate token?
-        "", // acknowledged token display
-        "my-agent", // agent ID
-        "/mock/path", // project path
-        "peer-agent", // peer ID
-        "http://100.64.0.2:8787", // peer URL
-        "8787", // bridge port
-        "4096", // opencode port
-      ],
-      secrets: ["super-secret-oc"], // opencode password
-      confirms: ["y", "n"], // save, then decline starting the daemon
+  it("shows launchctl bootstrap/bootout, not the deprecated load -w", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aibr-unit-test-"))
+    try {
+      const res = await installDaemonUnit({ platform: "darwin", profile: "dev", homeDir: tempDir, uid: 777 })
+      expect(res.command).toBe(`launchctl bootstrap gui/777 ${res.unitPath}`)
+      expect(res.stopCommand).toBe(`launchctl bootout gui/777 ${res.unitPath}`)
+      expect(res.command).not.toContain("load -w")
+    } finally {
+      await rm(tempDir, { recursive: true, force: true })
+    }
+  })
+
+  it("activates with bootout-then-bootstrap in the gui domain", async () => {
+    const calls: string[] = []
+    const result = await loadDaemonUnit({
+      platform: "darwin",
+      unitPath: "/u/com.aibridge.daemon.plist",
+      uid: 501,
+      exec: async (file, args) => {
+        calls.push([file, ...args].join(" "))
+        // The first bootout fails like it does when nothing is loaded yet.
+        if (args[0] === "bootout") throw new Error("Boot-out failed: 5: Input/output error")
+        return undefined
+      },
     })
 
-    const outcome = await runSetupWizard({
-      platformInspector: makePlatformInspector(),
-      processRunner: makeFakeProcessRunner(),
-      prompter,
-      fileOps,
-      env: { HOME: "/mock/home" },
+    expect(result.loaded).toBe(true)
+    expect(calls).toEqual([
+      "launchctl bootout gui/501 /u/com.aibridge.daemon.plist",
+      "launchctl bootstrap gui/501 /u/com.aibridge.daemon.plist",
+    ])
+  })
+
+  it("reports nothing installed and nothing started when the operator declines", async () => {
+    const { outcome } = await runWizard({
+      inputs: ["dev", "", "y", "", "my-agent", "/mock/path", "peer-agent", "http://100.64.0.2:8787"],
+      secrets: ["super-secret-oc"],
+      confirms: ["y", "n"], // save, then decline starting the service
     })
 
     expect(outcome.kind).toBe("persisted")
     if (outcome.kind !== "persisted") return
-    // A daemon that was never activated must not be reported as running: the
-    // unit is KeepAlive, and "created" alone reads as "it is up".
-    expect(outcome.daemon?.installed).toBe(true)
+    // A service that was never started must not be reported as running.
+    expect(outcome.daemon?.installed).toBe(false)
     expect(outcome.daemon?.started).toBe(false)
     expect(outcome.daemon?.error).toBeNull()
   })
+
 })
 
 // ── Step 4: discovery-driven, explicitly-enrolled peer config ────────────
@@ -742,6 +1272,11 @@ describe("Step 4 — discovery proposes, the operator enrols", () => {
    * The queues below are in the order the prompts fire, which is asserted
    * explicitly in "Step 4 prompt order" so a future reordering shows up as a
    * failure rather than as a mysterious shift in every other test.
+   *
+   * Input queue shape: profile, ROLE (was: config path, which is no longer
+   * asked), token choice, token acknowledgement, agent id, project path, then
+   * the peer step. Ports are no longer asked without `--advanced`, so the two
+   * trailing "" entries some queues still carry are simply left unconsumed.
    */
   async function runWithDiscovery(params: {
     discovery: AgentDiscoveryResult
@@ -761,12 +1296,16 @@ describe("Step 4 — discovery proposes, the operator enrols", () => {
     const output: string[] = []
     const discovered: Array<{ enrolledAgentIds: readonly string[] | undefined }> = []
 
+    const daemon = fakeDaemon()
     const outcome = await runSetupWizard({
       platformInspector: makePlatformInspector(),
       processRunner: makeFakeProcessRunner(),
       prompter,
       fileOps,
       env,
+      cwd: "/mock/work/repo",
+      installDaemon: daemon.installDaemon,
+      loadDaemon: daemon.loadDaemon,
       discoverAgents: async (discoveryDeps) => {
         discovered.push({ enrolledAgentIds: discoveryDeps?.enrolledAgentIds })
         // Honour the `enrolledAgentIds` the wizard passed, the way the real
@@ -1082,13 +1621,15 @@ describe("Step 4 — discovery proposes, the operator enrols", () => {
       inputs: ["", "", "", "", "", "", "", "", "", ""],
     })
 
+    // M2: the warning is one sentence now (it used to be ~90 words between two
+    // tables). What it must still say: reachable is not trusted, and discovery
+    // enrols nothing.
     const narration = output.join("")
     expect(narration).toContain(REACHABILITY_NOT_AUTHENTICATION)
     expect(narration).toContain("Reachability is not authentication")
-    expect(narration).toContain("not that it is trusted")
-    expect(narration).toContain("provides reachability, not identity, enrolment, project membership, or approval")
-    expect(narration).toContain("src/mesh/identity/")
-    expect(narration).toContain("Discovery enrols nothing")
+    expect(narration).toContain("is not verified or trusted")
+    expect(narration).toContain("discovery enrols nothing")
+    expect(REACHABILITY_NOT_AUTHENTICATION.split(". ")).toHaveLength(1)
   })
 
   it("never surfaces a tskey- enrollment credential from the discovery table", async () => {
@@ -1186,31 +1727,36 @@ describe("Step 4 — discovery proposes, the operator enrols", () => {
 
     expect(prompter.inputs).toEqual([
       "Enter profile name [default]:",
-      "Enter config file path [/mock/home/.config/aibridge/default/config.json]:",
+      // The config path is no longer asked (`--config` overrides it); the node
+      // role is asked in its place, before preflight.
+      expect.stringContaining("Node role"),
       expect.stringContaining("Bearer authentication"),
       expect.stringContaining("Press Enter to continue"),
       "Enter agent ID [default]:",
-      expect.stringContaining("Enter project path"),
+      "Enter project path [/mock/work/repo]:",
       "Enrol a peer by number, hostname, or IP (Enter = enrol nobody, m = enter a peer by hand):",
       "Agent ID for alpha.ts.net (Enter to enrol nobody):",
       expect.stringContaining("Capabilities to grant typed"),
-      "Enter bridge port [8787]:",
-      "Enter OpenCode server port [4096]:",
+      // No port prompts without --advanced.
     ])
     expect(prompter.confirms).toEqual([
       expect.stringContaining("Enrol typed at http://100.64.0.4:8787"),
       "Save configuration to \"/mock/home/.config/aibridge/default/config.json\"?",
-      // The activation command is platform-derived; only its shape is pinned.
-      expect.stringContaining("Start the daemon now?"),
+      // Step 5 offers the user service (aibr start), not a raw unit.
+      expect.stringContaining("Start the bridge now as a user service"),
     ])
   })
 
-  it("shows every discovered peer with its address, reachability, id and capabilities", async () => {
-    const { output } = await runWithDiscovery({
+  it("details AIBridge bridges and summarises every other tailnet device in one line (M2)", async () => {
+    // M2, deliberately changed: devices that did not answer /health as a bridge
+    // (charlie, a phone, a printer) are no longer listed one by one or offered as
+    // enrolment candidates. They are counted in a single line.
+    const { output, prompter } = await runWithDiscovery({
       discovery: discoveryResult([
         ALPHA,
         BRAVO,
         peer({ ip: "100.64.0.9", hostname: "charlie.ts.net", reachable: false, agentId: null, capabilities: [] }),
+        peer({ ip: "100.64.0.10", hostname: "iphone.ts.net", reachable: false, agentId: null, capabilities: [] }),
       ]),
       inputs: ["", "", "", "", "", "", "", "", "", ""],
     })
@@ -1221,9 +1767,32 @@ describe("Step 4 — discovery proposes, the operator enrols", () => {
     expect(narration).toContain("answered /health")
     expect(narration).toContain("agent_id: alpha-agent")
     expect(narration).toContain("advertises: deployment")
-    expect(narration).toContain("charlie.ts.net")
-    expect(narration).toContain("no answer on /health")
-    expect(narration).toContain("did not identify itself")
+    expect(narration).toContain("bravo.ts.net")
+    expect(narration).not.toContain("charlie.ts.net")
+    expect(narration).not.toContain("iphone.ts.net")
+    expect(narration).toContain("2 other devices on the tailnet did not answer as AIBridge bridges.")
+    // One block, not three: no separate table plus roster plus paragraph.
+    expect(narration.match(/Reachability is not authentication/g)).toHaveLength(1)
+    expect(narration).not.toContain("Tailnet Agent Discovery")
+    // The selection prompt numbers only the listed bridges.
+    expect(prompter.inputs).toContain(
+      "Enrol a peer by number, hostname, or IP (Enter = enrol nobody, m = enter a peer by hand):",
+    )
+  })
+
+  it("still lists a peer this profile already enrols even while it is down", () => {
+    const text = renderDiscoverySummary(
+      discoveryResult([
+        peer({ hostname: "known.ts.net", reachable: false, agentId: null, capabilities: [], enrolled: true }),
+        peer({ hostname: "stranger.ts.net", ip: "100.64.0.77", reachable: false, agentId: null, capabilities: [] }),
+      ]),
+    )
+
+    expect(text).toContain("1) known.ts.net")
+    expect(text).toContain("no answer on /health right now")
+    expect(text).toContain("already enrolled here")
+    expect(text).not.toContain("stranger.ts.net")
+    expect(text).toContain("1 other device on the tailnet did not answer as AIBridge bridges.")
   })
 })
 

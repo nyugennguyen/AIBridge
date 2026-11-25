@@ -26,6 +26,7 @@ import {
   resolveProfilePaths,
   type ProfilePaths,
 } from "./paths.js"
+import type { NodeRole, RuntimeKind } from "./node-role.js"
 
 // ── Outcome types ──────────────────────────────────────────────────────
 
@@ -43,6 +44,12 @@ export interface SetupPersisted {
    * looking for a process.
    */
   readonly daemon?: DaemonOutcome
+  /** The node role written to the profile; drives the "next steps" the CLI prints. */
+  readonly role?: NodeRole
+  /** The worker runtime written to the profile; `null` for an orchestrator. */
+  readonly runtime?: RuntimeKind | null
+  /** True when an existing profile was updated rather than created. */
+  readonly updated?: boolean
 }
 
 /** Why the wizard wrote a supervisor unit and why it did or did not start it. */
@@ -51,6 +58,8 @@ export interface DaemonOutcome {
   readonly unitPath: string | null
   /** The exact command that activates it, for an operator running it by hand. */
   readonly command: string | null
+  /** The exact command that stops it again. */
+  readonly stopCommand?: string | null
   readonly started: boolean
   /** Populated when writing or starting failed; the setup itself still succeeded. */
   readonly error: string | null
@@ -75,7 +84,14 @@ export * from "./daemonizer.js"
 
 export interface SetupFileOps {
   readonly writeConfig: (configPath: string, data: Record<string, unknown>) => Promise<void>
+  /** Write a NEW secret. The real implementation refuses to overwrite one. */
   readonly writeSecret: (secretPath: string, value: string) => Promise<void>
+  /**
+   * Replace an existing secret. Only used when the operator explicitly chose a
+   * new value for a secret that already exists (e.g. "[G]enerate new" on a
+   * re-run). Optional: callers without it fall back to `writeSecret`.
+   */
+  readonly replaceSecret?: (secretPath: string, value: string) => Promise<void>
   readonly ensureProfileDirs: (paths: ProfilePaths) => Promise<void>
   readonly readConfig: (configPath: string) => Promise<Record<string, unknown> | null>
 }

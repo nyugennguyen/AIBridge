@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "aibridge": {
+      "command": "aibr",
+      "args": ["mcp", "serve", "--profile", "${user_config.profile}"]
+    }
+  }
+}

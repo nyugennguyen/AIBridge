@@ -100,7 +100,7 @@ src/
 
 **Load the `debugging-aibr-v2` skill before debugging anything in this repo.** It records
 where the docs and the source disagree — commands the runbook documents that do not exist,
-`aibr bundle --preview` being broken, there being no log files, and why `aibr status` reporting
+`aibr bundle --preview` being broken, where the one log file is (`aibr logs`), and why `aibr status` reporting
 `healthy` proves almost nothing. Located at `.opencode/skills/debugging-aibr-v2/`
 (mirrored to `.claude/skills/` and `.agents/skills/`).
 
@@ -128,7 +128,7 @@ Environment variables:
   - `OPENCODE_PORT` — port for opencode serve (defaults to 4096; prompted by setup wizard)
 ## Operational
 
-- Process management: headless via `tmux` or interactive via Herdr workspace manager. `scripts/tmux-start.sh` starts background services for headless environments.
+- Process management: `aibr start` installs a per-profile user service (launchd `com.aibridge.<profile>` / systemd `aibridge-<profile>.service`) running `aibr serve`; `aibr start --foreground` runs the same in tmux for development; `aibr stop` stops both. Interactive operators may use the Herdr workspace manager. Logs: `<stateDir>/logs/aibridge.log` (`aibr logs -f`).
 - Terminal backend: selected via `terminal.backend` in config (`"tmux"` for headless VPS nodes, `"herdr"` for interactive operator workstations).
 - Presentation: `aibr-tui` is retired; `aibr tui` checks Herdr availability and launches/links the `aibr-manager` Herdr plugin.
 - Job state persisted as JSON files under `<stateDir>/jobs/` (by default `~/.local/state/aibridge/<profile>/jobs/` in profile deployments, or `.aibridge/jobs/` in local legacy dev runs), with orchestration state managed in SQLite event stores.

@@ -33,7 +33,7 @@ describe("package manifest", () => {
       license: "MIT",
       bun: ">=1.3.0",
       bin: "./dist/cli.js",
-      files: ["dist", "bin", "README.md", "LICENSE"],
+      files: ["dist", "bin", "plugins", ".claude-plugin", "README.md", "LICENSE"],
     })
   })
 })

@@ -1,7 +1,8 @@
 /**
  * Deterministic prerequisite inspection and install planning.
  *
- * Checks for tmux, opencode, and tailscale on macOS, Debian, and Ubuntu.
+ * Checks the role-dependent prerequisites (by default tmux, opencode, and
+ * tailscale; see `prereqsFor` in `./node-role.js`) on macOS, Debian, and Ubuntu.
  * Install commands are fixed argv arrays — never shell commands.
  * User confirmation is required before any install executes.
  *
@@ -73,6 +74,12 @@ export interface PreflightDeps {
   readonly platformInspector: PlatformInspector
   readonly processRunner: ProcessRunner
   readonly prompter?: Prompter
+  /**
+   * Binaries to require, in check order. Defaults to `DEFAULT_PREREQS` (worker +
+   * opencode). Role-aware callers pass `prereqsFor(role, runtime)` so that, for
+   * example, a Claude-only orchestrator is not blocked on a missing `opencode`.
+   */
+  readonly prereqs?: readonly string[]
 }
 
 // ── Supported platforms ────────────────────────────────────────────────
@@ -107,16 +114,19 @@ const INSTALL_CMD_TABLE: Record<OsFamily, Record<string, readonly string[] | nul
   macos: {
     tmux: ["brew", "install", "tmux"],
     opencode: null,
+    claude: null,
     tailscale: ["brew", "install", "tailscale"],
   },
   debian: {
     tmux: ["apt-get", "install", "-y", "tmux"],
     opencode: null,
+    claude: null,
     tailscale: ["tailscale", "install-from-source", "--confirm", "--prefix=/usr/local"],
   },
   ubuntu: {
     tmux: ["apt-get", "install", "-y", "tmux"],
     opencode: null,
+    claude: null,
     tailscale: ["tailscale", "install-from-source", "--confirm", "--prefix=/usr/local"],
   },
 }
@@ -129,7 +139,14 @@ function getInstallCmd(os: OsFamily, tool: string): readonly string[] | null {
 
 // ── Which check ────────────────────────────────────────────────────────
 
-const PREREQS = ["tmux", "opencode", "tailscale"] as const
+/**
+ * The released prerequisite list: a worker node running OpenCode.
+ *
+ * Callers that know the node's role pass `prereqs` (see `prereqsFor` in
+ * `./node-role.js`) instead; this stays the default so a caller that does not
+ * know -- and every existing test -- checks exactly what it always checked.
+ */
+export const DEFAULT_PREREQS: readonly string[] = ["tmux", "opencode", "tailscale"]
 
 async function isInstalled(runner: ProcessRunner, name: string): Promise<boolean> {
   const result = await runner.exec(["which", name])
@@ -147,9 +164,10 @@ interface CheckPlan {
 async function checkPrereqs(
   runner: ProcessRunner,
   os: OsFamily,
+  prereqs: readonly string[],
 ): Promise<CheckPlan[]> {
   const plans: CheckPlan[] = []
-  for (const name of PREREQS) {
+  for (const name of prereqs) {
     const installed = await isInstalled(runner, name)
     plans.push({
       name,
@@ -177,7 +195,7 @@ export async function planPreflight(deps: PreflightDeps): Promise<PreflightResul
     }
   }
 
-  const plans = await checkPrereqs(deps.processRunner, os)
+  const plans = await checkPrereqs(deps.processRunner, os, deps.prereqs ?? DEFAULT_PREREQS)
 
   const checks: PreflightCheck[] = plans.map((p) => ({
     name: p.name,
@@ -328,7 +346,7 @@ export async function runPreflight(deps: PreflightDeps): Promise<PreflightResult
   }
 
   // Phase 1: Check which prereqs are installed
-  const plans = await checkPrereqs(deps.processRunner, os)
+  const plans = await checkPrereqs(deps.processRunner, os, deps.prereqs ?? DEFAULT_PREREQS)
 
   // Phase 2: Prompt and install missing prereqs
   const checks: PreflightCheck[] = []
@@ -395,6 +413,23 @@ export async function runPreflight(deps: PreflightDeps): Promise<PreflightResult
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────
+
+/**
+ * A `PreflightResult` for a setup that ended before preflight ran (the operator
+ * declined to update an existing profile). `ok: false` and no checks: nothing
+ * was inspected, and nothing may read this as "the host is ready".
+ */
+export function skippedPreflight(platform: string): PreflightResult {
+  const reason = "preflight not run: setup ended before it"
+  return {
+    ok: false,
+    platform,
+    checks: [],
+    missing: 0,
+    tailscale: emptyFacts(reason),
+    herdr: emptyHerdrFacts(reason),
+  }
+}
 
 function emptyFacts(error: string | null = null): TailscaleFacts {
   return {

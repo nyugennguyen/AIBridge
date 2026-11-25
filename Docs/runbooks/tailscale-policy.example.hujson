@@ -1,0 +1,71 @@
+// AIBridge dev <-> staging: example Tailscale policy file (HuJSON).
+//
+// Merge these sections into your tailnet policy file (admin console ->
+// Access controls). Runbook: Docs/runbooks/claude-dev-staging.md, section
+// "Network policy". Replace the example operator e-mail addresses.
+//
+// Tags:
+//   tag:aibr-dev      the orchestrator (Claude Code + the aibridge plugin)
+//   tag:aibr-staging  the worker (aibr serve + Claude Code as OS user "aibr")
+//   tag:prod          production; staging must never reach it
+//
+// Port 8787 is the AIBridge bridge (bridge.port). Nothing else on a worker is
+// meant to be reachable from the tailnet.
+{
+  "groups": {
+    // People who log in to the worker to approve jobs (aibr approve runs ON
+    // the worker). They connect from their own, untagged devices.
+    "group:aibr-operators": ["alice@example.com", "bob@example.com"],
+  },
+
+  "tagOwners": {
+    "tag:aibr-dev":     ["autogroup:admin"],
+    "tag:aibr-staging": ["autogroup:admin"],
+    "tag:prod":         ["autogroup:admin"],
+  },
+
+  "acls": [
+    // Orchestrator -> worker bridge: /trigger, /jobs/<id>, /health, and the
+    // /enroll exchange behind `aibr enroll join`.
+    {"action": "accept", "src": ["tag:aibr-dev"], "dst": ["tag:aibr-staging:8787"]},
+
+    // Worker -> orchestrator bridge: /report callbacks. Needed only when the
+    // dev node runs its own bridge; the Claude Code plugin polls /jobs/<id>
+    // and works without it.
+    {"action": "accept", "src": ["tag:aibr-staging"], "dst": ["tag:aibr-dev:8787"]},
+
+    // Operators -> worker over the worker's own OpenSSH (not Tailscale SSH),
+    // to run `aibr approve` / `aibr reject` / `aibr stop --all-jobs`.
+    // Deliberately NOT from tag:aibr-dev: Claude Code runs there.
+    {"action": "accept", "src": ["group:aibr-operators"], "dst": ["tag:aibr-staging:22"]},
+
+    // There is no rule with src tag:aibr-staging and dst tag:prod. Tailscale
+    // ACLs deny by default, so staging has no route to production. Do not
+    // add one, and do not let a broader rule (for example "*" or
+    // autogroup:member) cover tag:aibr-staging as a source.
+  ],
+
+  // Tailscale SSH is disabled for the staging tag: no "ssh" rule names
+  // tag:aibr-staging as a destination. Also run `tailscale set --ssh=false`
+  // on the worker so it does not run the Tailscale SSH server at all.
+  "ssh": [],
+
+  // `tailscale` rejects a policy whose tests fail, so these keep the
+  // properties above true when someone edits the file later.
+  "tests": [
+    {
+      "src": "tag:aibr-dev",
+      "accept": ["tag:aibr-staging:8787"],
+      "deny": ["tag:aibr-staging:22", "tag:aibr-staging:4096", "tag:prod:22", "tag:prod:443"],
+    },
+    {
+      "src": "tag:aibr-staging",
+      "accept": ["tag:aibr-dev:8787"],
+      "deny": ["tag:aibr-dev:22", "tag:prod:22", "tag:prod:443", "tag:prod:5432"],
+    },
+    {
+      "src": "alice@example.com",
+      "accept": ["tag:aibr-staging:22"],
+    },
+  ],
+}

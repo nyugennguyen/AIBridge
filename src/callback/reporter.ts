@@ -5,6 +5,18 @@ import {
 } from "./origin.js"
 import type { EgressOutboxStore } from "./egress-outbox.js"
 import type { ReportCallback } from "./types.js"
+import type { RequestSigner } from "../pairing/signer.js"
+
+/**
+ * The first delivery attempt did not succeed and the report sits in the durable
+ * egress outbox for a later retry. Not a permanent failure.
+ */
+export class CallbackQueuedError extends Error {
+  constructor(readonly lastError: string | null) {
+    super(`Callback queued for retry${lastError !== null && lastError !== "" ? ` (last attempt: ${lastError})` : ""}`)
+    this.name = "CallbackQueuedError"
+  }
+}
 
 export interface CallbackReporterOptions {
   attempts: number
@@ -13,6 +25,8 @@ export interface CallbackReporterOptions {
   fetcher?: (url: string, init?: RequestInit) => Promise<Response>
   sleep?: (ms: number) => Promise<void>
   outboxStore?: EgressOutboxStore
+  /** Phase 3: adds node-signature headers to each transmission (fresh nonce per attempt). */
+  signer?: RequestSigner
 }
 
 export class CallbackReporter {
@@ -58,6 +72,7 @@ export class CallbackReporter {
       for (const claimedRow of rows) {
         await this.options.outboxStore.deliverClaimedRow(claimedRow, token, bearerToken, {
           fetcher: this.fetcher,
+          ...(this.options.signer ? { signer: this.options.signer } : {}),
         })
       }
       const updated = this.options.outboxStore.get(row.outbox_id)
@@ -69,23 +84,29 @@ export class CallbackReporter {
           `Callback failed permanently with status ${updated.terminal_error ?? updated.last_error}`,
         )
       }
-      return
+      // Queued for a later retry. Not delivered: saying so is what lets the job
+      // record (and `aibr ping`) tell "the peer got it" from "we will try again".
+      throw new CallbackQueuedError(updated?.last_error ?? null)
     }
 
     let lastStatus = 0
     for (let attempt = 1; attempt <= this.options.attempts; attempt += 1) {
+      // Signed per attempt: a retry is a new request with a fresh nonce.
+      const signature = this.options.signer ? await this.options.signer.headersFor("POST", url, report) : {}
+      const hasSignature = Object.keys(signature).length > 0
       // safeEgressFetch forbids cross-origin redirects (redirect: manual)
       const response = await safeEgressFetch(
         this.fetcher,
         url,
         {
           method: "POST",
-          ...(bearerToken === null
+          ...(bearerToken === null && !hasSignature
             ? {}
             : {
                 headers: {
-                  Authorization: `Bearer ${bearerToken}`,
+                  ...(bearerToken === null ? {} : { Authorization: `Bearer ${bearerToken}` }),
                   "Content-Type": "application/json",
+                  ...signature,
                 },
               }),
           body: JSON.stringify(report),
@@ -124,6 +145,7 @@ export class CallbackReporter {
     for (const row of rows) {
       await this.options.outboxStore.deliverClaimedRow(row, token, bearerToken, {
         fetcher: this.fetcher,
+        ...(this.options.signer ? { signer: this.options.signer } : {}),
         nowMs,
       })
       const after = this.options.outboxStore.get(row.outbox_id)

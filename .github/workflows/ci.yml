@@ -90,5 +90,12 @@ jobs:
       - name: CLI smoke test
         run: bun dist/cli.js --help
 
+      # Two profiles on one machine: aibr init (new network) -> aibr init --join
+      # -> aibr ping (signed no-op job, /report delivered back) -> aibr doctor.
+      # Stub tailscale/claude/tmux on PATH, a temporary HOME, loopback ports;
+      # nothing is installed as a service. See scripts/smoke/two-profile.ts.
+      - name: Two-profile smoke (init, pair, ping)
+        run: bun scripts/smoke/two-profile.ts
+
       - name: Package dry-run
         run: bun pm pack --dry-run

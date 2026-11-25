@@ -10,8 +10,10 @@
  *
  * Optional overrides:
  *   AIBR_LIVE_CLAUDE_BIN         executable (default: `claude` from PATH)
- *   AIBR_LIVE_CLAUDE_MODEL       --model value (default: the account default)
- *   AIBR_LIVE_CLAUDE_BUDGET_USD  --max-budget-usd per run (default: 0.05)
+ *   AIBR_LIVE_CLAUDE_MODEL       --model value (default: haiku -- the account default
+ *                                model can cost >$0.10 for one turn, and --max-budget-usd
+ *                                is a soft cap checked AFTER a turn, so it cannot stop that)
+ *   AIBR_LIVE_CLAUDE_BUDGET_USD  --max-budget-usd per run (default: 0.25)
  *
  * Self-contained at runtime: every run uses a fresh temp directory as cwd and
  * nothing else on disk besides the test's own imports.
@@ -30,12 +32,16 @@ import { createTestLaunchRequest, createTestOperationContext } from "../contract
 
 const LIVE = process.env.AIBR_LIVE_CLAUDE === "1"
 const CLAUDE_BIN = process.env.AIBR_LIVE_CLAUDE_BIN ?? "claude"
-const MODEL = process.env.AIBR_LIVE_CLAUDE_MODEL
-const BUDGET_USD = Number(process.env.AIBR_LIVE_CLAUDE_BUDGET_USD ?? "0.05")
+const MODEL = process.env.AIBR_LIVE_CLAUDE_MODEL ?? "haiku"
+const BUDGET_USD = Number(process.env.AIBR_LIVE_CLAUDE_BUDGET_USD ?? "0.25")
 const RUN_TIMEOUT_MS = 150_000
 const TEST_TIMEOUT_MS = 180_000
 
-/** Flags Phase 1–2 rely on; checked against `claude --help` of the installed version. */
+/**
+ * Flags Phase 1–2 rely on; checked against `claude --help` of the installed version.
+ * `--max-turns` is deliberately absent: CLI 2.1.332 hides it from --help but still
+ * accepts it, which the isolation-flags test below proves by running with it.
+ */
 const REQUIRED_FLAGS = [
   "--print",
   "--output-format",
@@ -47,7 +53,6 @@ const REQUIRED_FLAGS = [
   "--allowedTools",
   "--disallowedTools",
   "--max-budget-usd",
-  "--max-turns",
   "--setting-sources",
   "--settings",
   "--strict-mcp-config",

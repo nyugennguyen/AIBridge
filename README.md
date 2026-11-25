@@ -82,7 +82,7 @@ AIBridge is tested and supported on:
 Ensure each participating machine has:
 - [Bun](https://bun.sh) `>= 1.3.0` (install from bun.sh)
 - [tmux](https://github.com/tmux/tmux) `>= 3.0` for headless process supervision
-- [OpenCode](https://opencode.ai) bound strictly to loopback `127.0.0.1:4096` (`bun install -g opencode-ai`)
+- An agent runtime: [OpenCode](https://opencode.ai) bound strictly to loopback `127.0.0.1:4096` (`bun install -g opencode-ai`) or [Claude Code](https://claude.com/claude-code). An orchestrator-only machine needs Claude Code but not OpenCode or tmux.
 - [Tailscale](https://tailscale.com) installed, logged in, and authenticated (bridge binds to private Tailscale IPv4, never public Internet)
 
 ---
@@ -97,7 +97,11 @@ One-liner automated installer (macOS, Debian, Ubuntu):
 curl -fsSL https://raw.githubusercontent.com/nyugennguyen/AIBridge/main/scripts/install.sh | bash
 # non-interactive (CI):
 curl -fsSL https://raw.githubusercontent.com/nyugennguyen/AIBridge/main/scripts/install.sh | bash -s -- --yes
+# pick a role and runtime (defaults: --role worker --runtime auto):
+curl -fsSL https://raw.githubusercontent.com/nyugennguyen/AIBridge/main/scripts/install.sh | bash -s -- --role orchestrator
 ```
+
+Prompts are read from your terminal (`/dev/tty`), so the one-liner works when piped; without a terminal, pass `--yes`. Flags: `--role worker|orchestrator|both`, `--runtime opencode|claude|auto`, `--with-claude-plugin`, `--ingress router`, `--with-units` (needs a repository checkout). The installer offers to install tmux and Tailscale, never installs OpenCode or Claude Code (it prints the install command), and offers to add Bun's bin directory to your shell `PATH`.
 
 Manual fallback via Bun:
 

@@ -14,7 +14,7 @@ describe("install.sh — file contract", () => {
 describe("install.sh — platform detection", () => {
   it("detects darwin and maps to macos", async () => {
     const s = await readFile(SCRIPT, "utf8")
-    expect(s).toContain('case "$(uname -s)" in')
+    expect(s).toContain('case "$uname_s" in')
     expect(s).toContain('Darwin*) OS="macos"')
     expect(s).toContain('Linux*)')
   })

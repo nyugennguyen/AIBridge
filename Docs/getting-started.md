@@ -39,7 +39,9 @@ For non-interactive or CI environments, pass `--yes`:
 curl -fsSL https://raw.githubusercontent.com/nyugennguyen/AIBridge/main/scripts/install.sh | bash -s -- --yes
 ```
 
-The installer verifies prerequisites, prompts for missing system tools, installs the `@nyugennguyen/aibridge` package via Bun, and validates that `aibr` is available on your `$PATH`.
+Prompts are read from `/dev/tty`, so piping works; with no terminal, use `--yes`. Choose the machine's role with `--role worker|orchestrator|both` (default `worker`) and the agent runtime with `--runtime opencode|claude|auto`. A worker needs Tailscale, tmux, and OpenCode or Claude Code; an orchestrator needs Tailscale and Claude Code only. Add `--with-claude-plugin` to install the Claude Code plugin when your `aibr` version provides the plugin installer.
+
+The installer verifies prerequisites for the chosen role, offers to install tmux and Tailscale (Tailscale via its official installer, after confirmation; then run `sudo tailscale up`), installs the `@nyugennguyen/aibridge` package via Bun, offers to add Bun's global bin directory to your shell rc if `aibr` is not on `$PATH`, and ends with a summary of anything still missing. OpenCode and Claude Code are never installed automatically; the installer prints their install commands. Router and ingress-store provisioning only happens with `--ingress router`, and `--with-units` requires running the script from a repository checkout.
 
 ### Manual Package Installation
 

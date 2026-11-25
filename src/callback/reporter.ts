@@ -5,6 +5,7 @@ import {
 } from "./origin.js"
 import type { EgressOutboxStore } from "./egress-outbox.js"
 import type { ReportCallback } from "./types.js"
+import type { RequestSigner } from "../pairing/signer.js"
 
 export interface CallbackReporterOptions {
   attempts: number
@@ -13,6 +14,8 @@ export interface CallbackReporterOptions {
   fetcher?: (url: string, init?: RequestInit) => Promise<Response>
   sleep?: (ms: number) => Promise<void>
   outboxStore?: EgressOutboxStore
+  /** Phase 3: adds node-signature headers to each transmission (fresh nonce per attempt). */
+  signer?: RequestSigner
 }
 
 export class CallbackReporter {
@@ -58,6 +61,7 @@ export class CallbackReporter {
       for (const claimedRow of rows) {
         await this.options.outboxStore.deliverClaimedRow(claimedRow, token, bearerToken, {
           fetcher: this.fetcher,
+          ...(this.options.signer ? { signer: this.options.signer } : {}),
         })
       }
       const updated = this.options.outboxStore.get(row.outbox_id)
@@ -74,18 +78,22 @@ export class CallbackReporter {
 
     let lastStatus = 0
     for (let attempt = 1; attempt <= this.options.attempts; attempt += 1) {
+      // Signed per attempt: a retry is a new request with a fresh nonce.
+      const signature = this.options.signer ? await this.options.signer.headersFor("POST", url, report) : {}
+      const hasSignature = Object.keys(signature).length > 0
       // safeEgressFetch forbids cross-origin redirects (redirect: manual)
       const response = await safeEgressFetch(
         this.fetcher,
         url,
         {
           method: "POST",
-          ...(bearerToken === null
+          ...(bearerToken === null && !hasSignature
             ? {}
             : {
                 headers: {
-                  Authorization: `Bearer ${bearerToken}`,
+                  ...(bearerToken === null ? {} : { Authorization: `Bearer ${bearerToken}` }),
                   "Content-Type": "application/json",
+                  ...signature,
                 },
               }),
           body: JSON.stringify(report),
@@ -124,6 +132,7 @@ export class CallbackReporter {
     for (const row of rows) {
       await this.options.outboxStore.deliverClaimedRow(row, token, bearerToken, {
         fetcher: this.fetcher,
+        ...(this.options.signer ? { signer: this.options.signer } : {}),
         nowMs,
       })
       const after = this.options.outboxStore.get(row.outbox_id)

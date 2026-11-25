@@ -22,6 +22,24 @@ export const permissionResponseSchema = z.enum(["reject", "once", "always"])
  */
 export const authModeSchema = z.enum(["bearer-token", "none"])
 
+/**
+ * Per-request ed25519 node signatures on `/trigger` and `/report` (Phase 3,
+ * ADR 0012). Orthogonal to `auth_mode`: with `bearer-token` the bearer stays
+ * required AS WELL (defence in depth); `auth_mode: "none"` + `required` is
+ * signature-only.
+ *
+ *  - `off`      -- signature headers are ignored (the released behaviour).
+ *  - `optional` -- a signed request is verified and a bad one refused; an
+ *                  unsigned request is accepted on its bearer alone.
+ *  - `required` -- unsigned -> 401, unpinned key -> 403, replay -> refused, and
+ *                  `source_agent_id` must equal the verified key's enrolled id.
+ *
+ * Optional (read as `off`) rather than defaulted so every stored config and
+ * every hand-built `BridgeConfig` keeps its meaning; `aibr setup` writes
+ * `required` for NEW profiles only.
+ */
+export const requestSigningModeSchema = z.enum(["off", "optional", "required"])
+
 export const allowedSourceSchema = z.object({
   source_agent_id: z.string().min(1),
   capabilities: z.array(z.string().min(1)),
@@ -132,6 +150,7 @@ export const bridgeConfigSchema = z.object({
   claude: claudeConfigSchema.optional(),
   security: z.object({
     auth_mode: authModeSchema.default("bearer-token"),
+    request_signing: requestSigningModeSchema.optional(),
     allowed_sources: z.array(allowedSourceSchema),
   }),
   permissions: z.object({
@@ -164,6 +183,20 @@ export const bridgeConfigSchema = z.object({
       code: "custom",
       path: ["bridge", "ingress_mode"],
       message: 'runtime.kind "claude" is only supported with bridge.ingress_mode "engine".',
+    })
+  }
+  const requestSigning = config.security.request_signing ?? "off"
+  if (config.bridge.ingress_mode === "router" && requestSigning !== "off") {
+    // The Rust router admits /trigger on the bearer alone and does not carry the
+    // signature headers into the admission record, so a signed-request policy
+    // would silently go unenforced. Refused rather than half-honoured (ADR 0012).
+    ctx.addIssue({
+      code: "custom",
+      path: ["security", "request_signing"],
+      message:
+        `security.request_signing "${requestSigning}" is not supported with bridge.ingress_mode "router": ` +
+        `the Rust router admits /trigger on the bearer token only. Use ingress_mode "engine", or set ` +
+        `request_signing to "off" (Docs/adr/0012-request-signing-and-pairing.md).`,
     })
   }
   for (const name of Object.keys(config.capability_profiles ?? {})) {

@@ -15,6 +15,9 @@ import {
   type OrchestrationNotificationConsumer,
 } from "./notifications/index.js"
 import type { CommandLog } from "./orchestration/coordinator/types.js"
+import { FilePeerStore } from "./pairing/peer-store.js"
+import { createRequestIdentityGuard } from "./pairing/verifier.js"
+import { createPairingAcceptor } from "./pairing/service.js"
 
 export interface BridgeOptions extends RuntimeOptions {
   /** Force shadow mirroring on regardless of `bridge.ingress_mode`. */
@@ -89,7 +92,28 @@ export async function startBridge(options: BridgeOptions): Promise<BridgeInstanc
     options.notificationConsumer ??
     createOrchestrationNotificationConsumer(notificationBus)
 
+  // Phase 3 (ADR 0012): node identity for /trigger and /report, and the
+  // worker side of pairing. Both read `<stateDir>/identity/` per request, so a
+  // pairing or revocation made by `aibr enroll` takes effect without a restart.
+  // No /enroll in router mode (the router owns the listener) or on an
+  // orchestrator (it is the joining side).
+  const requestIdentity = createRequestIdentityGuard({
+    mode: runtime.config.security.request_signing ?? "off",
+    peers: new FilePeerStore(options.stateDir),
+  })
+  const pairing =
+    ingressMode === "engine" && runtime.config.role !== "orchestrator"
+      ? createPairingAcceptor({
+          config: runtime.config,
+          configPath: options.configPath,
+          stateDir: options.stateDir,
+          bearerToken: options.bearerToken,
+        })
+      : undefined
+
   const app = createApp({
+    requestIdentity,
+    ...(pairing !== undefined ? { pairing } : {}),
     config: runtime.config,
     bearerToken: options.bearerToken,
     // The operator credential authorizes user-kind `actor` claims (charter

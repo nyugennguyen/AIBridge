@@ -32,6 +32,7 @@ import { CallbackReporter } from "../callback/reporter.js"
 import { EgressOutboxStore } from "../callback/egress-outbox.js"
 import { FileTaskGraphSyncer } from "../tasks/syncer.js"
 import { createTerminalJobReporter } from "../jobs/report.js"
+import { createProfileRequestSigner } from "../pairing/signer.js"
 import { ClaudeJobRunner, type ClaudeJobRunnerOptions } from "../runtime/claude-job-runner.js"
 
 /**
@@ -133,6 +134,8 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     baseDelayMs: 250,
     agents: config.agents,
     outboxStore: egressOutboxStore,
+    // Phase 3: reports are signed with this node's key when it has one.
+    signer: createProfileRequestSigner({ stateDir: options.stateDir, agentId: config.agent_id }),
   })
   const reportTerminalJob = createTerminalJobReporter({
     jobManager,

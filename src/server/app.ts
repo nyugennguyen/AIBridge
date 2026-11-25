@@ -16,6 +16,9 @@ import { registerTriggerRoute } from "./routes/trigger.js"
 import { registerOrchestrationRoutes } from "./routes/orchestration.js"
 import type { ShadowIngressMirror } from "./shadow.js"
 import type { ClaudeJobRunner } from "../runtime/claude-job-runner.js"
+import { registerEnrollRoute } from "./routes/enroll.js"
+import type { RequestIdentityGuard } from "../pairing/verifier.js"
+import type { PairingAcceptor } from "../pairing/service.js"
 import type {
   NotificationBus,
   NotificationStore,
@@ -81,6 +84,14 @@ export interface AppDependencies {
   readonly notificationStore?: NotificationStore
   readonly notificationBus?: NotificationBus
   readonly notificationConsumer?: OrchestrationNotificationConsumer
+  /**
+   * Phase 3 (ADR 0012): verifies ed25519 node signatures on `/trigger` and
+   * `/report`. Required when `security.request_signing` is not `off`; one
+   * instance is shared by both routes so they share one replay guard.
+   */
+  readonly requestIdentity?: RequestIdentityGuard
+  /** Serves `POST /enroll` (pairing) when present. */
+  readonly pairing?: PairingAcceptor
 }
 
 export function createApp(dependencies: AppDependencies): FastifyInstance {
@@ -90,5 +101,6 @@ export function createApp(dependencies: AppDependencies): FastifyInstance {
   registerJobsRoute(app, dependencies)
   registerReportRoute(app, dependencies)
   registerOrchestrationRoutes(app, dependencies)
+  registerEnrollRoute(app, dependencies)
   return app
 }

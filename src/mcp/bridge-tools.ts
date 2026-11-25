@@ -324,11 +324,17 @@ export class BridgeTools {
         try {
           const response = await this.http(`${trimSlash(peer.url)}/health`, { method: "GET" }, HEALTH_TIMEOUT_MS)
           if (!response.ok) return { ...base, reachable: false, runtime: null, note: `health returned HTTP ${response.status}` }
-          const body = (await response.json()) as { opencode?: boolean; agent_id?: string }
+          const body = (await response.json()) as { opencode?: boolean; runtime?: string; agent_id?: string }
+          // A Claude worker's /health says `runtime: "claude"` and has no `opencode`
+          // field; only an OpenCode worker reports opencode up/down.
+          const runtime =
+            typeof body.runtime === "string" && body.runtime !== "opencode"
+              ? body.runtime
+              : body.opencode === true ? "opencode (up)" : "opencode (down)"
           return {
             ...base,
             reachable: true,
-            runtime: body.opencode === true ? "up" : "down",
+            runtime,
             ...(typeof body.agent_id === "string" && body.agent_id !== peer.id ? { note: `peer identifies itself as ${body.agent_id}` } : {}),
           }
         } catch {

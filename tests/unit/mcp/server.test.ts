@@ -158,9 +158,15 @@ describe("bridge_peers", () => {
     const result = await toolsFor(deps).call("bridge_peers", {})
     const body = JSON.parse(textOf(result))
     expect(body.peers).toEqual([
-      { id: "staging", url: "http://staging.ts.net:8787", capabilities: ["investigate", "run-tests"], reachable: true, runtime: "up" },
+      { id: "staging", url: "http://staging.ts.net:8787", capabilities: ["investigate", "run-tests"], reachable: true, runtime: "opencode (up)" },
     ])
     expect(calls[0]?.url).toBe("http://staging.ts.net:8787/health")
+  })
+
+  it("reports a Claude worker's runtime from /health (no opencode field)", async () => {
+    const { deps } = makeDeps(() => json({ ok: true, runtime: "claude", agent_id: "staging", capabilities: [] }))
+    const body = JSON.parse(textOf(await toolsFor(deps).call("bridge_peers", {})))
+    expect(body.peers[0].runtime).toBe("claude")
   })
 
   it("marks an unreachable peer without failing the call", async () => {

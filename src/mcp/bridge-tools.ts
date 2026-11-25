@@ -407,7 +407,20 @@ export class BridgeTools {
           "Do not retry. Tell the user to approve this capability with the operator CLI, then dispatch again.",
         )
       }
-      if (response.status === 401) throw new ToolError("Peer rejected the bearer token (401). The shared token may be out of date.", "unauthorized")
+      if (response.status === 401) {
+        // Since Phase 3 a 401 is not always the bearer: a worker with
+        // request_signing "required" answers signature_required to an unpaired
+        // node. Surface the peer's own reason; it names the fix (aibr enroll).
+        const code = typeof payload.code === "string" ? payload.code : ""
+        if (code === "signature_required" || /sign|pair|enrol/i.test(message)) {
+          throw new ToolError(
+            `Peer requires a signed request from a paired node (401): ${message}`,
+            "signature_required",
+            "Do not retry. Ask the user to pair this machine with the worker: `aibr enroll issue` on the worker, then `aibr enroll join <code>` here.",
+          )
+        }
+        throw new ToolError("Peer rejected the bearer token (401). The shared token may be out of date.", "unauthorized")
+      }
       throw new ToolError(`Dispatch failed (HTTP ${response.status}): ${message}`, response.status === 403 ? "forbidden" : "dispatch_failed")
     }
     const returnedId = typeof payload.job_id === "string" ? payload.job_id : jobId

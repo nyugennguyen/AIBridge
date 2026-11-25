@@ -206,6 +206,24 @@ describe("bridge_dispatch", () => {
     expect(Object.values(written).join("")).not.toContain(TOKEN)
   })
 
+  it("explains a signature-required 401 as a pairing problem, not a stale token", async () => {
+    const { deps } = makeDeps(() =>
+      json({ error: "This bridge requires signed requests (security.request_signing: required). Pair this node with `aibr enroll join <code>`.", code: "signature_required" }, 401),
+    )
+    const result = await toolsFor(deps).call("bridge_dispatch", args)
+    expect(result.isError).toBe(true)
+    const body = JSON.parse(textOf(result))
+    expect(body.code).toBe("signature_required")
+    expect(textOf(result)).toContain("aibr enroll join")
+    expect(textOf(result)).not.toContain("out of date")
+  })
+
+  it("keeps the stale-token message for a plain bearer 401", async () => {
+    const { deps } = makeDeps(() => json({ error: "Unauthorized" }, 401))
+    const body = JSON.parse(textOf(await toolsFor(deps).call("bridge_dispatch", args)))
+    expect(body.code).toBe("unauthorized")
+  })
+
   it("refuses an unknown peer without any HTTP call", async () => {
     const { deps, calls } = makeDeps(() => json({}))
     const result = await toolsFor(deps).call("bridge_dispatch", { ...args, target: "nope" })

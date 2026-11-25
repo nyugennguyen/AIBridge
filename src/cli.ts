@@ -1156,7 +1156,11 @@ async function createRealDeps(): Promise<CliDeps> {
         throw new Error(`Profile "${profile}" not found. Run "aibr setup --profile ${profile}" first.`)
       }
       const bridge = config.bridge as Record<string, unknown>
-      const opencode = config.opencode as Record<string, unknown>
+      // A Claude profile has no `opencode` block (it is optional in the schema
+      // for runtime.kind "claude"), so neither the port nor the window exist.
+      const opencode = config.opencode as Record<string, unknown> | undefined
+      const runtimeKind: "opencode" | "claude" =
+        (config.runtime as { kind?: unknown } | undefined)?.kind === "claude" ? "claude" : "opencode"
       let ocPassword = process.env.OPENCODE_SERVER_PASSWORD
       if (!ocPassword) {
         try {
@@ -1174,8 +1178,11 @@ async function createRealDeps(): Promise<CliDeps> {
         {
           name: profile,
           bridgePort: bridge.port as number,
-          opencodePort: opencode.server_port as number,
+          ...(runtimeKind === "opencode" && typeof opencode?.server_port === "number"
+            ? { opencodePort: opencode.server_port }
+            : {}),
           sessionName: `aibridge-${profile}`,
+          runtimeKind,
         },
       )
     },
@@ -1314,7 +1321,11 @@ async function createRealDeps(): Promise<CliDeps> {
         throw new Error(`Profile "${profile}" not found. Run "aibr setup --profile ${profile}" first.`)
       }
       const bridge = config.bridge as Record<string, unknown>
-      const opencode = config.opencode as Record<string, unknown>
+      // A Claude profile has no `opencode` block (it is optional in the schema
+      // for runtime.kind "claude"), so neither the port nor the window exist.
+      const opencode = config.opencode as Record<string, unknown> | undefined
+      const runtimeKind: "opencode" | "claude" =
+        (config.runtime as { kind?: unknown } | undefined)?.kind === "claude" ? "claude" : "opencode"
       const res = await statusProfile(
         { processRunner, httpProbe: { probe: async (url: string) => {
           try {
@@ -1328,8 +1339,11 @@ async function createRealDeps(): Promise<CliDeps> {
         {
           name: profile,
           bridgePort: bridge.port as number,
-          opencodePort: opencode.server_port as number,
+          ...(runtimeKind === "opencode" && typeof opencode?.server_port === "number"
+            ? { opencodePort: opencode.server_port }
+            : {}),
           sessionName: `aibridge-${profile}`,
+          runtimeKind,
         },
       )
       if (res.kind === "healthy") {
@@ -1337,7 +1351,7 @@ async function createRealDeps(): Promise<CliDeps> {
           "Configuration summary:",
           `  Agent ID: ${config.agent_id}`,
           `  Bridge: ${bridge.public_url ?? `http://${bridge.host}:${bridge.port}`}`,
-          `  OpenCode: ${opencode.base_url}`,
+          runtimeKind === "claude" ? "  Runtime: Claude Code" : `  OpenCode: ${opencode?.base_url ?? "(not configured)"}`,
           "Readiness state: healthy",
           res.body ? `Probe response: ${res.body}` : "",
         ].filter(Boolean).join("\n")

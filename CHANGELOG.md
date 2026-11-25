@@ -1,5 +1,19 @@
 # Changelog
 
+## [Unreleased]
+
+### Quickstart and one run model (installation UX review, waves B–C)
+- **`aibr init`**: sets up a machine in at most four questions — role, runtime (only when both or neither is installed), project directory (git root by default; `$HOME` refused), and new network (prints a one-time pairing code) or join (paste the code). Runs the setup wizard in quickstart mode and the `aibr enroll` code paths; secrets are generated and never shown; every answer has a flag for scripted installs. `aibr setup --advanced` remains the full wizard.
+- **`aibr doctor`**: one ✓/✗ list merging `verify`, `status` and discovery, ending with a signed ping of every peer; every ✗ carries the command that fixes it.
+- **`aibr ping <peer>`**: sends a signed no-op job (reserved capability `aibr.ping`) that the worker authenticates, completes without a runtime, and reports back; prints the round trip, whether the `/report` callback arrived, and what the peer accepts (capabilities, project directories).
+- **`aibr send <peer> "<prompt>"`**: dispatches a job and waits for its summary and findings, replacing the hand-written `curl`; `--capability` and `--project` default from the peer's ping answer.
+- **`aibr start` is a user service**: a per-profile launchd agent (`com.aibridge.<profile>`, `launchctl bootstrap gui/<uid>`) or systemd user unit (`aibridge-<profile>.service`) running `aibr serve` (with `--with-opencode` for OpenCode workers), restarted on failure and at login; it waits for `/health`. The tmux session is now `aibr start --foreground` (alias `--tmux`) and keeps windows open when a process exits. `aibr stop` unloads the service and the tmux session. The shared `com.aibridge.daemon` / `aibridge.service` unit is migrated on the next `aibr start`. The unit no longer caps memory (a cgroup cap killed Claude Code jobs).
+- **`aibr status`** reports what runs the bridge (`launchd`, `systemd`, `tmux`, `unmanaged`) instead of `session_missing` when only the service runs it; `not_running` and `no_bridge` (orchestrator) are new states.
+- **File logs**: `aibr serve` writes `<state dir>/logs/aibridge.log` (startup, listen address, one line per request without headers or bodies; the service adds stdout/stderr); `aibr logs [-f] [-n N]` prints it.
+- `aibr setup` no longer writes a supervisor unit unasked: its last step offers to start the user service. Its "next steps" point at `aibr enroll` and `aibr doctor`; the installer's point at `aibr init` and offer to run it.
+- A callback the durable egress outbox queued for retry is recorded as `callbackDelivery: pending` instead of `delivered`.
+- CI runs a two-profile smoke test (`bun run test:smoke`: init → pair → ping → doctor on one machine).
+
 ## [3.0.0] - 2026-10-14
 
 ### Herdr-Orchestrated Multi-Agent Architecture (Part A)

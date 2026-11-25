@@ -808,16 +808,37 @@ describe("node role and runtime", () => {
 // ── H1: the supervisor unit matches the ingress mode ───────────────────
 
 describe("supervisor unit (H1)", () => {
-  it("installs the unit for the profile's ingress mode under the env HOME", async () => {
-    const { daemon } = await runWizard({
+  it("writes no unit when the operator does not ask to start the service", async () => {
+    const { outcome, daemon } = await runWizard({
       inputs: ["dev", "", "", "", "", "/mock/path", "", ""],
       secrets: ["oc"],
       confirms: ["", "n"],
     })
 
-    expect(daemon.installs).toEqual([
-      { profile: "dev", skipLoad: true, ingressMode: "engine", homeDir: HOME },
-    ])
+    // Wave C: one run model. A unit nobody started would be a second way of
+    // running the node, so declining writes nothing and points at aibr start.
+    expect(daemon.installs).toEqual([])
+    if (outcome.kind !== "persisted") return
+    expect(outcome.daemon).toMatchObject({ installed: false, started: false, command: "aibr start --profile dev" })
+  })
+
+  it("installs the per-profile unit for the profile's ingress mode under the env HOME on a yes", async () => {
+    const { daemon } = await runWizard({
+      inputs: ["dev", "", "", "", "", "/mock/path", "", ""],
+      secrets: ["oc"],
+      confirms: ["", "y"],
+    })
+
+    expect(daemon.installs).toHaveLength(1)
+    expect(daemon.installs[0]).toMatchObject({
+      profile: "dev",
+      skipLoad: true,
+      ingressMode: "engine",
+      withOpencode: true,
+      homeDir: HOME,
+      logPath: `${HOME}/.local/state/aibridge/dev/logs/aibridge.log`,
+    })
+    expect(daemon.installs[0]?.environment).toMatchObject({ HOME, AIBR_SERVICE: "1" })
   })
 
   it("keeps the router drain path for a profile in router ingress mode", async () => {
@@ -827,25 +848,26 @@ describe("supervisor unit (H1)", () => {
       bridge: { host: "100.64.0.1", port: 8787, public_url: "http://myhost.ts.net:8787", ingress_mode: "router" },
     }
     const { daemon } = await runWizard(
-      { inputs: ["dev", "", "", "", "", "/mock/path", "", ""], secrets: ["oc"], confirms: ["", "", "n"] },
+      { inputs: ["dev", "", "", "", "", "/mock/path", "", ""], secrets: ["oc"], confirms: ["", "", "y"] },
       { fileOps },
     )
 
     expect(daemon.installs[0]?.ingressMode).toBe("router")
+    expect(daemon.installs[0]?.withOpencode).toBe(false)
   })
 
-  it("starts the unit only on an explicit yes", async () => {
+  it("asks to start the bridge as the user service and loads it on an explicit yes", async () => {
     const { outcome, daemon, prompter } = await runWizard({
       inputs: ["dev", "", "", "", "", "/mock/path", "", ""],
       secrets: ["oc"],
       confirms: ["", "y"],
     })
 
-    expect(prompter.confirms.at(-1)).toContain("launchctl bootstrap gui/501")
+    expect(prompter.confirms.at(-1)).toContain("aibr start --profile dev")
     expect(daemon.loads).toBe(1)
     if (outcome.kind !== "persisted") return
     expect(outcome.daemon?.started).toBe(true)
-    expect(outcome.daemon?.stopCommand).toContain("launchctl bootout gui/501")
+    expect(outcome.daemon?.stopCommand).toBe("aibr stop --profile dev")
   })
 })
 
@@ -1088,13 +1110,14 @@ describe("StepperFSM mouse hit-testing", () => {
 describe("Service Daemonizer & Preflight Outbox", () => {
   it("runs `aibr serve` in the default engine ingress mode (launchd)", () => {
     const plist = generateLaunchdPlist({ profile: "dev", homeDir: "/mock/home" })
-    expect(plist).toContain("com.aibridge.daemon")
+    // One label per profile, so two profiles on one machine never collide.
+    expect(plist).toContain("<string>com.aibridge.dev</string>")
     expect(plist).toContain("<string>serve</string>")
     expect(plist).not.toContain("<string>worker</string>")
     expect(plist).not.toContain("--ipc-publish")
     expect(plist).toContain("<string>dev</string>")
     expect(plist).toContain("<key>KeepAlive</key>")
-    expect(plist).toContain("/mock/home/Library/Logs/aibridge-daemon.log")
+    expect(plist).toContain("/mock/home/Library/Logs/aibridge-dev.log")
   })
 
   it("keeps the router drain worker for router ingress mode (launchd)", () => {
@@ -1107,7 +1130,9 @@ describe("Service Daemonizer & Preflight Outbox", () => {
     const engine = generateSystemdUnit({ profile: "prod" })
     expect(engine).toContain("Description=AIBridge Bridge Server (prod)")
     expect(engine).toContain("ExecStart=aibr serve --profile prod")
-    expect(engine).toContain("Restart=always")
+    expect(engine).toContain("Restart=on-failure")
+    // A cgroup memory cap would kill every Claude Code job the bridge spawns.
+    expect(engine).not.toContain("MemoryMax")
 
     const router = generateSystemdUnit({ profile: "prod", ingressMode: "router" })
     expect(router).toContain("Description=AIBridge Ingress Drain Worker (prod)")
@@ -1140,11 +1165,11 @@ describe("Service Daemonizer & Preflight Outbox", () => {
     try {
       const res = await installDaemonUnit({ platform: "linux", profile: "dev", homeDir: tempDir })
       expect(res.installed).toBe(true)
-      expect(res.unitPath).toBe(join(tempDir, ".config", "systemd", "user", "aibridge.service"))
+      expect(res.unitPath).toBe(join(tempDir, ".config", "systemd", "user", "aibridge-dev.service"))
       // Writing is not starting: the unit exists on disk and nothing was enabled.
       const written = await readFile(res.unitPath!, "utf8")
       expect(written).toContain("ExecStart=aibr serve --profile dev")
-      expect(res.stopCommand).toBe("systemctl --user disable --now aibridge.service")
+      expect(res.stopCommand).toBe("systemctl --user disable --now aibridge-dev.service")
     } finally {
       await rm(tempDir, { recursive: true, force: true })
     }
@@ -1183,21 +1208,21 @@ describe("Service Daemonizer & Preflight Outbox", () => {
     ])
   })
 
-  it("reports the unit as installed but not started when the operator declines", async () => {
+  it("reports nothing installed and nothing started when the operator declines", async () => {
     const { outcome } = await runWizard({
       inputs: ["dev", "", "y", "", "my-agent", "/mock/path", "peer-agent", "http://100.64.0.2:8787"],
       secrets: ["super-secret-oc"],
-      confirms: ["y", "n"], // save, then decline starting the daemon
+      confirms: ["y", "n"], // save, then decline starting the service
     })
 
     expect(outcome.kind).toBe("persisted")
     if (outcome.kind !== "persisted") return
-    // A daemon that was never activated must not be reported as running: the
-    // unit is KeepAlive, and "created" alone reads as "it is up".
-    expect(outcome.daemon?.installed).toBe(true)
+    // A service that was never started must not be reported as running.
+    expect(outcome.daemon?.installed).toBe(false)
     expect(outcome.daemon?.started).toBe(false)
     expect(outcome.daemon?.error).toBeNull()
   })
+
 })
 
 // ── Step 4: discovery-driven, explicitly-enrolled peer config ────────────
@@ -1717,8 +1742,8 @@ describe("Step 4 — discovery proposes, the operator enrols", () => {
     expect(prompter.confirms).toEqual([
       expect.stringContaining("Enrol typed at http://100.64.0.4:8787"),
       "Save configuration to \"/mock/home/.config/aibridge/default/config.json\"?",
-      // The activation command is platform-derived; only its shape is pinned.
-      expect.stringContaining("Start the daemon now?"),
+      // Step 5 offers the user service (aibr start), not a raw unit.
+      expect.stringContaining("Start the bridge now as a user service"),
     ])
   })
 

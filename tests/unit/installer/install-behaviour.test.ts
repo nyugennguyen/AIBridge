@@ -155,15 +155,16 @@ describe("install.sh — version, router text, units", () => {
 })
 
 describe("install.sh — next steps and PATH", () => {
-  it("worker next steps list setup, start, status", () => {
+  it("worker next steps are init then doctor (the quickstart), with the full wizard as an aside", () => {
     const r = sourced(`ROLE=worker PROFILE=dev; print_next_steps`)
-    expect(r.stdout).toContain("aibr setup --profile dev")
-    expect(r.stdout).toContain("aibr start --profile dev")
-    expect(r.stdout).toContain("aibr status --profile dev")
+    expect(r.stdout).toContain("aibr init --profile dev --role worker")
+    expect(r.stdout).toContain("aibr doctor --profile dev")
+    expect(r.stdout).toContain("aibr setup --profile dev --advanced")
+    expect(r.stdout).not.toContain("tmux")
   })
-  it("orchestrator next steps mention setup and the Claude Code plugin, not start", () => {
+  it("orchestrator next steps mention init and the Claude Code plugin, not start", () => {
     const r = sourced(`ROLE=orchestrator; print_next_steps`)
-    expect(r.stdout).toContain("aibr setup --profile <name>")
+    expect(r.stdout).toContain("aibr init --profile <name> --role orchestrator")
     expect(r.stdout).toContain("Claude Code plugin")
     expect(r.stdout).not.toContain("aibr start")
   })

@@ -7,6 +7,17 @@ import type { EgressOutboxStore } from "./egress-outbox.js"
 import type { ReportCallback } from "./types.js"
 import type { RequestSigner } from "../pairing/signer.js"
 
+/**
+ * The first delivery attempt did not succeed and the report sits in the durable
+ * egress outbox for a later retry. Not a permanent failure.
+ */
+export class CallbackQueuedError extends Error {
+  constructor(readonly lastError: string | null) {
+    super(`Callback queued for retry${lastError !== null && lastError !== "" ? ` (last attempt: ${lastError})` : ""}`)
+    this.name = "CallbackQueuedError"
+  }
+}
+
 export interface CallbackReporterOptions {
   attempts: number
   baseDelayMs: number
@@ -73,7 +84,9 @@ export class CallbackReporter {
           `Callback failed permanently with status ${updated.terminal_error ?? updated.last_error}`,
         )
       }
-      return
+      // Queued for a later retry. Not delivered: saying so is what lets the job
+      // record (and `aibr ping`) tell "the peer got it" from "we will try again".
+      throw new CallbackQueuedError(updated?.last_error ?? null)
     }
 
     let lastStatus = 0

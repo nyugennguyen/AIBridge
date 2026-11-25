@@ -1,106 +1,73 @@
 ---
 name: aibr-onboarding
-description: Use when onboarding, provisioning, or initializing AIBridge (aibr) on a new node (macOS, Linux, VPS) — guides through tailscale network interface discovery, CSPRNG bearer token generation, project allowlists, local AI agent runtime probes (opencode, claude, codex), launchd/systemd service configuration, and running the interactive aibr setup wizard.
+description: Use when onboarding, provisioning, or initializing AIBridge (aibr) on a new node (macOS, Linux, VPS) — guides through aibr init (role, runtime, project, pairing code), the launchd/systemd user service started by aibr start, aibr doctor / ping / send for the end-to-end check, and the full aibr setup wizard for everything else.
 ---
 
-# AIBridge Onboarding & Setup Guide (`aibr setup`)
+# AIBridge Onboarding (`aibr init`)
 
 > **Canonical copy:** `.opencode/skills/aibr-onboarding/SKILL.md`. Mirrored to
 > `.claude/skills/` and `.agents/skills/` for Claude Code and Codex. Keep byte-identical.
 
-## Overview
-
-AIBridge connects distributed AI agent runtimes (OpenCode, Claude Code, Codex) across a private Tailscale network. 
-The interactive onboarding wizard is invoked via:
+## Three commands per machine
 
 ```bash
-aibr setup
+curl -fsSL https://raw.githubusercontent.com/nyugennguyen/AIBridge/main/scripts/install.sh | bash   # installs aibr, offers aibr init
+aibr init                                                                                           # ≤ 4 questions
+aibr doctor                                                                                         # ✓/✗ with a fix per ✗
 ```
 
-Instead of sequential stdout readline prompts, `aibr setup` runs an interactive 5-step stepper TUI (or browser-rendered OpenDesign canvas at `Docs/tui/aibridge-setup-wizard.html`).
+`aibr setup` is a sequence of line prompts in the terminal — there is no stepper TUI
+(`runSetupWizard` in `src/cli/setup-wizard.ts`; `StepperFSM` is unused). `aibr init` runs the
+same wizard in quickstart mode (`SetupWizardDeps.quickstart`).
 
----
+## What `aibr init` asks
 
-## The 5-Step Onboarding Architecture
+1. **Role** — `worker` (runs jobs), `orchestrator` (Claude Code dispatches from here), `both`. Flag `--role`.
+2. **Runtime** — `opencode` / `claude`, only when both or neither is on `PATH`. Flag `--runtime`.
+3. **Project directory** (workers) — default: git root of the cwd; `$HOME`, `/` and ancestors of
+   `$HOME` are refused (`projectPathProblem`). Flag `--project`.
+4. **Network** — Enter = new network: a worker prints a one-time pairing code (30 min) for the
+   next machine; or paste a code to join (`aibr enroll join` code path, `src/cli/enroll.ts`).
+   Orchestrators are asked only for the code. Flags `--new` / `--join <code>`.
 
-```text
-[1. Network] ──▶ [2. Security] ──▶ [3. Allowlists] ──▶ [4. AI Runtimes] ──▶ [5. Install & Test]
+Defaults, never asked or shown: bearer token (CSPRNG, `0600`), OpenCode password, agent id
+(profile name; machine name for `default`), ports 8787/4096, `request_signing: "required"`.
+Preflight (role-aware prerequisites, Tailscale `Running` with an IP) runs first; a blocked
+init prints the install commands. Non-interactive runs need the flags (`aibr init --help`).
+
+## Running the bridge
+
+```bash
+aibr start  -p <profile>              # user service: launchd com.aibridge.<p> / systemd aibridge-<p>.service
+aibr start  -p <profile> --foreground # tmux session aibridge-<p> (dev; remain-on-exit)
+aibr status -p <profile>              # launchd|systemd|tmux|unmanaged + /health
+aibr logs   -p <profile> -f           # ~/.local/state/aibridge/<p>/logs/aibridge.log
+aibr stop   -p <profile>              # unload + remove the unit, kill the tmux session
 ```
 
-### Step 1: Network & Tailscale Discovery
-1. Probe local `tailscaled` daemon socket (`/var/run/tailscaled.sock`).
-2. Query Tailscale IPv4 coordinate:
-   ```bash
-   tailscale ip -4
-   ```
-   Must belong to `100.64.0.0/10` CGNAT range.
-3. Validate port availability:
-   - Port probe `4095`: Legacy setup wizard probe default (no production service binds 4095; bridge & router use port 8787)
-   - Port `4096`: OpenCode loopback (`opencode serve`)
-   - Port `8787`: AIBridge Fastify HTTP bridge (`bridge.host`:`bridge.port` endpoint)
+The unit runs `aibr serve --profile <p>` by absolute path (`--with-opencode` for OpenCode
+workers), with the installing shell's `PATH`/XDG dirs and no secrets. Linux servers need
+`sudo loginctl enable-linger $USER` (doctor warns). Router mode (`bridge.ingress_mode: "router"`)
+runs `aibr worker --profile <p> --ipc-publish` instead and is advanced/opt-in.
 
-### Step 2: Router Security & Bearer Credentials
-1. Ingress router serves the configured `bridge.host`:`bridge.port` endpoint (default `8787`).
-2. Generate a cryptographically secure 128-bit bearer token (32 hex chars;
-   `openssl rand -hex 16` is 16 bytes, NOT 32 -- do not write 32 here by mistake):
-   ```bash
-   openssl rand -hex 16 | awk '{print "aibr_sec_"$1}'
-   ```
-3. Store config in `~/.config/aibridge/<profile>/config.json` with strict `0600` permissions.
-4. Enforce security floor invariants:
-   - Constant-time token comparison (mitigates timing side-channels).
-   - Strict 1 MiB payload cap (prevents memory exhaustion DoS; matches Fastify `bodyLimit` and router `MAX_BODY_BYTES`).
-   - Automated secret redaction pipeline on stdout and telemetry.
+## Proving it works
 
-### Step 3: Project Allowlists & Containment Boundaries
-1. Declare canonical allowed project directories:
-   ```json
-   {
-     "allowedProjects": [
-       "/Users/mac/Projects/AIBrigde",
-       "/Users/mac/Projects/paryaj-demo"
-     ]
-   }
-   ```
-2. Invariant: Fail-closed subpath containment. Any symlink or file operation resolving outside approved roots returns an immediate `403 Forbidden`.
+```bash
+aibr doctor -p <profile>                     # verify + status + ping of every agents[] peer
+aibr ping <peer> -p <profile>                # signed no-op job; waits for completion and /report
+aibr send <peer> "<prompt>" [--capability c] [--project dir|id]
+```
 
-### Step 4: AI Agent Runtime Diagnostics
-1. Test loopback connectivity to OpenCode:
-   ```bash
-   curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:4096/health
-   ```
-2. Verify Claude Code CLI binary:
-   ```bash
-   claude --version
-   ```
-3. Verify Codex CLI binary:
-   ```bash
-   codex --version
-   ```
+`aibr status: healthy` only means `/health` answered (it is unauthenticated). A successful
+`aibr ping` proves bearer, signature, `allowed_sources`, and the callback path. `ping` also lists
+what the peer accepts from this node and its project directories, which `send` uses as defaults.
 
-### Step 5: System Service Installation & Preflight
-1. **macOS `launchd`**:
-   Install agent to `~/Library/LaunchAgents/com.aibridge.daemon.plist`:
-   ```bash
-   launchctl load -w ~/Library/LaunchAgents/com.aibridge.daemon.plist
-   ```
-2. **Linux `systemd`**:
-   Install user service to `~/.config/systemd/user/aibridge.service`:
-   ```bash
-   systemctl --user enable --now aibridge.service
-   ```
-3. Run verification test:
-   ```bash
-   aibr verify -p default
-   ```
-4. Link manager plugin:
-   ```bash
-   aibr tui -p default
-   ```
+## Pairing more machines later
 
----
+```bash
+aibr enroll issue -p <worker-profile> [--capabilities investigate,run-tests]   # on the worker
+aibr enroll join <code> -p <profile>                                         # on the other node
+aibr enroll list -p <profile>
+```
 
-## Interactive Visual Artifacts
-- **Interactive Stepper Wizard**: [`Docs/tui/aibridge-setup-wizard.html`](../../../Docs/tui/aibridge-setup-wizard.html)
-- **TUI Next-Gen Canvas**: [`Docs/tui/aibridge-tui-redesign.html`](../../../Docs/tui/aibridge-tui-redesign.html)
-- **Logo Design System**: [`Docs/assets/logos/logo-design-system.html`](../../../Docs/assets/logos/logo-design-system.html)
+See `Docs/guides/pairing.md` and `Docs/getting-started.md`.

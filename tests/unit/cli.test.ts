@@ -358,11 +358,12 @@ describe("cli setup", () => {
     expect(output).toContain('Profile "dev" created.')
     expect(output).toContain("Next steps:")
     expect(output).toContain("aibr start --profile dev")
-    expect(output).toContain("aibr status --profile dev")
-    expect(output).not.toContain("aibr verify --profile dev")
+    expect(output).toContain("aibr enroll issue --profile dev")
+    expect(output).toContain("aibr doctor --profile dev")
+    expect(output).not.toContain("aibr enroll join")
   })
 
-  it("prints orchestrator next steps (verify + Claude Code plugin) and says 'updated' on a re-run", async () => {
+  it("prints orchestrator next steps (pair + doctor + Claude Code plugin) and says 'updated' on a re-run", async () => {
     const { output } = await captureRun(["setup"], {
       setupRunner: async () => ({
         kind: "persisted" as const,
@@ -375,7 +376,8 @@ describe("cli setup", () => {
     })
 
     expect(output).toContain('Profile "orch" updated.')
-    expect(output).toContain("aibr verify --profile orch")
+    expect(output).toContain("aibr enroll join <code> --profile orch")
+    expect(output).toContain("aibr doctor --profile orch")
     expect(output).toContain("aibr plugin install claude")
     expect(output).not.toContain("aibr start --profile orch")
   })
@@ -400,7 +402,7 @@ describe("cli setup", () => {
 
     expect(output).toContain("Daemon: started (stop it with: launchctl bootout gui/501 /u.plist)")
     expect(output).not.toContain("aibr start --profile dev")
-    expect(output).toContain("aibr status --profile dev")
+    expect(output).toContain("aibr doctor --profile dev")
   })
 })
 
@@ -453,7 +455,7 @@ describe("cli start", () => {
 
   it("calls startProfile with profile name", async () => {
     let receivedProfile: string | undefined
-    await captureRun(["start", "--profile", "dev"], {
+    await captureRun(["start", "--profile", "dev", "--foreground"], {
       startRunner: async (profile) => {
         receivedProfile = profile
         return { kind: "started" as const, sessionName: "aibridge-dev" }
@@ -464,7 +466,7 @@ describe("cli start", () => {
   })
 
   it("returns 0 on started", async () => {
-    const { exitCode } = await captureRun(["start", "--profile", "dev"], {
+    const { exitCode } = await captureRun(["start", "--profile", "dev", "--foreground"], {
       startRunner: async () => ({ kind: "started" as const, sessionName: "aibridge-dev" }),
     })
 
@@ -472,7 +474,7 @@ describe("cli start", () => {
   })
 
   it("returns 0 on already_running", async () => {
-    const { exitCode } = await captureRun(["start", "--profile", "dev"], {
+    const { exitCode } = await captureRun(["start", "--profile", "dev", "--foreground"], {
       startRunner: async () => ({ kind: "already_running" as const, sessionName: "aibridge-dev" }),
     })
 
@@ -480,7 +482,7 @@ describe("cli start", () => {
   })
 
   it("returns nonzero on tmux_error", async () => {
-    const { exitCode, output } = await captureRun(["start", "--profile", "dev"], {
+    const { exitCode, output } = await captureRun(["start", "--profile", "dev", "--foreground"], {
       startRunner: async () => ({ kind: "tmux_error" as const, sessionName: "aibridge-dev", stderr: "sessions should be nested" }),
     })
 

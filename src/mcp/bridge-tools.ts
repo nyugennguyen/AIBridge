@@ -16,6 +16,8 @@ import { dirname, join } from "node:path"
 import { bridgeConfigSchema } from "../config/schemas.js"
 import { resolveProfilePaths, validateProfileName, type ProfilePaths } from "../host/paths.js"
 import { prepareSignedRequest } from "./signed-http.js"
+import { PING_CAPABILITY } from "../jobs/ping.js"
+import type { PongInfo } from "../jobs/types.js"
 
 export type FetchLike = (url: string, init?: RequestInit) => Promise<Response>
 
@@ -398,31 +400,7 @@ export class BridgeTools {
       profile,
     )
     const payload = await readJson(response)
-    if (!response.ok) {
-      const message = typeof payload.error === "string" ? payload.error : `HTTP ${response.status}`
-      if (response.status === 403 && /approval/i.test(message)) {
-        throw new ToolError(
-          `Dispatch denied: ${message}`,
-          "approval_required",
-          "Do not retry. Tell the user to approve this capability with the operator CLI, then dispatch again.",
-        )
-      }
-      if (response.status === 401) {
-        // Since Phase 3 a 401 is not always the bearer: a worker with
-        // request_signing "required" answers signature_required to an unpaired
-        // node. Surface the peer's own reason; it names the fix (aibr enroll).
-        const code = typeof payload.code === "string" ? payload.code : ""
-        if (code === "signature_required" || /sign|pair|enrol/i.test(message)) {
-          throw new ToolError(
-            `Peer requires a signed request from a paired node (401): ${message}`,
-            "signature_required",
-            "Do not retry. Ask the user to pair this machine with the worker: `aibr enroll issue` on the worker, then `aibr enroll join <code>` here.",
-          )
-        }
-        throw new ToolError("Peer rejected the bearer token (401). The shared token may be out of date.", "unauthorized")
-      }
-      throw new ToolError(`Dispatch failed (HTTP ${response.status}): ${message}`, response.status === 403 ? "forbidden" : "dispatch_failed")
-    }
+    if (!response.ok) throw dispatchError(response.status, payload)
     const returnedId = typeof payload.job_id === "string" ? payload.job_id : jobId
     await this.recordJob(profile, returnedId, target)
     return {
@@ -518,6 +496,156 @@ export class BridgeTools {
     }
   }
 
+  // ── ping (aibr ping / aibr doctor) ─────────────────────────────────
+
+  /**
+   * Sends a signed no-op job (capability `aibr.ping`, src/jobs/ping.ts) and
+   * waits for it to complete and — when this node runs a bridge that can
+   * receive it — for the worker's `/report` callback to be delivered.
+   * Never throws: every failure is a `PingOutcome` naming the stage it hit.
+   */
+  async ping(
+    target: string,
+    options: { readonly timeoutMs?: number; readonly waitForCallback?: boolean } = {},
+  ): Promise<PingOutcome> {
+    const started = this.deps.now()
+    const timeoutMs = options.timeoutMs ?? DEFAULT_PING_TIMEOUT_MS
+    let profile: LoadedProfile
+    let peer: { id: string; url: string; capabilities: string[] }
+    try {
+      profile = await this.loadProfile()
+      peer = this.findPeer(profile, target)
+    } catch (error) {
+      return this.pingFailure(target, null, "profile", error, started)
+    }
+    const expectCallback = profile.config.role !== "orchestrator" && options.waitForCallback !== false
+    const jobId = `ping-${this.deps.uuid()}`
+    const body = {
+      job_id: jobId,
+      source_agent_id: profile.config.agent_id,
+      target_agent_id: peer.id,
+      capability: PING_CAPABILITY,
+      project_dir: "/",
+      prompt: "aibr ping (no-op)",
+      callback_url: `${trimSlash(profile.config.bridge.public_url)}/report`,
+      timeout_seconds: 60,
+    }
+    try {
+      const response = await this.http(
+        `${trimSlash(peer.url)}/trigger`,
+        { method: "POST", headers: { "content-type": "application/json", ...(await this.authHeaders(profile)) }, body: JSON.stringify(body) },
+        HTTP_TIMEOUT_MS,
+        profile,
+      )
+      const payload = await readJson(response)
+      if (!response.ok) {
+        const message = typeof payload.error === "string" ? payload.error : ""
+        if (response.status === 403 && message.includes(`capability ${PING_CAPABILITY}`)) {
+          throw new ToolError(
+            `Peer "${peer.id}" authenticated this node but does not know ${PING_CAPABILITY} (HTTP 403): it runs an older aibr.`,
+            "ping_unsupported",
+            `Update aibr on ${peer.id} and restart its bridge (aibr start there).`,
+          )
+        }
+        throw dispatchError(response.status, payload)
+      }
+    } catch (error) {
+      return this.pingFailure(target, peer.url, "dispatch", error, started)
+    }
+
+    const deadline = started + timeoutMs
+    let job: Record<string, unknown> = {}
+    for (;;) {
+      try {
+        job = await this.fetchJob(jobId, target)
+      } catch (error) {
+        return this.pingFailure(target, peer.url, "job", error, started, jobId)
+      }
+      const status = typeof job.status === "string" ? job.status : "unknown"
+      const delivery = (job.callbackDelivery ?? {}) as { status?: unknown; error?: unknown }
+      const settled = !expectCallback || delivery.status === "delivered" || delivery.status === "failed"
+      if (TERMINAL_STATUSES.has(status) && settled) break
+      if (this.deps.now() >= deadline) break
+      await this.deps.sleep(PING_POLL_INTERVAL_MS)
+    }
+
+    const status = typeof job.status === "string" ? job.status : "unknown"
+    const rttMs = this.deps.now() - started
+    const pong = isPong(job.pong) ? job.pong : undefined
+    if (status !== "completed") {
+      return {
+        ok: false,
+        target,
+        url: peer.url,
+        jobId,
+        stage: "job",
+        rttMs,
+        error: this.redact(
+          TERMINAL_STATUSES.has(status)
+            ? `The ping job ended ${status}${typeof job.error === "string" ? `: ${job.error}` : ""}.`
+            : `The ping job did not complete within ${Math.round(timeoutMs / 1000)}s (status ${status}).`,
+        ),
+        code: "ping_incomplete",
+        callback: { status: "unknown" },
+        ...(pong !== undefined ? { pong } : {}),
+      }
+    }
+    const delivery = (job.callbackDelivery ?? {}) as { status?: unknown; error?: unknown }
+    const callback: PingOutcome["callback"] = !expectCallback
+      ? { status: "skipped" }
+      : delivery.status === "delivered"
+        ? { status: "delivered" }
+        : delivery.status === "failed" || delivery.status === "pending"
+          ? { status: delivery.status, ...(typeof delivery.error === "string" ? { error: this.redact(delivery.error) } : {}) }
+          : { status: "unknown" }
+    const callbackOk = callback.status === "delivered" || callback.status === "skipped"
+    return {
+      ok: callbackOk,
+      target,
+      url: peer.url,
+      jobId,
+      stage: callbackOk ? "done" : "callback",
+      rttMs,
+      callback,
+      ...(pong !== undefined ? { pong } : {}),
+      ...(callbackOk
+        ? {}
+        : {
+            code: "callback_not_delivered",
+            error: `The job reached ${peer.id}, but its report to ${trimSlash(profile.config.bridge.public_url)}/report was ${callback.status === "pending" ? "not delivered yet (queued for retry)" : "not delivered"}${callback.error !== undefined ? `: ${callback.error}` : ""}.`,
+            hint: `${peer.id} must be able to reach this node's bridge (is it running? aibr status) and must list this node in agents[] (pair with aibr enroll).`,
+          }),
+    }
+  }
+
+  private pingFailure(
+    target: string,
+    url: string | null,
+    stage: PingOutcome["stage"],
+    error: unknown,
+    started: number,
+    jobId?: string,
+  ): PingOutcome {
+    const err = error instanceof ToolError ? error : undefined
+    return {
+      ok: false,
+      target,
+      url,
+      ...(jobId !== undefined ? { jobId } : {}),
+      stage,
+      rttMs: this.deps.now() - started,
+      error: this.redact(error instanceof Error ? error.message : String(error)),
+      ...(err?.code !== undefined ? { code: err.code } : {}),
+      ...(err?.hint !== undefined ? { hint: err.hint } : {}),
+      callback: { status: "unknown" },
+    }
+  }
+
+  /** The job record as the worker serves it (redacted), for `aibr send --wait`. */
+  async jobRecord(jobId: string, target: string): Promise<Record<string, unknown>> {
+    return JSON.parse(this.redact(JSON.stringify(await this.fetchJob(jobId, target)))) as Record<string, unknown>
+  }
+
   // ── job ledger (best effort; feeds the SessionStart summary) ───────
 
   private async recordJob(profile: LoadedProfile, jobId: string, target: string): Promise<void> {
@@ -571,6 +699,72 @@ export class BridgeTools {
       return false
     }
   }
+}
+
+export const DEFAULT_PING_TIMEOUT_MS = 20_000
+const PING_POLL_INTERVAL_MS = 300
+
+export interface PingOutcome {
+  readonly ok: boolean
+  readonly target: string
+  readonly url: string | null
+  readonly jobId?: string
+  /** Where it stopped: `profile` (local config), `dispatch` (POST /trigger), `job`, `callback`, or `done`. */
+  readonly stage: "profile" | "dispatch" | "job" | "callback" | "done"
+  readonly rttMs: number
+  readonly pong?: PongInfo
+  /** The worker's `/report` to this node: `skipped` when this node runs no bridge (orchestrator). */
+  readonly callback: { readonly status: "delivered" | "failed" | "pending" | "skipped" | "unknown"; readonly error?: string }
+  readonly error?: string
+  readonly code?: string
+  readonly hint?: string
+}
+
+function isPong(value: unknown): value is PongInfo {
+  return (
+    !!value &&
+    typeof value === "object" &&
+    typeof (value as PongInfo).agent_id === "string" &&
+    Array.isArray((value as PongInfo).projects) &&
+    Array.isArray((value as PongInfo).capabilities)
+  )
+}
+
+/** A non-2xx `/trigger` answer as a ToolError that names the fix. */
+function dispatchError(status: number, payload: Record<string, unknown>): ToolError {
+  const message = typeof payload.error === "string" ? payload.error : `HTTP ${status}`
+  if (status === 403 && /approval/i.test(message)) {
+    return new ToolError(
+      `Dispatch denied: ${message}`,
+      "approval_required",
+      "Do not retry. Tell the user to approve this capability with the operator CLI, then dispatch again.",
+    )
+  }
+  if (status === 401) {
+    // Since Phase 3 a 401 is not always the bearer: a worker with
+    // request_signing "required" answers signature_required to an unpaired
+    // node. Surface the peer's own reason; it names the fix (aibr enroll).
+    const code = typeof payload.code === "string" ? payload.code : ""
+    if (code === "signature_required" || /sign|pair|enrol/i.test(message)) {
+      return new ToolError(
+        `Peer requires a signed request from a paired node (401): ${message}`,
+        "signature_required",
+        "Do not retry. Ask the user to pair this machine with the worker: `aibr enroll issue` on the worker, then `aibr enroll join <code>` here.",
+      )
+    }
+    return new ToolError("Peer rejected the bearer token (401). The shared token may be out of date.", "unauthorized")
+  }
+  if (status === 403 && /not authorized/i.test(message)) {
+    return new ToolError(
+      `Dispatch denied (403): ${message}`,
+      "forbidden",
+      "Ask the worker's operator to grant it: `aibr enroll issue --capabilities <list>` there, then `aibr enroll join <code>` here.",
+    )
+  }
+  if (status === 403 && /not allowlisted/i.test(message)) {
+    return new ToolError(`Dispatch denied (403): ${message}`, "project_not_allowlisted", "Use a project directory the worker allowlists (`aibr ping <peer>` lists them).")
+  }
+  return new ToolError(`Dispatch failed (HTTP ${status}): ${message}`, status === 403 ? "forbidden" : "dispatch_failed")
 }
 
 function str(args: Record<string, unknown>, key: string): string {

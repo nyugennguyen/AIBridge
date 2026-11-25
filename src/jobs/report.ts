@@ -1,5 +1,5 @@
 import type { ReportCallback } from "../config/types.js"
-import type { CallbackReporter } from "../callback/reporter.js"
+import { CallbackQueuedError, type CallbackReporter } from "../callback/reporter.js"
 import type { JobManager } from "./manager.js"
 import type { JobRecord, JobStatus } from "./types.js"
 
@@ -68,6 +68,10 @@ export function createTerminalJobReporter(options: TerminalJobReporterOptions): 
       await options.callbackReporter.send(job.trigger.callback_url, report, options.bearerToken, { jobId: job.id })
       await options.jobManager.markCallbackDelivery(job.id, "delivered")
     } catch (error) {
+      if (error instanceof CallbackQueuedError) {
+        await options.jobManager.markCallbackDelivery(job.id, "pending", error.message)
+        return
+      }
       await options.jobManager.markCallbackDelivery(
         job.id,
         "failed",

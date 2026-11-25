@@ -114,10 +114,10 @@ describe("install.sh — tailscale and final output", () => {
     expect(s).toContain("tailscale status")
     expect(s).toMatch(/Tailscale.*not active|BackendState/i)
   })
-  it("prints next steps: aibr setup --profile", async () => {
+  it("prints next steps: aibr init --profile", async () => {
     const s = await readFile(SCRIPT, "utf8")
-    expect(s).toContain("aibr setup --profile")
-    expect(s).toContain("aibr status --profile")
+    expect(s).toContain("aibr init --profile")
+    expect(s).toContain("aibr doctor --profile")
   })
   it("prints Tailscale-only binding warning", async () => {
     const s = await readFile(SCRIPT, "utf8")

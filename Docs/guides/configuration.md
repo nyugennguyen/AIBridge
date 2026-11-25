@@ -201,7 +201,7 @@ The bearer token is saved in `~/.local/share/aibridge/<profile>/secrets/bearer_t
 
 1. Stop AIBridge on all participating nodes:
    ```bash
-   tmux kill-session -t aibridge-<profile>
+   aibr stop --profile <profile>
    ```
 2. Remove the existing secret file:
    ```bash

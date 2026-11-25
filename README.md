@@ -112,61 +112,81 @@ aibr --version
 
 If `aibr` is not found, verify that the global Bun bin directory `$(bun pm bin -g)` is on your `PATH`.
 
-### 2. Setup Profile (`aibr setup`)
-
-Run the interactive setup wizard (a sequence of terminal prompts):
+### 2. Set up the machine (`aibr init`)
 
 ```bash
-aibr setup --profile <name>
+aibr init
 ```
 
-It asks, in order:
+At most four questions:
 
-1. **Node role** — `worker` (runs jobs here; default), `orchestrator` (Claude Code dispatches work from here), or `both`. For a worker, the runtime (`opencode` or `claude`) is detected on `PATH` and only asked when both or neither are installed.
-2. **Preflight** — checks only what the role needs: worker + opencode → `tmux`, `opencode`, `tailscale`; worker + claude → `tmux`, `claude`, `tailscale`; orchestrator → `claude`, `tailscale`.
-3. **Bearer token** — generate (default for a new profile), paste, or `none` (only allowed on a Tailscale CGNAT bind, with explicit confirmation).
-4. **OpenCode password** (OpenCode workers only) — press Enter to generate a random one.
-5. **Agent ID and project directory** — the project defaults to the git root of the current directory. `$HOME`, `/`, and any parent of `$HOME` are refused.
-6. **Peer enrolment** — AIBridge bridges found on the tailnet are listed; other tailnet devices are summarized in one line. Nothing is enrolled unless you pick a peer.
-7. **Save** — press Enter to save. A worker then gets a supervisor unit written (not started unless you say `y`); an orchestrator gets none.
+1. **Role** — `worker` (runs jobs here), `orchestrator` (Claude Code dispatches work from here), or `both`.
+2. **Runtime** — `opencode` or `claude`, detected on `PATH`; asked only when both or neither is installed.
+3. **Project directory** (workers) — defaults to the git root of the current directory. `$HOME`, `/` and any parent of `$HOME` are refused.
+4. **Network** — press Enter to create a new one (this machine prints a one-time pairing code), or paste the code another machine printed to join it.
 
-The config path and ports use the standard defaults (bridge `8787`, OpenCode `4096`). Use `aibr setup --config <path>` to write the config elsewhere and `aibr setup --advanced` to be asked for the ports.
+Everything else has a safe default and is never shown: the bearer token and OpenCode password are generated (`0600` files under `~/.local/share/aibridge/<profile>/secrets/`), new profiles require ed25519-signed requests, the bridge listens on the Tailscale IP, port `8787`. A worker's bridge is then started as a user service (see step 3 below). Every answer has a flag (`aibr init --help`), so `aibr init --role worker --runtime claude --project ~/src/app --new` asks nothing.
 
-For a two-machine setup, run on machine A (`aibr setup --profile dev-main`) and machine B (`aibr setup --profile test-vps`). To enrol the other machine afterwards, **re-run `aibr setup` on the same profile**: an existing profile is updated, every current value is the default, and the bearer token and OpenCode password are **kept** unless you explicitly choose `[G]enerate new` or `[P]aste` (a new token makes every peer still using the old one get `HTTP 401`).
+A typical two-machine setup:
 
-If you generate a token yourself, use a secure 32-byte hexadecimal random token:
+```bash
+# on the worker (e.g. a staging VPS): prints a pairing code
+aibr init --role worker
+# on your laptop: paste that code when asked
+aibr init --role orchestrator
+```
+
+Pairing pins both machines' keys, writes `agents[]` / `allowed_sources[]` on both sides, and hands the worker's bearer token over without anyone copying it. To pair more machines later: `aibr enroll issue` on the worker, `aibr enroll join <code>` on the other node ([pairing guide](Docs/guides/pairing.md)).
+
+`aibr setup --profile <name>` is still the full wizard (re-run it to change a profile; `--advanced` adds the ports and `--config` a different config path).
+
+### 3. Check it end to end (`aibr doctor`)
+
+```bash
+aibr doctor
+```
+
+One ✓/✗ list: the role's prerequisites, Tailscale, the config, the project, the secrets, tailnet discovery, whether the bridge runs and answers `/health`, and finally a **ping** of every peer this machine calls — a signed no-op job that the peer authenticates, completes and reports back. Every ✗ line comes with the exact command that fixes it.
+
+### Running the bridge (`aibr start` / `aibr stop` / `aibr logs`)
+
+`aibr init` already started it on a worker. To manage it yourself:
+
+```bash
+aibr start --profile <name>     # install + load the user service, wait for /health
+aibr stop --profile <name>      # unload and remove it
+aibr status --profile <name>    # what runs it (launchd / systemd / tmux) and /health
+aibr logs --profile <name> -f   # <state dir>/logs/aibridge.log
+```
+
+The user service is a launchd agent on macOS (`~/Library/LaunchAgents/com.aibridge.<name>.plist`, loaded with `launchctl bootstrap gui/$(id -u)`) and a systemd user unit on Linux (`aibridge-<name>.service`). It runs `aibr serve --profile <name>` (plus `opencode serve` on `127.0.0.1` for an OpenCode worker), restarts it on failure and at login, and writes stdout/stderr to the profile's log file. On a Linux server, run `sudo loginctl enable-linger $USER` so the service keeps running after you log out (`aibr doctor` tells you when this is needed).
+
+For development, `aibr start --profile <name> --foreground` runs the same thing in the tmux session `aibridge-<name>` instead (`tmux attach -t aibridge-<name>`; windows stay open when a process exits). Use one or the other — they listen on the same port; `aibr stop` stops both.
+
+### 4. Ping a peer and send the first job
+
+```bash
+aibr ping staging-vps
+aibr send staging-vps "Run the tests and report failures." --capability run-tests
+```
+
+`aibr ping` is the proof that two machines work together: it reports the round trip, whether the worker's `/report` reached this machine, and what the peer accepts (capabilities and allowlisted project directories). `aibr send` fills in `source_agent_id`, `target_agent_id`, `callback_url`, `job_id` and the request signature; `--capability` defaults to the peer's read-only `investigate`, and `--project` to the peer's only project (or the one named like your current repository). It waits for the result and prints the summary and findings (`--no-wait` to return after dispatch). From Claude Code, the AIBridge plugin does the same (`aibr plugin install claude`).
+
+---
+
+## Operational Procedures
+
+### Manual Bearer Tokens (Without Pairing)
+
+Pairing (`aibr init` / `aibr enroll`) hands the bearer token over for you. If you instead share a token by hand (`aibr setup`, answer `P` to paste), generate a secure 32-byte hexadecimal random token:
 
 ```bash
 openssl rand -hex 32
 ```
 
-Both machines must use the same token. The token is not stored in `config.json` — it is kept separately at `~/.local/share/aibridge/<profile>/secrets/bearer_token` with `0600` permissions (owner-only) beneath your configured XDG data directory. Profile state lives in `~/.local/state/aibridge/<profile>/` with `0700` permissions. Secrets you type or paste are not echoed to the terminal.
+Both machines must use the same token. The token is not stored in `config.json` — it is kept separately at `~/.local/share/aibridge/<profile>/secrets/bearer_token` with `0600` permissions (owner-only) beneath your configured XDG data directory. Secrets you type or paste are not echoed to the terminal.
 
-### 3. Start Services (`aibr start`)
-
-Start OpenCode and the AIBridge daemon in a managed tmux session:
-
-```bash
-aibr start --profile <name>
-```
-
-This creates a tmux session named `aibridge-<profile>` with two windows:
-- `opencode` — running `opencode serve --port 4096 --hostname 127.0.0.1` (loopback only)
-- `aibridge` — running the bridge daemon bound to your Tailscale IPv4 address on port 8787
-
-Check health status:
-
-```bash
-aibr status --profile <name>
-```
-
-Attach to session: `tmux attach -t aibridge-<name>` (detach with `Ctrl+B, D`).
-
-`aibr start` (tmux) is the documented way to run a worker. The supervisor unit that `aibr setup` writes runs the same bridge (`aibr serve --profile <name>` in the default engine ingress mode; the router drain `aibr worker` only when `bridge.ingress_mode` is `router`). It supervises the bridge only, so an OpenCode worker still needs `opencode serve` running beside it. Use one or the other, not both — they listen on the same port. On macOS the unit is started with `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.aibridge.daemon.plist` and stopped with `launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.aibridge.daemon.plist`; on Linux with `systemctl --user enable --now aibridge.service` / `systemctl --user disable --now aibridge.service`.
-
-### 4. Verify Cross-Host Authentication
-
-To verify that two hosts share the same token without putting credentials in shell history:
+To check that two hosts share the token without putting it in shell history:
 
 ```bash
 read -rs AIBRIDGE_TOKEN
@@ -178,48 +198,25 @@ curl -i -X POST http://test-vps.tailnet:8787/trigger \
 unset AIBRIDGE_TOKEN
 ```
 
-An `HTTP 400` response means authentication succeeded and AIBridge rejected only the intentionally incomplete request body. An `HTTP 401` response means the token is missing or does not exactly match the token saved on the peer.
-
-### 5. Trigger a Task
-
-Dispatch a task across machines:
-
-```bash
-curl -X POST http://test-vps.tailnet:8787/trigger \
-  -H "Authorization: Bearer $AIBRIDGE_TOKEN" \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "job_id": "job-001",
-    "source_agent_id": "dev-main",
-    "target_agent_id": "test-vps",
-    "capability": "testing",
-    "project_dir": "/srv/apps/app-under-test",
-    "prompt": "Run tests and report failures.",
-    "callback_url": "http://dev-main.tailnet:8787/report",
-    "timeout_seconds": 1800
-  }'
-```
-
----
-
-## Operational Procedures
+An `HTTP 400` response means authentication succeeded and AIBridge rejected only the intentionally incomplete request body. An `HTTP 401` response means the token is missing or does not exactly match the token saved on the peer (or, with `"code": "signature_required"`, that the peer requires signed requests from a paired node — `aibr ping` from a paired node is the complete check).
 
 ### Troubleshoot Bearer-Token Authentication
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `HTTP 401` from `/trigger` or `/report` | The supplied token is missing or differs from the peer's token. | Compare the token saved for the selected profile on both machines and enter the exact same value during setup. |
-| `bearer_token` file is missing | Setup did not complete for the selected profile, or profile data was removed. | Run `aibr setup --profile <name>` again and provide the shared token. |
-| `aibr status` is healthy but requests return `HTTP 401` | Health endpoint does not require authentication. | Verify tokens using the cross-host curl test above. |
+| `aibr ping` fails with `401` and mentions signing or pairing | This node is not paired with the peer (the peer requires signed requests). | `aibr enroll issue` on the peer, then `aibr enroll join <code>` here. |
+| `HTTP 401` from `/trigger` or `/report` | The supplied token is missing or differs from the peer's token. | Pair again (`aibr enroll`), which hands the token over; or compare the token saved for the profile on both machines. |
+| `bearer_token` file is missing | Setup did not complete for the selected profile, or profile data was removed. | `aibr doctor` names the fix; usually `aibr setup --profile <name>`. |
+| `aibr status` is healthy but jobs fail | `/health` does not require authentication. | `aibr ping <peer>` (or `aibr doctor`) sends a real signed job and says where it fails. |
 
 ### Rotate a Bearer Token
 
 The bearer-token secret is write-once from setup's point of view: re-running `aibr setup` keeps it unless you explicitly answer `G` (generate new) or `P` (paste) at the bearer-token prompt, which replaces it. To rotate a token:
 
-1. Stop AIBridge on both machines (`tmux kill-session -t aibridge-<profile>`).
+1. Stop AIBridge on both machines (`aibr stop --profile <profile>`).
 2. Remove `~/.local/share/aibridge/<profile>/secrets/bearer_token` (or the equivalent path beneath your configured XDG data directory) on both machines — or answer `G` on one machine and `P` on the other in the next step.
 3. Run `aibr setup --profile <name>` again on both machines with one new shared token.
-4. Restart both profiles and repeat the authentication verification.
+4. Restart both profiles (`aibr start --profile <profile>`) and check with `aibr doctor`.
 
 ### Update & Uninstall
 
@@ -244,12 +241,19 @@ bun remove -g @nyugennguyen/aibridge
 
 | Command | Description | Profile Required |
 |---|---|:---:|
-| `aibr setup` | Interactive setup wizard; re-run to update a profile. | Optional |
-| `aibr start` | Launches OpenCode and bridge inside managed tmux session. | **Yes** |
+| `aibr init` | Quickstart: set up this machine in at most four questions. | Optional |
+| `aibr doctor` | Checks the node end to end (verify + status + ping), with a fix per problem. | Optional |
+| `aibr ping` | Sends a signed no-op job to a peer and waits for its result. | Optional |
+| `aibr send` | Dispatches a job to a peer and waits for its result. | Optional |
+| `aibr logs` | Prints (or follows, `-f`) the profile's bridge log. | Optional |
+| `aibr setup` | Full interactive setup wizard; re-run to update a profile. | Optional |
+| `aibr start` | Starts the bridge as a user service (launchd/systemd); `--foreground` runs it in tmux. | **Yes** |
+| `aibr stop` | Stops the profile's service and tmux session (or every job with `--all-jobs`). | **Yes** |
 | `aibr serve` | Runs bridge HTTP server directly in foreground. | **Yes** |
 | `aibr worker` | Starts Tier 2 ingress drain worker. | **Yes** |
-| `aibr status` | Checks process health and `/health` probe connectivity. | **Yes** |
+| `aibr status` | Reports what runs the bridge and probes `/health`. | **Yes** |
 | `aibr verify` | Validates the role's dependencies, Tailscale, bearer token, and schema. | Optional |
+| `aibr enroll` | Pairs nodes with one-time codes (issue, join, list, revoke). | Optional |
 | `aibr update` | Checks for and installs latest version. | Optional |
 | `aibr tui` | Links and launches the `aibr-manager` plugin in Herdr. | **Yes** |
 | `aibr bundle` | Generates a redacted diagnostic support bundle. | **Yes** |

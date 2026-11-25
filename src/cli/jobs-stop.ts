@@ -1,7 +1,8 @@
 /**
  * `aibr stop` — the operator's stop controls on a worker node.
  *
- *   aibr stop --profile <name>               stops the profile's tmux session (aibridge-<name>)
+ *   aibr stop --profile <name>               stops the profile's user service (launchd/systemd,
+ *                                             unloaded and removed) and its tmux session (aibridge-<name>)
  *   aibr stop --all-jobs [--profile <name>]  kill switch: terminates every running Claude/script
  *                                             job; each is failed "stopped by operator" and reported
  *
@@ -10,16 +11,19 @@
  * the bridge itself, and jobs awaiting approval are left for `aibr reject`.
  */
 import type { ProcessRunner } from "../host/types.js"
+import type { StopServiceResult } from "../host/daemonizer.js"
 import { operatorRequest, parseOperatorArgs, sanitizeForTerminal, type OperatorCliDeps } from "./approve.js"
 
 export interface StopCliDeps extends OperatorCliDeps {
   readonly processRunner: ProcessRunner
+  /** Unloads and removes the profile's user service. Absent: only tmux is stopped. */
+  readonly stopService?: (profile: string) => Promise<StopServiceResult>
 }
 
 const STOP_FLAGS = new Set(["--profile", "--yes", "--all-jobs"])
 
 export const STOP_HELP = [
-  "aibr stop — stop a profile's tmux session, or every running job (kill switch)",
+  "aibr stop — stop a profile's bridge (service and tmux), or every running job (kill switch)",
   "",
   "Usage:",
   "  aibr stop --profile <name>",
@@ -28,7 +32,8 @@ export const STOP_HELP = [
   "--all-jobs terminates every running Claude/script job on this node; each is",
   "failed \"stopped by operator\" and its requester gets a report. It needs the",
   "operator token and must run on the node itself. Without --all-jobs the",
-  "tmux session aibridge-<name> (bridge and runtime windows) is killed.",
+  "profile's user service (aibr start) is unloaded and removed, and the tmux",
+  "session aibridge-<name> (aibr start --foreground) is killed.",
   "",
 ].join("\n")
 
@@ -53,15 +58,28 @@ export async function runStopCommand(argv: readonly string[], deps: StopCliDeps)
       deps.writer("Error: --profile is required (or use --all-jobs to stop running jobs)\n")
       return 64
     }
+    let failed = false
+    let stoppedSomething = false
+    if (deps.stopService !== undefined) {
+      const service = await deps.stopService(parsed.profile)
+      if (service.kind === "stopped") {
+        stoppedSomething = true
+        deps.writer(`Stopped the ${service.manager} service for ${parsed.profile}\n`)
+        for (const note of service.notes) deps.writer(`${sanitizeForTerminal(note)}\n`)
+      } else if (service.kind === "failed") {
+        failed = true
+        deps.writer(`service_error: ${sanitizeForTerminal(service.message)}\n`)
+      }
+    }
     const session = `aibridge-${parsed.profile}`
     const result = await deps.processRunner.exec(["tmux", "kill-session", "-t", session])
     if (result.exitCode === 0) {
       deps.writer(`Stopped tmux session: ${session}\n`)
-      return 0
+      return failed ? 1 : 0
     }
-    if (/can't find session|no server running|session not found/i.test(result.stderr)) {
-      deps.writer(`Not running: ${session}\n`)
-      return 0
+    if (result.exitCode === null || /can't find session|no server running|session not found|error connecting|No such file/i.test(result.stderr)) {
+      if (!stoppedSomething && !failed) deps.writer(`Not running: ${parsed.profile} (no user service, no tmux session ${session})\n`)
+      return failed ? 1 : 0
     }
     deps.writer(`tmux_error: ${sanitizeForTerminal(result.stderr || "kill-session failed")}\n`)
     return 1

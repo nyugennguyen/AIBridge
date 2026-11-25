@@ -44,6 +44,15 @@ export type StatusProfileResult =
 
 // ── Helpers ─────────────────────────────────────────────────────────────
 
+/**
+ * Appended to the tmux command that creates a window, in the same command list
+ * so it applies before the window's process can exit: a crashed bridge leaves
+ * its window (and its error) on screen instead of vanishing with it.
+ */
+function remainOnExit(target: string): readonly string[] {
+  return [";", "set-option", "-w", "-t", target, "remain-on-exit", "on"]
+}
+
 async function sessionExists(
   runner: ProcessRunner,
   sessionName: string,
@@ -122,7 +131,7 @@ export async function startProfile(
     // spawns Claude Code per job.
     const bridgeResult = await deps.processRunner.exec(
       ["tmux", "new-session", "-d", "-s", profile.sessionName, "-n", "bridge",
-        "aibr", "serve", "--profile", profile.name],
+        "aibr", "serve", "--profile", profile.name, ...remainOnExit(`${profile.sessionName}:bridge`)],
       { env: buildBridgeEnv(deps.env, "claude") },
     )
     if (bridgeResult.exitCode !== 0) {
@@ -142,7 +151,7 @@ export async function startProfile(
   const ocEnv = buildOpencodeEnv(deps.env, profile.opencodePort)
   const ocResult = await deps.processRunner.exec(
     ["tmux", "new-session", "-d", "-s", profile.sessionName, "-n", "opencode",
-      "aibr", "_opencode", "--profile", profile.name],
+      "aibr", "_opencode", "--profile", profile.name, ...remainOnExit(`${profile.sessionName}:opencode`)],
     { env: ocEnv },
   )
 
@@ -157,7 +166,7 @@ export async function startProfile(
   const bridgeEnv = buildBridgeEnv(deps.env)
   const bridgeResult = await deps.processRunner.exec(
     ["tmux", "new-window", "-t", profile.sessionName, "-n", "bridge",
-      "aibr", "serve", "--profile", profile.name],
+      "aibr", "serve", "--profile", profile.name, ...remainOnExit(`${profile.sessionName}:bridge`)],
     { env: bridgeEnv },
   )
 

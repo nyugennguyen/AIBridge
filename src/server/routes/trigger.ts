@@ -11,7 +11,9 @@ import { legacyJobProjection } from "../../jobs/legacy-projection.js"
 import type { JobCheckout } from "../../jobs/types.js"
 import type { TriggerRequest } from "../../config/types.js"
 import type { AppDependencies } from "../app.js"
-import { approveHint, atCapacityBody, launchClaudeJob } from "./claude-dispatch.js"
+import { approveHint, atCapacityBody, launchClaudeJob, terminalReporter } from "./claude-dispatch.js"
+import { PING_CAPABILITY, buildPong } from "../../jobs/ping.js"
+import { CLI_VERSION } from "../../version.js"
 
 export function registerTriggerRoute(app: FastifyInstance, dependencies: AppDependencies): void {
   // Built at registration, not per request: a null token with `bearer-token` mode
@@ -43,6 +45,10 @@ export function registerTriggerRoute(app: FastifyInstance, dependencies: AppDepe
     const trigger = parsed.data
 
     if (trigger.target_agent_id !== dependencies.config.agent_id) return reply.code(404).send({ error: "Target agent not found here" })
+
+    // `aibr ping`: after the same authentication as any trigger, before anything
+    // that would run work. See src/jobs/ping.ts.
+    if (trigger.capability === PING_CAPABILITY) return await handlePing(trigger, reply, dependencies)
 
     try {
       assertSourceAuthorized(trigger.source_agent_id, trigger.capability, dependencies.config.security.allowed_sources)
@@ -297,6 +303,46 @@ async function handleClaudeTrigger(
       ...base,
       ...(launched.launch.runtimeSessionId !== undefined ? { runtime_session_id: launched.launch.runtimeSessionId } : {}),
       status: "accepted",
+    }),
+  )
+}
+
+/**
+ * A no-op job: the caller is an enrolled source, nothing runs, the job is
+ * completed at once and reported back through the normal callback path. It is
+ * not recorded in the kernel: no work was accepted, so there is no run.
+ */
+async function handlePing(trigger: TriggerRequest, reply: FastifyReply, dependencies: AppDependencies): Promise<FastifyReply> {
+  const source = dependencies.config.security.allowed_sources.find((s) => s.source_agent_id === trigger.source_agent_id)
+  if (source === undefined) {
+    return reply.code(403).send({ error: `Source ${trigger.source_agent_id} is not authorized`, code: "source_not_enrolled" })
+  }
+  if (trigger.repo !== undefined || trigger.ref !== undefined || (trigger.depends_on ?? []).length > 0) {
+    return reply.code(400).send({ error: "A ping takes no repo, ref or depends_on", code: "invalid_ping" })
+  }
+  let job
+  try {
+    job = await dependencies.jobManager.createJob(trigger)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Trigger failed"
+    if (message.includes("already exists")) return reply.code(409).send({ error: message })
+    return reply.code(500).send({ error: message })
+  }
+  const completed = await dependencies.jobManager.completePing(
+    job.id,
+    buildPong(dependencies.config, trigger.source_agent_id, CLI_VERSION),
+  )
+  // Delivered after the answer, like every finished job: the caller learns the
+  // delivery outcome from `GET /jobs/:id` (`callbackDelivery`). Never throws.
+  void terminalReporter(dependencies)(completed)
+  return reply.code(202).send(
+    triggerResponseSchema.parse({
+      accepted: true,
+      job_id: job.id,
+      target_agent_id: dependencies.config.agent_id,
+      status_url: `${dependencies.config.bridge.public_url}/jobs/${job.id}`,
+      status: "accepted",
+      ...(trigger.task_id !== undefined ? { task_id: trigger.task_id } : {}),
     }),
   )
 }

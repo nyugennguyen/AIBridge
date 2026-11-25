@@ -1178,6 +1178,7 @@ async function createRealDeps(): Promise<CliDeps> {
         {
           name: profile,
           bridgePort: bridge.port as number,
+          ...(typeof bridge.host === "string" && bridge.host !== "" ? { bridgeHost: bridge.host } : {}),
           ...(runtimeKind === "opencode" && typeof opencode?.server_port === "number"
             ? { opencodePort: opencode.server_port }
             : {}),
@@ -1339,6 +1340,7 @@ async function createRealDeps(): Promise<CliDeps> {
         {
           name: profile,
           bridgePort: bridge.port as number,
+          ...(typeof bridge.host === "string" && bridge.host !== "" ? { bridgeHost: bridge.host } : {}),
           ...(runtimeKind === "opencode" && typeof opencode?.server_port === "number"
             ? { opencodePort: opencode.server_port }
             : {}),

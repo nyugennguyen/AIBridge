@@ -394,6 +394,21 @@ describe("statusProfile", () => {
     }
   })
 
+  it("probes the configured bridge host (the bridge does not listen on loopback)", async () => {
+    const runner = new SequenceProcessRunner(
+      entries([
+        ["tmux has-session -t aibridge-my-proj", successResult()],
+      ]),
+    )
+    const probe = new FakeHttpProbe(okProbe())
+    const deps = testDeps({ runner, probe })
+    const profile = testProfile({ name: "my-proj", bridgePort: 8787, sessionName: "aibridge-my-proj" })
+
+    await statusProfile(deps, { ...profile, bridgeHost: "100.65.238.38" })
+
+    expect(probe.calls[0]!.url).toBe("http://100.65.238.38:8787/health")
+  })
+
   it("probes http://127.0.0.1:<bridgePort>/health", async () => {
     const runner = new SequenceProcessRunner(
       entries([

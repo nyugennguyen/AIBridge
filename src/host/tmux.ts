@@ -5,6 +5,13 @@ import type { ProcessRunner, HttpProbe } from "./types.js"
 export interface TmuxProfile {
   readonly name: string
   readonly bridgePort: number
+  /**
+   * The address the bridge binds (`bridge.host`, normally the Tailscale IP).
+   * `aibr status` must probe THIS address: the bridge deliberately does not
+   * listen on loopback, so probing 127.0.0.1 reported every correctly configured
+   * node as `bridge_unavailable`. Absent → 127.0.0.1 (legacy behaviour).
+   */
+  readonly bridgeHost?: string
   /** Required for the OpenCode runtime; ignored (and usually absent) for Claude. */
   readonly opencodePort?: number
   readonly sessionName: string
@@ -175,7 +182,8 @@ export async function statusProfile(
     return { kind: "session_missing", sessionName: profile.sessionName }
   }
 
-  const url = `http://127.0.0.1:${profile.bridgePort}/health`
+  const host = profile.bridgeHost ?? "127.0.0.1"
+  const url = `http://${host.includes(":") ? `[${host}]` : host}:${profile.bridgePort}/health`
   const probe = await deps.httpProbe.probe(url)
 
   if (probe.ok) {

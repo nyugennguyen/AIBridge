@@ -59,6 +59,16 @@ export interface PromptResult {
   readonly value: string
 }
 
+/** Options for `promptConfirm`. */
+export interface ConfirmOptions {
+  /**
+   * When true, an empty answer (just Enter) means "yes" and the prompt shows
+   * `(Y/n)`. Reserved for the non-destructive end of a flow -- "Save?" after a
+   * dozen answers -- where Enter meaning "throw it all away" is the trap.
+   */
+  readonly defaultYes?: boolean
+}
+
 /**
  * Interactive user prompting with four variants:
  *
@@ -79,7 +89,7 @@ export interface Prompter {
   /** Convenience: masked secret input.  MUST reject when stdin is not a TTY. */
   promptSecret(message: string): Promise<string>
   /** Convenience: yes/no confirmation.  Returns `"y"` or `"n"`. */
-  promptConfirm(message: string): Promise<string>
+  promptConfirm(message: string, options?: ConfirmOptions): Promise<string>
   /** Convenience: select from options. */
   promptSelect(message: string, options: readonly SelectOption[]): Promise<string>
 }

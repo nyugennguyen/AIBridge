@@ -2,9 +2,19 @@ import { isAbsolute, relative, resolve } from "node:path"
 
 const SENSITIVE_KEY_PATTERN = /(?:AIBRIDGE_|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTH|_KEY$|^KEY$)/i
 
+/**
+ * Provider credentials the Claude Code CLI needs to authenticate in print mode.
+ * Both match SENSITIVE_KEY_PATTERN, so they must be allowlisted explicitly.
+ * `CLAUDE_CODE_OAUTH_TOKEN` comes from `claude setup-token`; `ANTHROPIC_API_KEY`
+ * is an API key. In `-p` mode the API key wins when both are present, so a
+ * worker environment should carry only one of them. Non-secret variables such
+ * as HOME and PATH are not matched by the pattern and always pass through.
+ */
+export const CLAUDE_PROVIDER_ENV_KEYS: readonly string[] = ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"]
+
 export function sanitizeChildProcessEnv(
   sourceEnv: Record<string, string | undefined>,
-  allowedProviderKeys: string[] = [],
+  allowedProviderKeys: readonly string[] = [],
 ): Record<string, string> {
   const allowedSet = new Set(allowedProviderKeys)
   const sanitized: Record<string, string> = {}

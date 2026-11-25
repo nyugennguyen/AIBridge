@@ -82,8 +82,9 @@ describe("RuntimeDiscoveryService", () => {
       const claude = all.find((r) => r.kind === "claude")
       expect(claude?.installed).toBe(true)
       expect(claude?.version).toBe("2.1.138 (Claude Code)")
-      expect(claude?.capabilities?.nativeSessionRestore).toBe(true)
-      expect(claude?.capabilityReport?.structuredPermissions.status).toBe("conditional")
+      expect(claude?.capabilities?.nativeSessionRestore).toBe(false)
+      expect(claude?.capabilityReport?.nativeSessionRestore.status).toBe("conditional")
+      expect(claude?.capabilityReport?.structuredPermissions.status).toBe("unsupported")
 
       const codex = all.find((r) => r.kind === "codex")
       expect(codex?.installed).toBe(true)

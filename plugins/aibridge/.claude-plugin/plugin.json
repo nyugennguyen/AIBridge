@@ -1,0 +1,16 @@
+{
+  "name": "aibridge",
+  "version": "3.0.0",
+  "description": "Use Claude Code as the orchestrator that dispatches work (tests, investigations, fixes) to remote AIBridge worker nodes.",
+  "author": { "name": "AIBridge" },
+  "license": "MIT",
+  "userConfig": {
+    "profile": {
+      "type": "string",
+      "title": "AIBridge profile",
+      "description": "AIBridge profile name; empty = the only profile",
+      "required": false,
+      "sensitive": false
+    }
+  }
+}

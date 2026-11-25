@@ -18,6 +18,8 @@
   "files": [
     "dist",
     "bin",
+    "plugins",
+    ".claude-plugin",
     "README.md",
     "LICENSE"
   ],

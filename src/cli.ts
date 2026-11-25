@@ -16,7 +16,7 @@
  */
 
 import { existsSync } from "node:fs"
-import { access } from "node:fs/promises"
+import { access, rm } from "node:fs/promises"
 import { validateProfileName, resolveProfilePaths } from "./host/paths.js"
 import { readSecret, readConfig } from "./host/profile-store.js"
 import type { IpcBusHandle } from "./ipc/bridge.js"
@@ -60,18 +60,30 @@ export interface CliDeps {
   readonly isTTY: boolean
   /** Whether the current process stdin is a TTY (needed by the full-screen UI). */
   readonly isInputTTY?: boolean
-  /** Run interactive setup. Profile is undefined when not passed. */
-  readonly runSetup: (profile?: string) => Promise<{
+  /**
+   * Run interactive setup. Profile is undefined when not passed.
+   *
+   * `configPath` is the `--config <path>` override (otherwise the standard
+   * profile path is used without asking); `advanced` is `--advanced`, which adds
+   * the port questions.
+   */
+  readonly runSetup: (profile?: string, options?: SetupCommandOptions) => Promise<{
     readonly kind: "persisted" | "blocked" | "declined"
     readonly profileName?: string
     readonly configPath?: string
     readonly reason?: string
     readonly preflight?: unknown
     readonly launchTui?: boolean
+    /** Node role written to the profile; selects the "next steps" printed. */
+    readonly role?: string
+    readonly runtime?: string | null
+    /** True when an existing profile was updated rather than created. */
+    readonly updated?: boolean
     readonly daemon?: {
       readonly installed: boolean
       readonly unitPath: string | null
       readonly command: string | null
+      readonly stopCommand?: string | null
       readonly started: boolean
       readonly error: string | null
     }
@@ -112,7 +124,7 @@ export interface CliDeps {
   readonly processRunner?: ProcessRunner
   /** Generate diagnostic support bundle. */
   readonly runBundle?: (profile: string, options?: { readonly preview?: boolean }) => Promise<CliExitCode>
-  /** Validate dependencies, SSL token, and config format for a profile. */
+  /** Validate role-specific dependencies, the bearer token, and config format for a profile. */
   readonly verifyProfile?: (profile: string) => Promise<{
     readonly ok: boolean
     readonly summary: string
@@ -145,6 +157,14 @@ export interface CliDeps {
   readonly version: string
 }
 
+/** Options `aibr setup` forwards to the wizard. */
+export interface SetupCommandOptions {
+  /** `--config <path>`: write the profile config here instead of the standard path. */
+  readonly configPath?: string
+  /** `--advanced`: also ask for the bridge and OpenCode ports. */
+  readonly advanced?: boolean
+}
+
 // ── Constants ──────────────────────────────────────────────────────────
 
 const PROG = "aibr"
@@ -157,6 +177,8 @@ const ALL_COMMANDS = [...COMMANDS, "_opencode"] as const
 interface ParsedArgs {
   readonly command: string | null
   readonly profile: string | null
+  /** `--config <path>`; `""` when the flag was given without a value. */
+  readonly configPath: string | null
   readonly unknownFlags: readonly string[]
   readonly hasFlag: (name: string) => boolean
 }
@@ -164,6 +186,7 @@ interface ParsedArgs {
 function parseArgs(argv: readonly string[]): ParsedArgs {
   let command: string | null = null
   let profile: string | null = null
+  let configPath: string | null = null
   const knownFlags: string[] = []
   const unknownFlags: string[] = []
 
@@ -175,6 +198,11 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     if (arg === "--profile" || arg === "-p") {
       i++
       profile = i < argv.length ? argv[i]! : ""
+    } else if (arg === "--config") {
+      i++
+      configPath = i < argv.length ? argv[i]! : ""
+    } else if (arg === "--advanced") {
+      knownFlags.push("--advanced")
     } else if (arg === "--help" || arg === "-h") {
       knownFlags.push("--help")
     } else if (arg === "--version" || arg === "-v") {
@@ -209,6 +237,7 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
   return {
     command,
     profile,
+    configPath,
     unknownFlags,
     hasFlag: (name: string) => knownFlags.includes(name),
   }
@@ -229,7 +258,7 @@ function helpText(): string {
     "  serve    Run the bridge server",
     "  worker   Drain the router's admission queue (no listener)",
     "  status   Check tmux session and bridge health",
-    "  verify   Validate dependencies, SSL token, and config format",
+    "  verify   Validate role-specific dependencies, bearer token, and config",
     "  update   Check and update to the latest version",
     "  tui      Open the interactive manager (Herdr plugin)",
     "  bundle   Generate diagnostic support bundle",
@@ -237,6 +266,8 @@ function helpText(): string {
     "",
     "Options:",
     "  --profile, -p <name>   Profile name (required for start/serve/worker/status/tui)",
+    "  --config <path>        Config file to write instead of the standard path (for setup)",
+    "  --advanced             Also ask for bridge and OpenCode ports (for setup)",
     "  --check, -c            Check for updates without installing (for update)",
     "  --yes, -y              Automatic yes to prompts (for update)",
     "  --json                 Emit one JSON document and nothing else (for discover)",
@@ -245,7 +276,128 @@ function helpText(): string {
     "  --shadow-mode          Run in shadow mode (mirroring ingress to router)",
     "  --ipc-publish          Serve the local IPC bus (worker only)",
     "",
+    `Run "${PROG} <command> --help" for help on one command.`,
+    "",
   ].join("\n")
+}
+
+/**
+ * Help for a single command, printed by `aibr <command> --help`.
+ *
+ * Kept as data beside the global help so both are reviewed together; a command
+ * without an entry falls back to the global help.
+ */
+const COMMAND_HELP: Readonly<Record<string, readonly string[]>> = {
+  setup: [
+    `${PROG} setup — create or update a profile on this machine`,
+    "",
+    "Usage:",
+    `  ${PROG} setup [--profile <name>] [--config <path>] [--advanced]`,
+    "",
+    "Asks for the node role (worker / orchestrator / both), the worker runtime",
+    "(opencode / claude, auto-detected), the bearer token, the project directory,",
+    "and which discovered peer to enrol. Re-running on an existing profile updates",
+    "it: current values are the defaults and the bearer token is kept unless you",
+    "choose to generate or paste a new one.",
+    "",
+    "Options:",
+    "  --profile, -p <name>   Profile to create or update (asked when omitted)",
+    "  --config <path>        Write the config here instead of the standard path",
+    "  --advanced             Also ask for the bridge and OpenCode ports",
+    "",
+    "Requires an interactive terminal.",
+    "",
+  ],
+  start: [
+    `${PROG} start — start OpenCode and the bridge in a tmux session`,
+    "",
+    "Usage:",
+    `  ${PROG} start --profile <name>`,
+    "",
+    "Creates the tmux session aibridge-<name> with two windows: opencode",
+    "(opencode serve on 127.0.0.1) and aibridge (the bridge on the Tailscale IP).",
+    `Check it with "${PROG} status --profile <name>".`,
+    "",
+  ],
+  status: [
+    `${PROG} status — check the tmux session and the bridge /health endpoint`,
+    "",
+    "Usage:",
+    `  ${PROG} status --profile <name>`,
+    "",
+    "Reports healthy, session_missing, or bridge_unavailable. /health is",
+    "unauthenticated, so healthy does not prove peers can authenticate.",
+    "",
+  ],
+  verify: [
+    `${PROG} verify — validate a profile and this host for the profile's role`,
+    "",
+    "Usage:",
+    `  ${PROG} verify [--profile <name>]`,
+    "",
+    "Checks the binaries the profile's role needs (worker+opencode: tmux, opencode,",
+    "tailscale; worker+claude: tmux, claude, tailscale; orchestrator: claude,",
+    "tailscale), Tailscale state, the config schema, project directories, the",
+    "bearer-token secret, and (for OpenCode workers) the OpenCode password.",
+    "The profile defaults to \"default\".",
+    "",
+  ],
+  serve: [
+    `${PROG} serve — run the bridge HTTP server in the foreground`,
+    "",
+    "Usage:",
+    `  ${PROG} serve --profile <name> [--shadow-mode]`,
+    "",
+    "Binds the bridge to the profile's Tailscale address and port. This is what",
+    `the "aibridge" window of "${PROG} start" runs, and what the supervisor unit`,
+    "written by setup runs in the default engine ingress mode.",
+    "",
+    "Options:",
+    "  --shadow-mode          Mirror ingress to the router (shadow mode)",
+    "",
+  ],
+  discover: [
+    `${PROG} discover — list tailnet peers and probe their /health (read-only)`,
+    "",
+    "Usage:",
+    `  ${PROG} discover [--profile <name>] [--json]`,
+    "",
+    "Reachability is not authentication: discovery never enrols a peer and never",
+    "writes config. --profile only labels peers the profile already enrols.",
+    "",
+    "Options:",
+    "  --json                 Emit one JSON document and nothing else",
+    "",
+  ],
+}
+
+function commandHelpText(command: string | null): string {
+  const lines = command !== null ? COMMAND_HELP[command] : undefined
+  return lines === undefined ? helpText() : lines.join("\n")
+}
+
+/** Role-aware "what to do now", printed after a successful `aibr setup`. */
+function nextStepsText(profile: string, role: string | undefined, daemonStarted: boolean): string {
+  const lines = ["", "Next steps:"]
+  if (role === "orchestrator" || role === "both") {
+    lines.push(`  ${PROG} verify --profile ${profile}     # check this machine for the orchestrator role`)
+  }
+  if (role !== "orchestrator") {
+    // With the supervisor unit already serving the bridge, `aibr start` would
+    // launch a second bridge on the same port; only point at it otherwise.
+    if (!daemonStarted) {
+      lines.push(`  ${PROG} start --profile ${profile}      # start the runtime and the bridge (tmux)`)
+    }
+    lines.push(`  ${PROG} status --profile ${profile}     # confirm the bridge answers /health`)
+  }
+  if (role === "orchestrator" || role === "both") {
+    lines.push(
+      "  Claude Code dispatches work through the AIBridge Claude Code plugin;",
+      "  install it once it ships for your version (no supervisor unit is needed here).",
+    )
+  }
+  lines.push("")
+  return lines.join("\n")
 }
 
 /**
@@ -497,7 +649,9 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<Cl
 
   // ── Global flags (synchronous, no deps needed) ─────────────────────
   if (args.hasFlag("--help")) {
-    deps.writer(helpText())
+    // `aibr setup --help` answers about setup; an unknown or help-less command
+    // falls back to the global help rather than an error.
+    deps.writer(commandHelpText(args.command))
     return 0
   }
 
@@ -529,37 +683,71 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<Cl
 
   const command = args.command
 
+  // `--config` and `--advanced` only mean something to setup; anywhere else
+  // they are a typo, and a silently ignored flag is worse than an error.
+  if (command !== "setup" && (args.configPath !== null || args.hasFlag("--advanced"))) {
+    deps.writer(`Error: ${args.configPath !== null ? "--config" : "--advanced"} is only supported by setup\n`)
+    return 1
+  }
+
   // ── setup ──────────────────────────────────────────────────────────
   if (command === "setup") {
     if (!deps.isTTY) {
       deps.writer("Error: setup requires an interactive TTY\n")
       return 1
     }
+    if (args.profile !== null) {
+      const profileErr = validateProfileArg(args.profile)
+      if (profileErr !== null) {
+        deps.writer(`Error: ${profileErr}\n`)
+        return 1
+      }
+    }
+    if (args.configPath === "") {
+      deps.writer("Error: --config requires a path\n")
+      return 1
+    }
     printCliBanner(deps.writer)
     try {
-      const outcome = await deps.runSetup(args.profile ?? undefined)
+      const options: SetupCommandOptions = {
+        ...(args.configPath !== null ? { configPath: args.configPath } : {}),
+        ...(args.hasFlag("--advanced") ? { advanced: true } : {}),
+      }
+      const outcome = await deps.runSetup(
+        args.profile ?? undefined,
+        Object.keys(options).length > 0 ? options : undefined,
+      )
       switch (outcome.kind) {
-        case "persisted":
-          deps.writer(`Profile "${outcome.profileName}" created. Config: ${outcome.configPath}\n`)
+        case "persisted": {
+          const profileName = outcome.profileName ?? "default"
+          deps.writer(
+            `Profile "${profileName}" ${outcome.updated === true ? "updated" : "created"}. ` +
+              `Config: ${outcome.configPath}\n`,
+          )
           // The supervisor unit is `KeepAlive`, so "written but not running" is
           // the single most misleading thing setup can report. Say which it is.
           if (outcome.daemon) {
             if (outcome.daemon.error !== null) {
               deps.writer(`Daemon: not started (${outcome.daemon.error})\n`)
             } else if (outcome.daemon.started) {
-              deps.writer("Daemon: started\n")
+              deps.writer(
+                `Daemon: started${outcome.daemon.stopCommand ? ` (stop it with: ${outcome.daemon.stopCommand})` : ""}\n`,
+              )
             } else if (outcome.daemon.installed) {
               deps.writer(
-                `Daemon: unit written to ${outcome.daemon.unitPath ?? "?"} but not started. Start it with: ${outcome.daemon.command ?? "?"}\n`,
+                `Daemon: unit written to ${outcome.daemon.unitPath ?? "?"} but not started. ` +
+                  `To run the bridge under the supervisor instead of tmux: ${outcome.daemon.command ?? "?"}\n`,
               )
             } else {
               deps.writer("Daemon: no supervisor unit written on this platform\n")
             }
           }
+          deps.writer(nextStepsText(profileName, outcome.role, outcome.daemon?.started === true))
           if (outcome.launchTui && deps.runTui) {
-            return await deps.runTui(outcome.profileName ?? "default")
+            return await deps.runTui(profileName)
           }
           return 0
+        }
         case "blocked":
           deps.writer(`Setup blocked: ${outcome.reason ?? "unknown reason"}\n`)
           return 1
@@ -849,12 +1037,18 @@ async function createRealDeps(): Promise<CliDeps> {
       })
     },
 
-    runSetup: async (profile?: string) => {
+    runSetup: async (profile?: string, setupOptions?: SetupCommandOptions) => {
       const reader = createStreamLineReader(Bun.stdin.stream())
+      const stdin = process.stdin as NodeJS.ReadStream | undefined
       const prompter = new BunPrompter({
         reader,
         writer: { write: (d: Uint8Array) => { void process.stdout.write(d) } },
-        isTTY: Boolean(process.stdin?.isTTY),
+        isTTY: Boolean(stdin?.isTTY),
+        // Echo suppression for secrets: raw mode on the controlling terminal
+        // while a secret is typed, restored by the prompter in a `finally`.
+        ...(stdin?.isTTY === true && typeof stdin.setRawMode === "function"
+          ? { setRawMode: (enabled: boolean) => { stdin.setRawMode(enabled) } }
+          : {}),
       })
 
       const { runSetupWizard } = await import("./cli/setup-wizard.js")
@@ -863,10 +1057,21 @@ async function createRealDeps(): Promise<CliDeps> {
         processRunner,
         prompter,
         initialProfile: profile,
+        ...(setupOptions?.configPath !== undefined ? { configPath: setupOptions.configPath } : {}),
+        ...(setupOptions?.advanced === true ? { advanced: true } : {}),
         env: process.env as Record<string, string | undefined>,
         fileOps: {
           writeConfig: async (path, data) => writeConfig(path, data),
           writeSecret: async (path, value) => writeSecret(path, value),
+          // Only reached when the operator explicitly chose a new value for a
+          // secret that already exists. `writeSecret` is write-once, so the old
+          // file is removed first; `rm` on a symlink removes the link, never its
+          // target, and `writeSecret` then refuses to follow anything new.
+          replaceSecret: async (path, value) => {
+            if (value.length === 0) throw new Error("Secret value must not be empty")
+            await rm(path, { force: true })
+            await writeSecret(path, value)
+          },
           ensureProfileDirs: async (paths) => ensureProfileDirs(paths),
           readConfig: async (path) => readConfig(path),
         },

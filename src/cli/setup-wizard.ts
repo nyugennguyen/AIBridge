@@ -1,35 +1,54 @@
 /**
- * AIBridge Interactive 5-Step TUI Onboarding Wizard (`aibr setup`)
+ * AIBridge onboarding wizard (`aibr setup`).
  *
- * Implements the mouse-and-keyboard interactive onboarding wizard matching:
- * - Docs/tui/aibridge-setup-wizard.html
- * - Docs/assets/logos/logo-design-system.html
- * - .agents/skills/aibr-onboarding/SKILL.md
+ * A sequential line-prompt flow driven through an injected `Prompter`. It is the
+ * flow every `aibr setup` run executes, interactive terminal or scripted test
+ * alike. (`StepperFSM` at the bottom of this file models a keyboard/mouse
+ * stepper from Docs/tui/aibridge-setup-wizard.html; it is retained and unit
+ * tested, but `runSetupWizard` does not drive it.)
  *
- * Replaces legacy sequential readline prompts with a 5-step finite state machine:
- * [1. Network] ──▶ [2. Security] ──▶ [3. Allowlists] ──▶ [4. AI Runtimes] ──▶ [5. Install & Test]
+ * Flow:
+ *   profile → (existing profile? "Update existing profile?") → node role →
+ *   runtime (worker/both) → role-aware preflight → bearer token → OpenCode
+ *   password (opencode runtime only) → agent id → project path → tailnet
+ *   discovery & explicit peer enrolment → ports (`--advanced` only) → save →
+ *   supervisor unit (not for orchestrators).
  *
  * Invariants:
- * - Input Parity: Mouse clicks (SGR 1006) + Keyboard (1..5, Tab/Shift-Tab, Space, Enter, Esc, r).
- * - Security Floor: 256-bit CSPRNG bearer token (aibr_sec_...) stored with 0600 permissions.
- * - Test Parity: Graceful headless fallback when driven via non-interactive Prompter in tests.
- * - Discovery Proposes, The Operator Enrols: Step 4 enumerates the tailnet and PRINTS it,
- *   but nothing reaches the config until the operator names a peer and its capabilities.
- *   `reachable` is reachability, never trust -- see `REACHABILITY_NOT_AUTHENTICATION`.
+ * - Security Floor: 256-bit CSPRNG bearer token stored with 0600 permissions.
+ * - Re-running setup is an UPDATE: every existing value is the default, and the
+ *   bearer token and OpenCode password are kept unless the operator explicitly
+ *   asks for new ones. Silently rotating a token breaks every peer with a 401.
+ * - Discovery Proposes, The Operator Enrols: the discovery step enumerates the
+ *   tailnet and PRINTS it, but nothing reaches the config until the operator names
+ *   a peer and its capabilities. `reachable` is reachability, never trust -- see
+ *   `REACHABILITY_NOT_AUTHENTICATION`.
+ * - auth_mode "none" is guarded (CGNAT bind, no stale secret, explicit consent).
  */
 
 import { randomBytes } from "node:crypto"
 import { access } from "node:fs/promises"
 import { homedir } from "node:os"
+import { isAbsolute, resolve as resolvePath } from "node:path"
 import type { PlatformInspector, ProcessRunner, Prompter } from "../host/types.js"
 import { resolveProfilePaths, type ProfilePaths } from "../host/paths.js"
-import { runPreflight, type PreflightResult } from "../host/preflight.js"
-import type { SetupFileOps, SetupOutcome } from "../host/setup.js"
+import { runPreflight, skippedPreflight, type PreflightResult } from "../host/preflight.js"
+import type { DaemonOutcome, SetupFileOps, SetupOutcome } from "../host/setup.js"
+import {
+  DEFAULT_NODE_ROLE,
+  DEFAULT_RUNTIME_KIND,
+  nodeRoleFromConfig,
+  parseNodeRole,
+  parseRuntimeKind,
+  prereqsFor,
+  roleRunsJobs,
+  type NodeRole,
+  type RuntimeKind,
+} from "../host/node-role.js"
 import {
   generateCsprngToken,
   isTailscaleCgnatIp,
   probeDiscoveredAgents,
-  renderAgentDiscoveryProbe,
   type AgentDiscoveryDeps,
   type AgentDiscoveryResult,
   type DiscoveredAgent,
@@ -38,7 +57,11 @@ import {
   isCredentialShapedAgentId,
   scrubCredentialShapedAgentId,
 } from "./discovery-safety.js"
-import { installDaemonUnit, loadDaemonUnit } from "../host/daemonizer.js"
+import {
+  installDaemonUnit,
+  loadDaemonUnit,
+  type DaemonIngressMode,
+} from "../host/daemonizer.js"
 
 export interface SetupWizardDeps {
   readonly platformInspector: PlatformInspector
@@ -47,6 +70,15 @@ export interface SetupWizardDeps {
   readonly fileOps: SetupFileOps
   readonly env?: Record<string, string | undefined>
   readonly initialProfile?: string
+  /**
+   * Config file path override (`aibr setup --config <path>`). When absent the
+   * standard profile path is used and the operator is not asked for one.
+   */
+  readonly configPath?: string
+  /** `aibr setup --advanced`: also ask for the bridge and OpenCode ports. */
+  readonly advanced?: boolean
+  /** Working directory used for the project-path default. Defaults to `process.cwd()`. */
+  readonly cwd?: string
   /** Overridable for tests; defaults to a filesystem existence check. */
   readonly pathExists?: (path: string) => Promise<boolean>
   /**
@@ -55,11 +87,19 @@ export interface SetupWizardDeps {
    * An override exists because discovery has two effects in a unit test — it shells
    * out to `tailscale` and it opens HTTP to every peer — neither of which a scripted
    * `Prompter` can absorb. A test injects a fixed `AgentDiscoveryResult` here and gets
-   * the same Step 4 the real probe would have produced.
+   * the same discovery step the real probe would have produced.
    */
   readonly discoverAgents?: (deps?: AgentDiscoveryDeps) => Promise<AgentDiscoveryResult>
   /**
-   * Where the wizard's own narration goes (the discovery table, the
+   * Overridable for tests; default writes the real launchd/systemd unit under
+   * `env.HOME`. A test injects a fake so a unit test never writes into the
+   * operator's real `~/Library/LaunchAgents`.
+   */
+  readonly installDaemon?: typeof installDaemonUnit
+  /** Overridable for tests; defaults to `loadDaemonUnit`. */
+  readonly loadDaemon?: typeof loadDaemonUnit
+  /**
+   * Where the wizard's own narration goes (the discovery roster, the
    * reachability notice, the enrolment explanations).
    *
    * Separate from `prompter` on purpose: a report is not a question, and routing
@@ -79,6 +119,10 @@ async function defaultPathExists(path: string): Promise<boolean> {
   }
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
 /**
  * How the operator answered the bearer-token question.
  *
@@ -88,16 +132,29 @@ async function defaultPathExists(path: string): Promise<boolean> {
  * deliberate -- rebinding "n" to the new no-auth mode would turn an old muscle
  * memory into an unauthenticated bridge. `none` therefore requires an explicit
  * "none"/"noauth"/"open".
+ *
+ * `keep` only exists when the profile already has a token. It is then the
+ * default, and only an explicit "g"/"generate" rotates: rotating a token is what
+ * makes every peer still holding the old one answer 401, so it must never be what
+ * Enter does.
  */
-export type BearerTokenChoice = "generate" | "paste" | "none"
+export type BearerTokenChoice = "keep" | "generate" | "paste" | "none"
 
-export function parseBearerTokenChoice(raw: string): BearerTokenChoice {
+export function parseBearerTokenChoice(
+  raw: string,
+  options?: { readonly hasExisting?: boolean },
+): BearerTokenChoice {
   const answer = raw.trim().toLowerCase()
   if (answer === "none" || answer === "noauth" || answer === "open") return "none"
-  // "generate" is the default, so "" and "y" both land here.
-  return answer === "n" || answer === "no" || answer === "p" || answer === "paste"
-    ? "paste"
-    : "generate"
+  if (answer === "n" || answer === "no" || answer === "p" || answer === "paste") return "paste"
+  if (options?.hasExisting === true) {
+    // Fail safe: only an explicit request rotates an existing token.
+    return answer === "g" || answer === "generate" || answer === "new" || answer === "rotate"
+      ? "generate"
+      : "keep"
+  }
+  // "generate" is the default for a new profile, so "" and "y" both land here.
+  return "generate"
 }
 
 /**
@@ -110,6 +167,11 @@ export function generateBearerToken(prefixed = false): string {
   return prefixed ? `aibr_sec_${hex}` : hex
 }
 
+/** A random OpenCode server password (192 bits, URL-safe), for "Enter = generate". */
+export function generateOpencodePassword(): string {
+  return randomBytes(24).toString("base64url")
+}
+
 function parsePort(value: string, defaultValue: number): number {
   const trimmed = value.trim()
   if (trimmed === "") return defaultValue
@@ -117,7 +179,59 @@ function parsePort(value: string, defaultValue: number): number {
   return Number.isNaN(n) ? defaultValue : n
 }
 
-// ── Step 4: discovery-driven, explicitly-enrolled peer configuration ───────
+/** True for an empty answer or an explicit yes; used for confirms whose default is yes. */
+function isYesDefaultYes(answer: string): boolean {
+  const value = answer.trim().toLowerCase()
+  return value === "" || value === "y" || value === "yes"
+}
+
+/** True only for an explicit yes; used for confirms whose default is no. */
+function isExplicitYes(answer: string): boolean {
+  const value = answer.trim().toLowerCase()
+  return value === "y" || value === "yes"
+}
+
+// ── Project path ───────────────────────────────────────────────────────────
+
+/**
+ * Why a directory may not be allowlisted as a project, or `null` when it may.
+ *
+ * `/`, `$HOME`, and every ancestor of `$HOME` are refused: allowlisting one of
+ * them makes every file the operator owns reachable by remote jobs, and the
+ * released default (`process.cwd()`) did exactly that for anyone who ran
+ * `aibr setup` from their home directory.
+ */
+export function projectPathProblem(path: string, home: string | undefined): string | null {
+  if (!isAbsolute(path)) return `${path} is not an absolute path`
+  const normalized = resolvePath(path)
+  if (normalized === "/") {
+    return "the filesystem root cannot be a project: every file on the machine would be reachable by remote jobs"
+  }
+  if (home !== undefined && home !== "") {
+    const normalizedHome = resolvePath(home)
+    if (normalized === normalizedHome) {
+      return `${normalized} is your home directory: every file you own would be reachable by remote jobs`
+    }
+    if (normalizedHome.startsWith(normalized.endsWith("/") ? normalized : `${normalized}/`)) {
+      return `${normalized} contains your home directory: every file you own would be reachable by remote jobs`
+    }
+  }
+  return null
+}
+
+/** `git rev-parse --show-toplevel` for `cwd`, or `null` outside a repository. */
+async function gitToplevel(runner: ProcessRunner, cwd: string): Promise<string | null> {
+  try {
+    const result = await runner.exec(["git", "-C", cwd, "rev-parse", "--show-toplevel"])
+    if (result.exitCode !== 0) return null
+    const top = result.stdout.trim()
+    return top !== "" && isAbsolute(top) ? top : null
+  } catch {
+    return null
+  }
+}
+
+// ── Discovery: discovery-driven, explicitly-enrolled peer configuration ────
 
 /** The legacy default, kept because the manual fallback must keep working. */
 export const DEFAULT_PEER_AGENT_ID = "peer"
@@ -126,27 +240,22 @@ export const DEFAULT_PEER_AGENT_ID = "peer"
 export const DEFAULT_PEER_BRIDGE_URL = "http://100.64.0.2:8787"
 
 /**
- * Shown under the discovery table, in the operator's terminal, every time.
+ * Shown under the discovery roster, in the operator's terminal, every time.
  *
  * REACHABILITY IS NOT AUTHENTICATION. `Docs/security/milestone-0-threat-model.md`
  * is explicit that "a Tailscale connection provides reachability, not user
  * identity, enrollment, project membership, or approval", and `src/mesh/` repeats
- * it wherever a peer is admitted. `renderAgentDiscoveryProbe` badges a peer
- * `✔ REACHABLE`, which reads as a green light and is the single most
- * misreadable string on this screen — so the sentence that de-fuses it travels
- * with the table rather than living in a comment nobody reads at the terminal.
+ * it wherever a peer is admitted. Trust on this mesh is ed25519 node keys plus
+ * enrollment codes plus peer pins (`src/mesh/identity/`). What this step writes is
+ * a config file: a routing and authorization convenience the operator is
+ * authoring by hand, and nothing more.
  *
- * Trust on this mesh is ed25519 node keys plus enrollment codes plus peer pins
- * (`src/mesh/identity/`). What this step writes is a config file: a routing and
- * authorization convenience the operator is authoring by hand, and nothing more.
+ * One sentence on purpose: the released ~90-word paragraph sat between two
+ * tables and was scrolled past. The warning has to be short enough to be read.
  */
 export const REACHABILITY_NOT_AUTHENTICATION =
-  "Reachability is not authentication: 'REACHABLE' means something answered HTTP on that " +
-  "address, not that the node is an AIBridge bridge, and not that it is trusted. A Tailscale " +
-  "connection provides reachability, not identity, enrolment, project membership, or approval. " +
-  "Trust is established with ed25519 node keys, enrollment codes, and peer pins " +
-  "(src/mesh/identity/). Discovery enrols nothing: enrolling a peer below only writes this " +
-  "node's own config."
+  "Reachability is not authentication: a peer answering /health is not verified or trusted, " +
+  "and discovery enrols nothing — only a peer you name below is written to this node's config."
 
 /**
  * Capabilities used when a peer advertised none AND the operator typed none.
@@ -164,10 +273,13 @@ const DEFAULT_ENROLLED_PEER_CAPABILITIES = ["development", "orchestration"] as c
  *
  * `skip` is the load-bearing one and it is always available, including as the
  * empty answer: a setup that enrols a peer nobody chose is worse than a setup
- * that enrols nobody, so the default outcome of being unsure is "nothing".
+ * that enrols nobody, so the default outcome of being unsure is "nothing new".
+ * On a re-run, `skip` keeps the peers the profile already has; `clear` is the
+ * explicit way to remove them.
  */
 export type PeerEnrolmentChoice =
   | { readonly kind: "skip" }
+  | { readonly kind: "clear" }
   | { readonly kind: "manual" }
   | { readonly kind: "agent"; readonly agent: DiscoveredAgent }
 
@@ -178,8 +290,8 @@ export type PeerEnrolmentChoice =
  * an operator looking at a table reads whichever of the three their terminal
  * shows most clearly. Anything unrecognised is `skip` rather than a
  * re-prompt loop: a wizard that cannot parse an answer should not trap the
- * operator in it, and "nothing is enrolled" is the safe reading of "I did not
- * mean any of those".
+ * operator in it, and "nothing new is enrolled" is the safe reading of "I did
+ * not mean any of those".
  *
  * Exported for tests because the parsing is the security-relevant part: it is
  * the boundary between "the operator named a peer" and "the wizard chose one".
@@ -189,6 +301,7 @@ export function parsePeerSelection(raw: string, agents: readonly DiscoveredAgent
   if (answer === "" || answer === "s" || answer === "skip" || answer === "n" || answer === "no") {
     return { kind: "skip" }
   }
+  if (answer === "clear") return { kind: "clear" }
   if (answer === "m" || answer === "manual") return { kind: "manual" }
 
   // 1-based, as printed in the table.
@@ -251,9 +364,9 @@ export interface EnrolledPeer {
 /**
  * `SetupWizardDeps` with the output channel resolved.
  *
- * A separate type so the Step 4 helpers cannot forget the narration: they take
- * a `WizardIo` and therefore cannot be called without somewhere to write the
- * reachability notice to.
+ * A separate type so the discovery helpers cannot forget the narration: they
+ * take a `WizardIo` and therefore cannot be called without somewhere to write
+ * the reachability notice to.
  */
 export type WizardIo = SetupWizardDeps & {
   readonly write: (text: string) => void
@@ -263,9 +376,8 @@ export type WizardIo = SetupWizardDeps & {
  * Default narration sink.
  *
  * stdout, because this is what the operator is meant to read, and because the
- * released wizard already narrates over the same channel via `promptInput`.
- * Errors are swallowed: a closed pipe or a redirected descriptor must not turn
- * a report into a failed setup.
+ * prompter narrates over the same channel. Errors are swallowed: a closed pipe
+ * or a redirected descriptor must not turn a report into a failed setup.
  */
 function writeToStdout(text: string): void {
   try {
@@ -278,15 +390,10 @@ function writeToStdout(text: string): void {
 /**
  * The probe result with credential-shaped ids removed.
  *
- * Applied BEFORE the render and before the selection prompt, so neither the
- * table nor the enrolment confirmation can carry one, and so a scrubbed id
- * cannot become a configured agent id.
- *
- * The rule lives in `./discovery-safety.js` and is shared with `aibr discover`.
- * It was duplicated here rather than imported, on the reasoning that the wizard
- * should not depend on the command layer to render a table safely — which is
- * true, and is also why the import points one level down at a leaf module that
- * depends on nothing, rather than at `src/cli.ts`.
+ * Applied BEFORE the roster and before the selection prompt, so neither the
+ * roster nor the enrolment confirmation can carry one, and so a scrubbed id
+ * cannot become a configured agent id. The rule lives in `./discovery-safety.js`
+ * and is shared with `aibr discover`.
  */
 function sanitizeDiscoveryResult(result: AgentDiscoveryResult): AgentDiscoveryResult {
   if (!result.agents.some((agent) => isCredentialShapedAgentId(agent.agentId))) {
@@ -306,24 +413,23 @@ function sanitizeDiscoveryResult(result: AgentDiscoveryResult): AgentDiscoveryRe
  * `ProcessRunner` and labelling peers the config already lists.
  *
  * THE `enrolledAgentIds` ARE AN INPUT FOR LABELS ONLY. They decide which rows
- * read `✔ ENROLLED`, and nothing else: `probeDiscoveredAgents` is pure by
- * construction and the wizard's next statement is a prompt, not a write. The
- * ids come from `existing` — the config this run is about to overwrite — so
- * the operator sees which peer they are replacing rather than a table that
- * claims nothing is enrolled.
+ * read "already enrolled here", and nothing else: `probeDiscoveredAgents` is pure
+ * by construction and the wizard's next statement is a prompt, not a write.
  *
  * The result is sanitized on the way out, so nothing downstream of this
- * function — the render, the roster, the selection prompt, the config — can
- * carry a `tskey-` credential the remote `/health` handed us.
+ * function — the roster, the selection prompt, the config — can carry a `tskey-`
+ * credential the remote `/health` handed us.
  */
 async function runSetupDiscovery(
   deps: WizardIo,
   existing: Record<string, unknown> | null,
+  bridgePort: number,
 ): Promise<AgentDiscoveryResult> {
   const discover = deps.discoverAgents ?? probeDiscoveredAgents
   const result = await discover({
     processRunner: deps.processRunner,
     enrolledAgentIds: enrolledAgentIdsFrom(existing),
+    bridgePort,
   })
   return sanitizeDiscoveryResult(result)
 }
@@ -339,22 +445,31 @@ function enrolledAgentIdsFrom(existing: Record<string, unknown> | null): readonl
 }
 
 /**
- * The numbered roster the selection prompt refers to.
+ * The peers worth listing in detail: those that answered `/health` as an
+ * AIBridge bridge, plus those this profile already enrols (a known peer that is
+ * down right now is still a peer the operator recognises).
  *
- * `renderAgentDiscoveryProbe` already draws every peer with its address,
- * reachability, `agent_id`, capability count and enrolment badge; this adds
- * only what a selection prompt needs and the table does not carry — the number
- * and the coordinates a human can check against the machine in front of them.
- *
- * Unreachable rows are kept and are selectable. A peer that is down is still a
- * peer the operator recognises, and refusing to let them enrol it by hand would
- * push them back to the typo-prone `100.64.0.2` default.
+ * Everything else on the tailnet — phones, printers, laptops without a bridge —
+ * is summarised in one line instead of being offered as an enrolment candidate.
  */
-function renderPeerRoster(agents: readonly DiscoveredAgent[]): string {
-  const lines = ["Peers on this tailnet (discovery proposes; it enrols nothing):"]
-  agents.forEach((agent, index) => {
+export function listedBridgePeers(agents: readonly DiscoveredAgent[]): DiscoveredAgent[] {
+  return agents.filter((agent) => agent.reachable || agent.enrolled)
+}
+
+/**
+ * The discovery block the operator reads: one header, one numbered roster of
+ * bridges, one summary line for every other device, one sentence of warning.
+ */
+export function renderDiscoverySummary(result: AgentDiscoveryResult): string {
+  const listed = listedBridgePeers(result.agents)
+  const others = result.agents.length - listed.length
+  const lines = [
+    `Tailnet discovery: ${listed.length} AIBridge bridge(s) found` +
+      (listed.length > 0 ? " (discovery proposes; it enrols nothing):" : "."),
+  ]
+  listed.forEach((agent, index) => {
     const identity = agent.agentId ?? "did not identify itself"
-    const state = agent.reachable ? "answered /health" : "no answer on /health"
+    const state = agent.reachable ? "answered /health" : "no answer on /health right now"
     const claimed =
       agent.capabilities.length > 0 ? agent.capabilities.join(", ") : "no capabilities advertised"
     lines.push(
@@ -362,21 +477,23 @@ function renderPeerRoster(agents: readonly DiscoveredAgent[]): string {
         `advertises: ${claimed}${agent.enrolled ? "; already enrolled here" : ""}`,
     )
   })
+  if (others > 0) {
+    lines.push(
+      `${others} other device${others === 1 ? "" : "s"} on the tailnet did not answer as AIBridge bridges.`,
+    )
+  }
+  lines.push(REACHABILITY_NOT_AUTHENTICATION)
   return lines.join("\n")
 }
 
 /**
- * The released manual prompts, unchanged: peer agent ID, then peer agent URL,
- * with `peer` and `http://100.64.0.2:8787` as the defaults.
+ * The released manual prompts: peer agent ID, then peer agent URL, with `peer`
+ * and `http://100.64.0.2:8787` as the defaults.
  *
  * Kept because a setup run has to survive a tailnet that cannot be enumerated —
  * before `tailscale up`, inside a CI container, or with an injected prompter in
- * a test. The defaults are the released ones and the defaults are wrong more
- * often than not, which is why this is the fallback and not the default path.
- *
- * Capabilities are NOT asked for here: the released prompts did not ask, and
- * adding one would change every existing scripted queue for a path whose whole
- * point is to behave as it did. The wizard's conservative default is used.
+ * a test. Capabilities are NOT asked for here; the wizard's conservative
+ * default is used.
  */
 async function promptManualPeer(deps: WizardIo): Promise<EnrolledPeer> {
   const rawPeerId = await deps.prompter.promptInput(
@@ -402,8 +519,7 @@ async function promptManualPeer(deps: WizardIo): Promise<EnrolledPeer> {
  * it is allowed to have.
  *
  * Returns `null` when the operator declines, and `null` is a first-class
- * outcome rather than an error: it is what "Enrol nobody" means downstream, and
- * both parallel arrays are written empty.
+ * outcome rather than an error: it is what "Enrol nobody" means downstream.
  */
 async function enrolDiscoveredPeer(
   deps: WizardIo,
@@ -452,12 +568,104 @@ async function enrolDiscoveredPeer(
     `Enrol ${peerId} at ${agent.bridgeUrl} with capabilities [${capabilities.join(", ")}]? ` +
       `This writes agents[] and security.allowed_sources[] with the same id and capabilities.`,
   )
-  if (confirm !== "y") {
+  if (!isExplicitYes(confirm)) {
     deps.write("Declined. Nothing was enrolled.\n")
     return null
   }
 
   return { id: peerId, url: agent.bridgeUrl, capabilities }
+}
+
+/**
+ * The peer step: show the bridges, ask, and return the two arrays to write.
+ *
+ * Existing entries are carried over verbatim (they may hold fields this wizard
+ * does not author), a newly enrolled peer replaces any entry with the same id in
+ * BOTH arrays, and `clear` empties both. The arrays therefore stay in agreement
+ * on every path.
+ */
+async function configurePeers(
+  io: WizardIo,
+  discovery: AgentDiscoveryResult,
+  existingAgents: readonly Record<string, unknown>[],
+  existingSources: readonly Record<string, unknown>[],
+): Promise<{ agents: Record<string, unknown>[]; sources: Record<string, unknown>[] }> {
+  const listed = listedBridgePeers(discovery.agents)
+  const currentIds = [
+    ...new Set([
+      ...existingAgents.map((a) => a.id).filter((id): id is string => typeof id === "string"),
+      ...existingSources
+        .map((s) => s.source_agent_id)
+        .filter((id): id is string => typeof id === "string"),
+    ]),
+  ]
+  const hasExisting = currentIds.length > 0
+
+  io.write(renderDiscoverySummary(discovery) + "\n")
+
+  let enrolledPeer: EnrolledPeer | null = null
+  let clear = false
+
+  if (listed.length === 0 && !hasExisting) {
+    // Empty tailnet, no bridge answering, a setup run before Tailscale was
+    // joined, or a test. All of them must still be able to finish: the manual
+    // prompts are the released path.
+    io.write(
+      `No AIBridge bridges were discovered. Nothing is enrolled by discovery; ` +
+        `name a peer by hand below.\n`,
+    )
+    enrolledPeer = await promptManualPeer(io)
+  } else {
+    const enterMeaning = hasExisting
+      ? `Enter = keep current peers (${currentIds.join(", ")}), m = add a peer by hand, ` +
+        `clear = remove all peers`
+      : `Enter = enrol nobody, m = enter a peer by hand`
+    const rawSelection = await io.prompter.promptInput(
+      listed.length > 0
+        ? `Enrol a peer by number, hostname, or IP (${enterMeaning}):`
+        : `Enrol a peer (${enterMeaning}):`,
+    )
+    const selection = parsePeerSelection(rawSelection, listed)
+
+    if (selection.kind === "skip") {
+      io.write(
+        hasExisting
+          ? `No new peer selected. Keeping the current peers: ${currentIds.join(", ")}.\n`
+          : `No peer selected. agents[] and security.allowed_sources[] will both be left ` +
+              `empty; this node will not accept /trigger from anyone and cannot dispatch to ` +
+              `a peer. Re-run setup to change that.\n`,
+      )
+    } else if (selection.kind === "clear") {
+      clear = true
+      io.write("Removing all enrolled peers from this profile.\n")
+    } else if (selection.kind === "manual") {
+      enrolledPeer = await promptManualPeer(io)
+    } else {
+      enrolledPeer = await enrolDiscoveredPeer(io, selection.agent)
+    }
+  }
+
+  if (clear) return { agents: [], sources: [] }
+
+  const agents = [...existingAgents]
+  const sources = [...existingSources]
+  if (enrolledPeer === null) return { agents, sources }
+
+  const peer = enrolledPeer
+  return {
+    agents: [
+      ...agents.filter((a) => a.id !== peer.id),
+      { id: peer.id, url: peer.url, capabilities: [...peer.capabilities] },
+    ],
+    sources: [
+      ...sources.filter((s) => s.source_agent_id !== peer.id),
+      {
+        source_agent_id: peer.id,
+        capabilities: [...peer.capabilities],
+        requires_plan_approval: [],
+      },
+    ],
+  }
 }
 
 export const STEP_NAMES = [
@@ -493,17 +701,122 @@ export interface WizardState {
   launchTui: boolean
 }
 
+// ── Role & runtime ─────────────────────────────────────────────────────────
+
+async function promptNodeRole(io: WizardIo, defaultRole: NodeRole): Promise<NodeRole> {
+  for (;;) {
+    const raw = await io.prompter.promptInput(
+      `Node role — worker (runs jobs here), orchestrator (Claude Code dispatches work from here), ` +
+        `or both [${defaultRole}]:`,
+    )
+    if (raw.trim() === "") return defaultRole
+    const role = parseNodeRole(raw)
+    if (role !== null) return role
+    io.write(`"${raw.trim()}" is not a role. Type worker, orchestrator, or both.\n`)
+  }
+}
+
+/**
+ * Decide the worker runtime: detect `opencode` and `claude` on PATH and ask
+ * only when the answer is not obvious.
+ *
+ * - the profile's current runtime is installed → keep it, no question;
+ * - exactly one of the two is installed → use it, no question;
+ * - both or neither → ask, defaulting to the current runtime (or opencode).
+ */
+async function chooseRuntime(io: WizardIo, current: RuntimeKind | null): Promise<RuntimeKind> {
+  const has = async (bin: string): Promise<boolean> => {
+    try {
+      return (await io.processRunner.exec(["which", bin])).exitCode === 0
+    } catch {
+      return false
+    }
+  }
+  const installed = {
+    opencode: await has("opencode"),
+    claude: await has("claude"),
+  }
+
+  if (current !== null && installed[current]) return current
+  if (installed.opencode !== installed.claude) {
+    const detected: RuntimeKind = installed.opencode ? "opencode" : "claude"
+    io.write(`Runtime: ${detected} (the only one found on PATH).\n`)
+    return detected
+  }
+
+  const fallback = current ?? DEFAULT_RUNTIME_KIND
+  for (;;) {
+    const raw = await io.prompter.promptInput(
+      `Agent runtime for jobs on this node — opencode or claude [${fallback}]:`,
+    )
+    if (raw.trim() === "") return fallback
+    const kind = parseRuntimeKind(raw)
+    if (kind !== null) return kind
+    io.write(`"${raw.trim()}" is not a runtime. Type opencode or claude.\n`)
+  }
+}
+
+// ── Main entry ─────────────────────────────────────────────────────────────
+
 /**
  * Main entry point for `aibr setup`.
  */
 export async function runSetupWizard(deps: SetupWizardDeps): Promise<SetupOutcome> {
   const env = deps.env ?? (process.env as Record<string, string | undefined>)
+  const io: WizardIo = { ...deps, write: deps.write ?? writeToStdout }
+  const pathExists = deps.pathExists ?? defaultPathExists
+  const platform = deps.platformInspector.inspect()
 
-  // ── Step 0: Preflight checks ─────────────────────────────────────────
+  // ── Profile & existing config ────────────────────────────────────────
+  let profileName: string
+  if (deps.initialProfile && deps.initialProfile.trim() !== "") {
+    profileName = deps.initialProfile.trim()
+  } else {
+    const rawProfile = await deps.prompter.promptInput("Enter profile name [default]:")
+    profileName = rawProfile.trim() === "" ? "default" : rawProfile.trim()
+  }
+
+  const paths: ProfilePaths = resolveProfilePaths(profileName, env)
+  // Not a question: the standard path is right for everyone who has not
+  // already decided otherwise, and those who have pass `--config`.
+  const configPath =
+    deps.configPath !== undefined && deps.configPath.trim() !== ""
+      ? deps.configPath.trim()
+      : `${paths.configDir}/config.json`
+
+  const existing = await deps.fileOps.readConfig(configPath)
+  if (existing !== null) {
+    // A re-run is how an operator enrols the second machine, so it is an
+    // update by default: every answer below defaults to what is already there,
+    // and nothing secret changes unless explicitly asked for.
+    const update = await deps.prompter.promptConfirm(
+      `Profile "${profileName}" already exists at ${configPath}. Update existing profile? ` +
+        `(current values are the defaults; the bearer token is kept unless you choose otherwise)`,
+      { defaultYes: true },
+    )
+    if (!isYesDefaultYes(update)) {
+      return { kind: "declined", preflight: skippedPreflight(platform.platform) }
+    }
+  }
+
+  // ── Step 1: Node role and runtime ────────────────────────────────────
+  //
+  // Asked BEFORE preflight, because what preflight must require depends on
+  // the answer: a Claude-only orchestrator has no use for tmux or opencode and
+  // must not be blocked on them.
+  const current = nodeRoleFromConfig(existing)
+  const hasCurrentRole = existing !== null && parseNodeRole(existing.role) !== null
+  const role = await promptNodeRole(io, hasCurrentRole ? current.role : DEFAULT_NODE_ROLE)
+  const runtime: RuntimeKind | null = roleRunsJobs(role)
+    ? await chooseRuntime(io, existing !== null ? current.runtime : null)
+    : null
+
+  // ── Step 0: Preflight checks (role-aware) ────────────────────────────
   const preflight: PreflightResult = await runPreflight({
     platformInspector: deps.platformInspector,
     processRunner: deps.processRunner,
     prompter: deps.prompter,
+    prereqs: prereqsFor(role, runtime),
   })
 
   if (!preflight.ok) {
@@ -538,64 +851,75 @@ export async function runSetupWizard(deps: SetupWizardDeps): Promise<SetupOutcom
     }
   }
 
-  // Detect whether we are in a headless / test prompter environment
-  const platform = deps.platformInspector.inspect()
-  const isInteractiveTty = Boolean(platform.isTTY && deps.prompter.prompt)
+  return runSetupSteps(io, {
+    env,
+    preflight,
+    profileName,
+    paths,
+    configPath,
+    existing,
+    role,
+    runtime,
+    pathExists,
+  })
+}
 
-  // In headless / test mode (or when driven by scripted Prompter):
-  // Execute the 5-step flow sequentially via Prompter methods so all tests pass.
-  return runHeadlessWizard(deps, preflight, env)
+interface SetupContext {
+  readonly env: Record<string, string | undefined>
+  readonly preflight: PreflightResult
+  readonly profileName: string
+  readonly paths: ProfilePaths
+  readonly configPath: string
+  readonly existing: Record<string, unknown> | null
+  readonly role: NodeRole
+  readonly runtime: RuntimeKind | null
+  readonly pathExists: (path: string) => Promise<boolean>
 }
 
 /**
- * Headless fallback execution for scripted Prompter and automated unit tests.
+ * Everything after the preflight gate: secrets, allowlists, peers, persist.
  */
-async function runHeadlessWizard(
-  deps: SetupWizardDeps,
-  preflight: PreflightResult,
-  env: Record<string, string | undefined>,
-): Promise<SetupOutcome> {
-  const io: WizardIo = { ...deps, write: deps.write ?? writeToStdout }
+async function runSetupSteps(io: WizardIo, ctx: SetupContext): Promise<SetupOutcome> {
+  const { env, preflight, profileName, paths, configPath, existing, role, runtime, pathExists } = ctx
+  const deps = io
+  const base: Record<string, unknown> = existing ?? {}
+  const baseBridge = isRecord(base.bridge) ? base.bridge : {}
+  const baseOpencode = isRecord(base.opencode) ? base.opencode : {}
+  const baseSecurity = isRecord(base.security) ? base.security : {}
+  const usesOpencode = runtime === "opencode"
 
-  // ── Step 1 & Profile Setup ──────────────────────────────────────────
-  let profileName: string
-  if (deps.initialProfile && deps.initialProfile.trim() !== "") {
-    profileName = deps.initialProfile.trim()
-  } else {
-    const rawProfile = await deps.prompter.promptInput("Enter profile name [default]:")
-    profileName = rawProfile.trim() === "" ? "default" : rawProfile.trim()
-  }
+  const bearerTokenPath = `${paths.secretsDir}/bearer_token`
+  const ocPasswordPath = `${paths.secretsDir}/opencode_password`
 
-  const paths: ProfilePaths = resolveProfilePaths(profileName, env)
-  const defaultConfigFile = `${paths.configDir}/config.json`
-  const rawConfigPath = await deps.prompter.promptInput(
-    `Enter config file path [${defaultConfigFile}]:`,
-  )
-  const configPath = rawConfigPath.trim() === "" ? defaultConfigFile : rawConfigPath.trim()
-
-  const existing = await deps.fileOps.readConfig(configPath)
-  if (existing !== null) {
-    const overwriteConfirm = await deps.prompter.promptConfirm(
-      `Profile "${profileName}" already exists at ${configPath}. Overwrite?`,
-    )
-    if (overwriteConfirm !== "y") {
-      return { kind: "declined", preflight }
-    }
-  }
+  // Ports are decided first (not asked yet) so the no-auth warning and the
+  // discovery probe use the port this node will really listen on.
+  const existingBridgePort =
+    typeof baseBridge.port === "number" && Number.isInteger(baseBridge.port) ? baseBridge.port : 8787
+  const existingOcPort =
+    typeof baseOpencode.server_port === "number" && Number.isInteger(baseOpencode.server_port)
+      ? baseOpencode.server_port
+      : 4096
 
   // ── Step 2: Router Security & Bearer Credentials ───────────────────
   //
-  // Three answers, not two. "Generate" and "paste" are the released behaviour;
-  // "none" runs the routes unauthenticated and is only offered for a bridge that
-  // is genuinely already protected by the network it is bound to.
+  // Four answers on a re-run, three on a new profile. "Keep" exists only when a
+  // token is already on disk and is then the default; "generate" and "paste"
+  // are the released behaviour; "none" runs the routes unauthenticated and is
+  // only offered for a bridge that is genuinely protected by its network.
+  const hasExistingToken = await pathExists(bearerTokenPath)
   const tokenChoiceRaw = await deps.prompter.promptInput(
-    "Bearer authentication — [G]enerate a new token (default), " +
-      "[P]aste an existing one, or type 'none' for no authentication:",
+    hasExistingToken
+      ? "Bearer authentication — this profile already has a token. [K]eep existing (default), " +
+          "[G]enerate new (peers using the old token will get 401), [P]aste a different one, " +
+          "or type 'none' for no authentication:"
+      : "Bearer authentication — [G]enerate a new token (default), " +
+          "[P]aste an existing one, or type 'none' for no authentication:",
   )
-  const tokenChoice = parseBearerTokenChoice(tokenChoiceRaw)
+  const tokenChoice = parseBearerTokenChoice(tokenChoiceRaw, { hasExisting: hasExistingToken })
 
   let authMode: "bearer-token" | "none" = "bearer-token"
-  let bearerToken: string
+  /** `null` = keep what is on disk; a string = write this value. */
+  let newBearerToken: string | null = null
 
   if (tokenChoice === "none") {
     // Guard 1: without a CGNAT bind there is no network-level protection standing
@@ -616,16 +940,14 @@ async function runHeadlessWizard(
     }
 
     // Guard 2: a secret left over from a previous run is silently ignored in this
-    // mode -- writeSecret is write-once and never re-read, so the operator would
-    // believe the node is protected when nothing is checking the token.
-    const pathExists = deps.pathExists ?? defaultPathExists
-    const secretPaths = resolveProfilePaths(profileName, env)
-    if (await pathExists(`${secretPaths.secretsDir}/bearer_token`)) {
+    // mode -- the bridge never reads it -- so the operator would believe the node
+    // is protected when nothing is checking the token.
+    if (hasExistingToken) {
       return {
         kind: "blocked",
         reason:
           `Refusing to configure auth_mode "none": a bearer_token secret already ` +
-          `exists at ${secretPaths.secretsDir}/bearer_token and would be silently ` +
+          `exists at ${bearerTokenPath} and would be silently ` +
           `ignored. Delete it first, then re-run setup.`,
         preflight,
       }
@@ -636,107 +958,112 @@ async function runHeadlessWizard(
     // exposure is the part the operator is being asked to confirm.)
     const accepted = await deps.prompter.promptConfirm(
       `This node will accept /trigger and /report with NO authentication. ` +
-        `Anything that can reach ${tailscaleIp}:8787 can dispatch work. ` +
+        `Anything that can reach ${tailscaleIp}:${existingBridgePort} can dispatch work. ` +
         `Continue?`,
     )
-    if (accepted !== "y") {
+    if (!isExplicitYes(accepted)) {
       // Declined is not a dead end: fall back to the released behaviour instead of
       // stranding the setup. The operator changed their mind; nothing is broken.
       authMode = "bearer-token"
-      bearerToken = generateBearerToken(false)
+      newBearerToken = generateBearerToken(false)
       await deps.prompter.promptInput(
-        `Falling back to a generated bearer token: ${bearerToken}\n` +
+        `Falling back to a generated bearer token: ${newBearerToken}\n` +
           `(Copy this token to use on your peer machine. Press Enter to continue)`,
       )
     } else {
       authMode = "none"
-      // Never written to disk: the `writeSecret` call below is guarded on
-      // `authMode`, not on this value. It exists only so the variable is
-      // definitely assigned on every path.
-      bearerToken = ""
       await deps.prompter.promptInput(
         `Authentication disabled. The bridge will run unauthenticated on ` +
           `${tailscaleIp}. Press Enter to continue.`,
       )
     }
+  } else if (tokenChoice === "keep") {
+    io.write(`Keeping the existing bearer token (${bearerTokenPath}); peers need no change.\n`)
   } else if (tokenChoice === "paste") {
-    bearerToken = await deps.prompter.promptSecret("Enter shared bearer token:")
+    newBearerToken = await deps.prompter.promptSecret("Enter shared bearer token:")
   } else {
-    // Generate 64 hex characters (32 bytes) CSPRNG token for backward test compatibility
-    bearerToken = generateBearerToken(false)
+    // Generate 64 hex characters (32 bytes) CSPRNG token.
+    newBearerToken = generateBearerToken(false)
+    const rotationWarning = hasExistingToken
+      ? "\nThis REPLACES the existing token: every peer still using the old one will get " +
+        "HTTP 401 until it is given this one."
+      : ""
     await deps.prompter.promptInput(
-      `Generated shared token: ${bearerToken}\n(IMPORTANT: Copy this token to use on your peer machine. Press Enter to continue)`,
+      `Generated shared token: ${newBearerToken}${rotationWarning}\n` +
+        `(IMPORTANT: Copy this token to use on your peer machine. Press Enter to continue)`,
     )
   }
 
-  const ocPassword = await deps.prompter.promptSecret("Enter OpenCode server password:")
+  // ── OpenCode password (opencode runtime only) ───────────────────────
+  //
+  // A Claude Code worker and an orchestrator run no `opencode serve`, so there
+  // is nothing to protect with this password and nothing is asked.
+  /** `null` = keep what is on disk (or none needed); a string = write this value. */
+  let newOcPassword: string | null = null
+  const hasExistingOcPassword = usesOpencode ? await pathExists(ocPasswordPath) : false
+  if (usesOpencode) {
+    if (hasExistingOcPassword) {
+      const typed = await deps.prompter.promptSecret(
+        "OpenCode server password (Enter = keep the existing one):",
+      )
+      newOcPassword = typed === "" ? null : typed
+    } else {
+      const typed = await deps.prompter.promptSecret(
+        "OpenCode server password (Enter = generate a random one):",
+      )
+      if (typed === "") {
+        newOcPassword = generateOpencodePassword()
+        io.write(
+          `Generated a random OpenCode password; it is stored in ${ocPasswordPath} ` +
+            `and read from there by "aibr start".\n`,
+        )
+      } else {
+        newOcPassword = typed
+      }
+    }
+  }
 
   // ── Step 3: Project Allowlists & Containment ────────────────────────
-  const rawAgentId = await deps.prompter.promptInput(`Enter agent ID [${profileName}]:`)
-  const agentId = rawAgentId.trim() === "" ? profileName : rawAgentId.trim()
+  const defaultAgentId =
+    typeof base.agent_id === "string" && base.agent_id.trim() !== "" ? base.agent_id : profileName
+  const rawAgentId = await deps.prompter.promptInput(`Enter agent ID [${defaultAgentId}]:`)
+  const agentId = rawAgentId.trim() === "" ? defaultAgentId : rawAgentId.trim()
 
-  const defaultProjectPath = process.cwd()
-  const rawProjectPath = await deps.prompter.promptInput(
-    `Enter project path [${defaultProjectPath}]:`,
-  )
-  const projectPath = rawProjectPath.trim() === "" ? defaultProjectPath : rawProjectPath.trim()
+  const existingProjects = Array.isArray(base.projects) ? base.projects.filter(isRecord) : []
+  const firstProject = existingProjects[0]
+  const projectPath = await promptProjectPath(io, env, firstProject)
 
   // ── Step 4: Tailnet Discovery & Explicit Peer Enrolment ─────────────
   //
   // DISCOVERY NEVER ENROLLS — IT ONLY PROPOSES. Everything in this block
   // either reports or asks. The only statements that put a peer id into the
   // config live inside a branch guarded by an answer the operator gave, so
-  // there is no path from "a peer answered" to "a peer is enrolled". The
-  // released wizard's failure mode — a hardcoded `http://100.64.0.2:8787`
-  // default that rots as machines change, and an operator who types Enter
-  // into two prompts and gets a peer enrolled — has no equivalent here.
-  //
-  // `reachable` from the probe is reachability. It is printed as such, and
-  // `REACHABILITY_NOT_AUTHENTICATION` goes out with it on every run.
-  const discovery = await runSetupDiscovery(io, existing)
-  io.write(renderAgentDiscoveryProbe(discovery) + "\n")
-  io.write(REACHABILITY_NOT_AUTHENTICATION + "\n\n")
+  // there is no path from "a peer answered" to "a peer is enrolled".
+  const discovery = await runSetupDiscovery(io, existing, existingBridgePort)
+  const existingAgents = Array.isArray(base.agents) ? base.agents.filter(isRecord) : []
+  const existingSources = Array.isArray(baseSecurity.allowed_sources)
+    ? baseSecurity.allowed_sources.filter(isRecord)
+    : []
+  const peers = await configurePeers(io, discovery, existingAgents, existingSources)
 
-  let enrolledPeer: EnrolledPeer | null = null
-
-  if (discovery.agents.length === 0) {
-    // Empty tailnet, no daemon, a setup run before Tailscale was joined, or a
-    // test. All of them land here, and all of them must still be able to
-    // finish: the manual prompts are the released path, kept verbatim.
-    io.write(
-      `No peers were discovered on this tailnet. Nothing is enrolled by discovery ` +
-        `and nothing will be enrolled without you naming it below.\n\n`,
+  // ── Ports (--advanced only) ─────────────────────────────────────────
+  let bridgePort = existingBridgePort
+  let ocPort = existingOcPort
+  if (deps.advanced === true) {
+    bridgePort = parsePort(
+      await deps.prompter.promptInput(`Enter bridge port [${existingBridgePort}]:`),
+      existingBridgePort,
     )
-    enrolledPeer = await promptManualPeer(io)
-  } else {
-    io.write(renderPeerRoster(discovery.agents) + "\n")
-    const rawSelection = await deps.prompter.promptInput(
-      `Enrol a peer by number, hostname, or IP (Enter = enrol nobody, ` +
-        `m = enter a peer by hand):`,
-    )
-    const selection = parsePeerSelection(rawSelection, discovery.agents)
-
-    if (selection.kind === "skip") {
-      io.write(
-        `No peer selected. agents[] and security.allowed_sources[] will both be left ` +
-          `empty; this node will not accept /trigger from anyone and cannot dispatch to ` +
-          `a peer. Edit the config later, or re-run setup, to change that.\n`,
+    if (usesOpencode) {
+      ocPort = parsePort(
+        await deps.prompter.promptInput(`Enter OpenCode server port [${existingOcPort}]:`),
+        existingOcPort,
       )
-    } else if (selection.kind === "manual") {
-      enrolledPeer = await promptManualPeer(io)
-    } else {
-      enrolledPeer = await enrolDiscoveredPeer(io, selection.agent)
     }
   }
 
-  const bridgePortStr = await deps.prompter.promptInput("Enter bridge port [8787]:")
-  const ocPortStr = await deps.prompter.promptInput("Enter OpenCode server port [4096]:")
-
-  const bridgePort = parsePort(bridgePortStr, 8787)
-  const ocPort = parsePort(ocPortStr, 4096)
-
-  // ── Step 5: System Service Installation & Preflight ─────────────────
-  const tailscaleIp = preflight.tailscale.ip
+  // ── Build config ────────────────────────────────────────────────────
+  const tailscaleIp = preflight.tailscale.ip!
   const tailscaleHostname = preflight.tailscale.hostname
 
   const publicUrl =
@@ -744,105 +1071,200 @@ async function runHeadlessWizard(
       ? `http://${tailscaleHostname}:${bridgePort}`
       : `http://${tailscaleIp}:${bridgePort}`
 
+  // An existing profile is the base, so keys this wizard does not author
+  // (terminal, ingress_mode, custom permissions, extra projects) survive an
+  // update. Keys it does author are overwritten below.
+  const { runtime: _previousRuntime, ...baseWithoutRuntime } = base
   const config: Record<string, unknown> = {
+    ...baseWithoutRuntime,
     agent_id: agentId,
+    // Role and runtime are read by `aibr verify` (per-role checks) and by the
+    // runtime layer. The current schema is a non-strict object and tolerates them.
+    role,
+    ...(runtime !== null
+      ? { runtime: { ...(isRecord(base.runtime) ? base.runtime : {}), kind: runtime } }
+      : {}),
     bridge: {
+      ...baseBridge,
       host: tailscaleIp,
       port: bridgePort,
       public_url: publicUrl,
     },
+    // Always written, even for a Claude worker or an orchestrator, because the
+    // current schema requires the block. Nothing reads it when opencode is unused.
     opencode: {
+      ...baseOpencode,
       base_url: `http://127.0.0.1:${ocPort}`,
       server_port: ocPort,
-      username: "opencode",
-      password_env: "OPENCODE_SERVER_PASSWORD",
+      username: typeof baseOpencode.username === "string" ? baseOpencode.username : "opencode",
+      password_env:
+        typeof baseOpencode.password_env === "string"
+          ? baseOpencode.password_env
+          : "OPENCODE_SERVER_PASSWORD",
     },
     security: {
+      ...baseSecurity,
       auth_mode: authMode,
-      // THE TWO ARRAYS MUST AGREE, AND THEY ARE BUILT FROM ONE OBJECT.
-      //
-      // `assertSourceAuthorized` authorizes on `source_agent_id` AND capability
-      // membership, and `/trigger` answers 403 to a source that is in `agents[]`
-      // but absent from `allowed_sources[]`. The released wizard wrote two
-      // separately-typed ids and two DIFFERENT capability lists ("development",
-      // "orchestration" inbound; "testing", "qa" outbound) — a config in which
-      // the two halves described different grants for the same peer, which is
-      // exactly the drift `/trigger` refuses. Both entries now come from the
-      // single `enrolledPeer`, and both arrays are empty when nothing was
-      // enrolled, so "skip" leaves them consistent rather than half-written.
-      allowed_sources:
-        enrolledPeer === null
-          ? []
-          : [
-              {
-                source_agent_id: enrolledPeer.id,
-                capabilities: [...enrolledPeer.capabilities],
-                requires_plan_approval: [],
-              },
-            ],
+      // THE TWO ARRAYS MUST AGREE. `assertSourceAuthorized` authorizes on
+      // `source_agent_id` AND capability membership, and `/trigger` answers 403 to
+      // a source that is in `agents[]` but absent from `allowed_sources[]`. Both
+      // come out of `configurePeers` together.
+      allowed_sources: peers.sources,
     },
-    permissions: {
-      default_response: "reject",
-      allow_tools: ["read", "grep", "glob"],
-      require_plan_approval_for_tools: ["bash", "edit", "write"],
-    },
+    permissions: isRecord(base.permissions)
+      ? base.permissions
+      : {
+          default_response: "reject",
+          allow_tools: ["read", "grep", "glob"],
+          require_plan_approval_for_tools: ["bash", "edit", "write"],
+        },
     projects: [
       {
-        id: profileName,
+        ...(firstProject ?? {}),
+        id: typeof firstProject?.id === "string" ? firstProject.id : profileName,
         path: projectPath,
-        capabilities: ["development", "orchestration"],
+        capabilities: Array.isArray(firstProject?.capabilities)
+          ? firstProject.capabilities
+          : ["development", "orchestration"],
       },
+      ...existingProjects.slice(1),
     ],
-    agents:
-      enrolledPeer === null
-        ? []
-        : [
-            {
-              id: enrolledPeer.id,
-              url: enrolledPeer.url,
-              capabilities: [...enrolledPeer.capabilities],
-            },
-          ],
-    timeouts: {
-      default_job_seconds: 1800,
-      callback_retry_attempts: 3,
-    },
-    planning: {
-      plan_annotator_enabled: true,
-      require_approval_for: ["deployment", "destructive", "multi-agent-fanout"],
-    },
+    agents: peers.agents,
+    timeouts: isRecord(base.timeouts)
+      ? base.timeouts
+      : {
+          default_job_seconds: 1800,
+          callback_retry_attempts: 3,
+        },
+    planning: isRecord(base.planning)
+      ? base.planning
+      : {
+          plan_annotator_enabled: true,
+          require_approval_for: ["deployment", "destructive", "multi-agent-fanout"],
+        },
   }
 
+  // Enter saves. After a dozen answers, Enter meaning "throw it all away" was
+  // the single most expensive keystroke in the wizard.
   const finalConfirm = await deps.prompter.promptConfirm(
     `Save configuration to "${configPath}"?`,
+    { defaultYes: true },
   )
-  if (finalConfirm !== "y") {
+  if (!isYesDefaultYes(finalConfirm)) {
     return { kind: "declined", preflight }
   }
 
-  // Persist directories, config, and secrets with 0600 permissions
+  // ── Persist directories, config, and secrets (0600) ─────────────────
+  const fileOps = deps.fileOps
+  const replaceSecret = (path: string, value: string): Promise<void> =>
+    fileOps.replaceSecret !== undefined
+      ? fileOps.replaceSecret(path, value)
+      : fileOps.writeSecret(path, value)
   await deps.fileOps.ensureProfileDirs(paths)
   await deps.fileOps.writeConfig(configPath, config)
   // No secret in `none` mode: writeSecret throws on an empty value, and writing
   // one anyway would produce exactly the stale secret `aibr verify` warns about.
-  if (authMode === "bearer-token") {
-    await deps.fileOps.writeSecret(`${paths.secretsDir}/bearer_token`, bearerToken)
+  // A kept token is not rewritten at all: the file on disk is left untouched.
+  if (authMode === "bearer-token" && newBearerToken !== null) {
+    if (hasExistingToken) {
+      await replaceSecret(bearerTokenPath, newBearerToken)
+    } else {
+      await deps.fileOps.writeSecret(bearerTokenPath, newBearerToken)
+    }
   }
-  await deps.fileOps.writeSecret(`${paths.secretsDir}/opencode_password`, ocPassword)
+  if (newOcPassword !== null) {
+    if (hasExistingOcPassword) {
+      await replaceSecret(ocPasswordPath, newOcPassword)
+    } else {
+      await deps.fileOps.writeSecret(ocPasswordPath, newOcPassword)
+    }
+  }
 
-  // Step 5: write the platform supervisor unit.
+  // ── Step 5: supervisor unit (not for an orchestrator) ───────────────
+  //
+  // An orchestrator runs no bridge workload that needs supervising, so no
+  // unit is written for it.
   //
   // The ingress outbox is NOT created here. That table belongs to the Rust
-  // router and is provisioned by `aibr-router --init-store`; a store that
-  // appears from the setup wizard is a queue the router will not read.
+  // router and is provisioned by `aibr-router --init-store`.
   //
   // The unit is written but not activated, and activation is a separate
   // confirmation: the unit is `KeepAlive`, so loading one whose config does not
-  // match the router's store turns a setup mistake into a restart loop.
+  // match turns a setup mistake into a restart loop.
+  let daemon: DaemonOutcome | undefined
+  if (role !== "orchestrator") {
+    daemon = await installAndMaybeStartDaemon(io, env, profileName, ingressModeOf(baseBridge))
+  }
+
+  return {
+    kind: "persisted",
+    profileName,
+    configPath,
+    preflight,
+    role,
+    runtime,
+    updated: existing !== null,
+    ...(daemon !== undefined ? { daemon } : {}),
+  }
+}
+
+function ingressModeOf(bridge: Record<string, unknown>): DaemonIngressMode {
+  return bridge.ingress_mode === "router" ? "router" : "engine"
+}
+
+/**
+ * Ask for the project directory, defaulting to the existing project, else the
+ * git toplevel of the working directory, else the working directory itself, and
+ * refusing `/`, `$HOME`, and any ancestor of `$HOME`.
+ */
+async function promptProjectPath(
+  io: WizardIo,
+  env: Record<string, string | undefined>,
+  firstProject: Record<string, unknown> | undefined,
+): Promise<string> {
+  const cwd = io.cwd ?? process.cwd()
+  const home = env.HOME ?? homedir()
+  const existingPath =
+    typeof firstProject?.path === "string" && firstProject.path.trim() !== "" ? firstProject.path : null
+  const candidate = existingPath ?? (await gitToplevel(io.processRunner, cwd)) ?? cwd
+  const defaultPath = projectPathProblem(candidate, home) === null ? candidate : null
+
+  for (;;) {
+    const raw = await io.prompter.promptInput(
+      defaultPath !== null
+        ? `Enter project path [${defaultPath}]:`
+        : "Enter project path (a project directory, not your home directory):",
+    )
+    const typed = raw.trim()
+    if (typed === "" && defaultPath !== null) return defaultPath
+    if (typed === "") {
+      io.write("A project directory is required.\n")
+      continue
+    }
+    const absolute = resolvePath(cwd, typed)
+    const problem = projectPathProblem(absolute, home)
+    if (problem === null) return absolute
+    io.write(`Refusing to allowlist this path: ${problem}. Choose a project directory.\n`)
+  }
+}
+
+async function installAndMaybeStartDaemon(
+  io: WizardIo,
+  env: Record<string, string | undefined>,
+  profileName: string,
+  ingressMode: DaemonIngressMode,
+): Promise<DaemonOutcome> {
+  const install = io.installDaemon ?? installDaemonUnit
+  const load = io.loadDaemon ?? loadDaemonUnit
   let daemonUnit: Awaited<ReturnType<typeof installDaemonUnit>> | null = null
   let daemonError: string | null = null
   try {
-    daemonUnit = await installDaemonUnit({ profile: profileName, skipLoad: true })
+    daemonUnit = await install({
+      profile: profileName,
+      skipLoad: true,
+      ingressMode,
+      ...(env.HOME !== undefined && env.HOME !== "" ? { homeDir: env.HOME } : {}),
+    })
   } catch (error) {
     // Not fatal: the profile and its secrets are already persisted, and the
     // daemon can be supervised by hand. The operator is told, not left to
@@ -852,12 +1274,12 @@ async function runHeadlessWizard(
 
   let daemonStarted = false
   if (daemonUnit?.installed === true) {
-    const activate = await deps.prompter.promptConfirm(
+    const activate = await io.prompter.promptConfirm(
       `Start the daemon now? (${daemonUnit.command})`,
     )
-    if (activate === "y") {
+    if (isExplicitYes(activate)) {
       try {
-        await loadDaemonUnit({ unitPath: daemonUnit.unitPath })
+        await load({ unitPath: daemonUnit.unitPath })
         daemonStarted = true
       } catch (error) {
         daemonError = String(error)
@@ -866,17 +1288,12 @@ async function runHeadlessWizard(
   }
 
   return {
-    kind: "persisted",
-    profileName,
-    configPath,
-    preflight,
-    daemon: {
-      installed: daemonUnit?.installed ?? false,
-      unitPath: daemonUnit?.unitPath ?? null,
-      command: daemonUnit?.command ?? null,
-      started: daemonStarted,
-      error: daemonError,
-    },
+    installed: daemonUnit?.installed ?? false,
+    unitPath: daemonUnit?.unitPath ?? null,
+    command: daemonUnit?.command ?? null,
+    stopCommand: daemonUnit?.stopCommand ?? null,
+    started: daemonStarted,
+    error: daemonError,
   }
 }
 

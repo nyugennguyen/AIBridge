@@ -29,7 +29,7 @@ Commands:
   serve    Run the bridge server
   worker   Drain the router's admission queue (no listener)
   status   Check tmux session and bridge health
-  verify   Validate dependencies, SSL token, and config format
+  verify   Validate role-specific dependencies, bearer token, and config
   update   Check and update to the latest version
   tui      Open the interactive manager (Herdr plugin)
   bundle   Generate diagnostic support bundle
@@ -37,6 +37,8 @@ Commands:
 
 Options:
   --profile, -p <name>   Profile name (required for start/serve/worker/status/tui)
+  --config <path>        Config file to write instead of the standard path (for setup)
+  --advanced             Also ask for bridge and OpenCode ports (for setup)
   --check, -c            Check for updates without installing (for update)
   --yes, -y              Automatic yes to prompts (for update)
   --json                 Emit one JSON document and nothing else (for discover)
@@ -44,4 +46,6 @@ Options:
   --version, -v          Show version
   --shadow-mode          Run in shadow mode (mirroring ingress to router)
   --ipc-publish          Serve the local IPC bus (worker only)
+
+Run "aibr <command> --help" for help on one command.
 ```

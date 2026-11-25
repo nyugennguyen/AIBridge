@@ -311,6 +311,134 @@ describe("cli setup", () => {
     // The CLI itself should never leak env vars
     expect(output).not.toContain("OPENCODE_SERVER_PASSWORD")
   })
+
+  it("forwards --config and --advanced to the wizard", async () => {
+    let received: unknown
+    const { exitCode } = await captureRun(["setup", "--config", "/tmp/x.json", "--advanced"], {
+      setupRunner: async (_profile, options) => {
+        received = options
+        return { kind: "persisted" as const, profileName: "p", configPath: "/tmp/x.json" }
+      },
+    })
+
+    expect(exitCode).toBe(0)
+    expect(received).toEqual({ configPath: "/tmp/x.json", advanced: true })
+  })
+
+  it("passes no options when neither flag is given", async () => {
+    let received: unknown = "unset"
+    await captureRun(["setup"], {
+      setupRunner: async (_profile, options) => {
+        received = options
+        return { kind: "persisted" as const, profileName: "p", configPath: "/c.json" }
+      },
+    })
+
+    expect(received).toBeUndefined()
+  })
+
+  it("rejects --config without a path, and --config/--advanced on other commands", async () => {
+    expect((await captureRun(["setup", "--config"])).output).toContain("--config requires a path")
+    const start = await captureRun(["start", "--profile", "p", "--advanced"])
+    expect(start.exitCode).toBe(1)
+    expect(start.output).toContain("--advanced is only supported by setup")
+  })
+
+  it("prints worker next steps after a successful setup", async () => {
+    const { output } = await captureRun(["setup"], {
+      setupRunner: async () => ({
+        kind: "persisted" as const,
+        profileName: "dev",
+        configPath: "/c.json",
+        role: "worker",
+        runtime: "opencode",
+      }),
+    })
+
+    expect(output).toContain('Profile "dev" created.')
+    expect(output).toContain("Next steps:")
+    expect(output).toContain("aibr start --profile dev")
+    expect(output).toContain("aibr status --profile dev")
+    expect(output).not.toContain("aibr verify --profile dev")
+  })
+
+  it("prints orchestrator next steps (verify + Claude Code plugin) and says 'updated' on a re-run", async () => {
+    const { output } = await captureRun(["setup"], {
+      setupRunner: async () => ({
+        kind: "persisted" as const,
+        profileName: "orch",
+        configPath: "/c.json",
+        role: "orchestrator",
+        runtime: null,
+        updated: true,
+      }),
+    })
+
+    expect(output).toContain('Profile "orch" updated.')
+    expect(output).toContain("aibr verify --profile orch")
+    expect(output).toContain("Claude Code plugin")
+    expect(output).not.toContain("aibr start --profile orch")
+  })
+
+  it("does not suggest `aibr start` when the supervisor unit is already serving", async () => {
+    const { output } = await captureRun(["setup"], {
+      setupRunner: async () => ({
+        kind: "persisted" as const,
+        profileName: "dev",
+        configPath: "/c.json",
+        role: "worker",
+        daemon: {
+          installed: true,
+          unitPath: "/u.plist",
+          command: "launchctl bootstrap gui/501 /u.plist",
+          stopCommand: "launchctl bootout gui/501 /u.plist",
+          started: true,
+          error: null,
+        },
+      }),
+    })
+
+    expect(output).toContain("Daemon: started (stop it with: launchctl bootout gui/501 /u.plist)")
+    expect(output).not.toContain("aibr start --profile dev")
+    expect(output).toContain("aibr status --profile dev")
+  })
+})
+
+// ── Per-command help (M5) ──────────────────────────────────────────────
+
+describe("cli <command> --help", () => {
+  for (const command of ["setup", "start", "status", "verify", "serve", "discover"]) {
+    it(`prints help specific to ${command}`, async () => {
+      const { exitCode, output } = await captureRun([command, "--help"])
+
+      expect(exitCode).toBe(0)
+      expect(output.startsWith(`aibr ${command} — `)).toBe(true)
+      expect(output).toContain(`aibr ${command}`)
+      // Not the global command table.
+      expect(output).not.toContain("Commands:")
+    })
+  }
+
+  it("documents the setup flags in setup --help", async () => {
+    const { output } = await captureRun(["setup", "--help"])
+
+    expect(output).toContain("--config <path>")
+    expect(output).toContain("--advanced")
+    expect(output).toContain("bearer token is kept")
+  })
+
+  it("falls back to the global help for a command without its own", async () => {
+    const { output } = await captureRun(["bundle", "--help"])
+
+    expect(output).toContain("Commands:")
+  })
+
+  it("describes verify with the bearer token, not an SSL token", async () => {
+    const { output } = await captureRun(["--help"])
+
+    expect(output).not.toContain("SSL")
+    expect(output).toMatch(/verify\s+Validate role-specific dependencies, bearer token, and config/)
+  })
 })
 
 // ── start command ──────────────────────────────────────────────────────

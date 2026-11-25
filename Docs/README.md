@@ -38,7 +38,7 @@ Docs/
 ## 2. Navigating the Documentation
 
 ### Getting Started
-- [**Getting Started Guide**](getting-started.md) — Prerequisites, automated installation, 5-step interactive onboarding wizard, starting services, and verifying cross-host task triggers.
+- [**Getting Started Guide**](getting-started.md) — Prerequisites, automated installation, the `aibr setup` onboarding wizard, starting services, and verifying cross-host task triggers.
 
 ### Architecture
 - [**Current Architecture Guide**](architecture/current-state.md) — The authoritative description of the implemented system: components, trust boundaries, event stores, and polyglot ingress separation.

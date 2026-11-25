@@ -34,6 +34,7 @@ import { FileTaskGraphSyncer } from "../tasks/syncer.js"
 import { createTerminalJobReporter } from "../jobs/report.js"
 import { createProfileRequestSigner } from "../pairing/signer.js"
 import { ClaudeJobRunner, type ClaudeJobRunnerOptions } from "../runtime/claude-job-runner.js"
+import { RepoWorkspaceManager } from "../runtime/repo-workspace.js"
 
 /**
  * The OpenCode client of a node whose runtime is not OpenCode. Health is
@@ -90,6 +91,8 @@ export interface RuntimeOptions {
     readonly egressOutboxStore?: EgressOutboxStore
     /** Adapter overrides for the Claude runner (tests inject a fake `spawn`). */
     readonly claudeAdapterOptions?: ClaudeJobRunnerOptions["adapterOptions"]
+    /** Worktree manager override (tests inject one over a fake git runner). */
+    readonly repoWorkspaces?: RepoWorkspaceManager
   }
 }
 
@@ -102,6 +105,8 @@ export interface Runtime {
   readonly egressOutboxStore?: EgressOutboxStore
   /** Present when `runtime.kind` is `claude`: executes `/trigger` jobs on Claude Code. */
   readonly claudeJobRunner?: ClaudeJobRunner
+  /** Present when `runtime.kind` is `claude`: resolves and checks out `repo`@`ref` for jobs. */
+  readonly repoWorkspaces?: RepoWorkspaceManager
   /** Drives one job to a terminal state and delivers its report. */
   readonly monitorSession: (job: JobRecord) => Promise<void>
   /** Re-delivers the report of a job already known to be terminal. */
@@ -144,6 +149,14 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     bearerToken: options.bearerToken,
   })
 
+  // Per-job worktrees under `<state>/repos` and `<state>/worktrees` (Phase 5).
+  // Nothing runs yet, so every worktree on disk was left by a previous process.
+  const repoWorkspaces =
+    config.runtime.kind === "claude"
+      ? (options.deps?.repoWorkspaces ?? new RepoWorkspaceManager({ stateDir: options.stateDir }))
+      : undefined
+  if (repoWorkspaces !== undefined) await repoWorkspaces.sweepStale().catch(() => undefined)
+
   const claudeJobRunner =
     config.runtime.kind === "claude"
       ? new ClaudeJobRunner({
@@ -151,6 +164,11 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
           jobManager,
           taskGraphSyncer,
           reportTerminalJob,
+          ...(repoWorkspaces !== undefined ? { workspaces: repoWorkspaces } : {}),
+          // Redacted from script output tails, should a script echo them.
+          knownSecrets: [options.bearerToken, options.operatorToken].filter(
+            (value): value is string => typeof value === "string" && value.length > 0,
+          ),
           adapterOptions: {
             // The adapter's sanitizer forwards PATH, HOME and the Claude
             // provider credentials (ANTHROPIC_API_KEY / CLAUDE_CODE_OAUTH_TOKEN)
@@ -222,6 +240,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     callbackReporter,
     egressOutboxStore,
     ...(claudeJobRunner ? { claudeJobRunner } : {}),
+    ...(repoWorkspaces ? { repoWorkspaces } : {}),
     monitorSession,
     reportTerminalJob,
   }

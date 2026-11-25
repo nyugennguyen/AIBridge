@@ -52,6 +52,8 @@ import { IpcPublisher, type IpcWorldSource, type PaneController } from "./publis
 function jobStateOf(job: JobRecord): IpcJobState {
   switch (job.status) {
     case "blocked":
+    case "awaiting_approval":
+      // Held until an operator acts on this node: blocked, not working.
       return "blocked"
     case "completed":
     case "failed":

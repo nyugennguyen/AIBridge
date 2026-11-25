@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto"
 import type { RemoteDependency, TriggerRequest } from "../config/types.js"
-import type { JobRecord, JobStatus, RemoteDependencyReport, RuntimeJobResult } from "./types.js"
+import type { JobCheckout, JobRecord, JobStatus, RemoteDependencyReport, RuntimeJobResult } from "./types.js"
 import type { JobStore } from "./store.js"
 
 const TERMINAL_STATUSES: JobStatus[] = ["completed", "failed", "timed_out", "callback_failed"]
@@ -19,12 +19,59 @@ export const DEPENDENCY_RESOLUTION_WINDOW_MS = 30_000
 export class JobManager {
   constructor(private readonly store: JobStore) {}
 
-  async createJob(trigger: TriggerRequest, now = new Date().toISOString()): Promise<JobRecord> {
+  /**
+   * Creates a job. `init.awaitingApproval` creates it held (`awaiting_approval`
+   * with a pending approval record) instead of `accepted`; `init.checkout` pins
+   * it to a resolved commit.
+   */
+  async createJob(
+    trigger: TriggerRequest,
+    now = new Date().toISOString(),
+    init: { readonly awaitingApproval?: boolean; readonly checkout?: JobCheckout } = {},
+  ): Promise<JobRecord> {
     const id = trigger.job_id ?? `job_${randomUUID()}`
     if (await this.store.get(id)) throw new Error(`Job already exists: ${id}`)
-    const job: JobRecord = { id, trigger, status: "accepted", createdAt: now, updatedAt: now }
+    const job: JobRecord = {
+      id,
+      trigger,
+      status: init.awaitingApproval === true ? "awaiting_approval" : "accepted",
+      ...(init.awaitingApproval === true ? { approval: { status: "pending" as const, requestedAt: now } } : {}),
+      ...(init.checkout !== undefined ? { checkout: { ...init.checkout } } : {}),
+      createdAt: now,
+      updatedAt: now,
+    }
     await this.store.save(job)
     return job
+  }
+
+  /**
+   * Operator approval: `awaiting_approval` -> `accepted`. Throws unless the job
+   * is awaiting approval, so a second approval of the same job cannot succeed.
+   */
+  async approve(id: string, now = new Date().toISOString()): Promise<JobRecord> {
+    const current = await this.getJob(id)
+    if (current.status !== "awaiting_approval") throw new Error(`Job ${id} is not awaiting approval (status ${current.status})`)
+    const approval = {
+      ...(current.approval ?? { requestedAt: current.createdAt }),
+      status: "approved" as const,
+      decidedAt: now,
+      decidedBy: "operator" as const,
+    }
+    return this.transition(id, "accepted", now, { approval })
+  }
+
+  /** Operator rejection: `awaiting_approval` -> `failed`, recording the operator's reason as the error. */
+  async reject(id: string, reason: string, now = new Date().toISOString()): Promise<JobRecord> {
+    const current = await this.getJob(id)
+    if (current.status !== "awaiting_approval") throw new Error(`Job ${id} is not awaiting approval (status ${current.status})`)
+    const approval = {
+      ...(current.approval ?? { requestedAt: current.createdAt }),
+      status: "rejected" as const,
+      decidedAt: now,
+      decidedBy: "operator" as const,
+      reason,
+    }
+    return this.transition(id, "failed", now, { approval, error: reason })
   }
 
   async attachSession(id: string, opencodeSessionId: string, now = new Date().toISOString()): Promise<JobRecord> {

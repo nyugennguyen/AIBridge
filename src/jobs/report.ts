@@ -12,6 +12,7 @@ function terminalReportStatus(status: JobStatus): ReportCallback["status"] {
       return status
     case "received":
     case "accepted":
+    case "awaiting_approval":
     case "blocked":
     case "session_created":
     case "running":
@@ -39,6 +40,10 @@ export function buildTerminalReport(job: JobRecord, sourceAgentId: string): Repo
     artifacts: [],
     started_at: job.createdAt,
     completed_at: job.updatedAt,
+    ...(job.checkout !== undefined ? { sha: job.checkout.sha } : {}),
+    ...(job.runtimeResult?.scriptResults !== undefined && job.runtimeResult.scriptResults.length > 0
+      ? { script_results: job.runtimeResult.scriptResults }
+      : {}),
   }
 }
 

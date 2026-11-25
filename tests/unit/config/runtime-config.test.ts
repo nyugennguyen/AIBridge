@@ -56,7 +56,10 @@ describe("claude runtime config", () => {
     const parsed = bridgeConfigSchema.parse(readExample("claude-staging.example.json"))
     expect(parsed.runtime.kind).toBe("claude")
     expect(parsed.opencode).toBeUndefined()
-    expect(Object.keys(parsed.capability_profiles ?? {})).toEqual(["investigate", "run-tests", "fix-on-branch"])
+    expect(Object.keys(parsed.capability_profiles ?? {})).toEqual(["investigate", "run-tests", "fix-on-branch", "deploy"])
+    expect(parsed.capability_profiles?.deploy).toMatchObject({ script: "scripts/deploy-staging.sh", requires_approval: true })
+    expect(parsed.repositories?.["app-under-test"]?.default_branch).toBe("main")
+    expect(parsed.limits?.max_concurrent_jobs).toBe(2)
     expect(parsed.capability_profiles?.investigate?.requires_approval).toBe(false)
     expect(parsed.capability_profiles?.["fix-on-branch"]?.requires_approval).toBe(true)
     // New rule syntax only: `Bash(cmd *)`, never the old `Bash(cmd:*)`.

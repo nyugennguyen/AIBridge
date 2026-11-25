@@ -65,6 +65,17 @@ export interface ToolResult {
 }
 
 export const TERMINAL_STATUSES: ReadonlySet<string> = new Set(["completed", "failed", "timed_out", "callback_failed"])
+
+/**
+ * What to tell the model about a job held for operator approval on the worker.
+ * There is deliberately no approve tool: only a human on that node can approve.
+ */
+export function awaitingApprovalHint(jobId: string, target: string, approveHint: unknown): string {
+  // The peer's hint is used only when it is exactly a plain approve command.
+  const plain = /^aibr approve [A-Za-z0-9._:-]+(?: --profile [a-z0-9-]+)?$/
+  const command = typeof approveHint === "string" && plain.test(approveHint) ? approveHint : `aibr approve ${jobId}`
+  return `Awaiting operator approval on ${target}; ask the user to run \`${command}\` there. Do not re-dispatch; call bridge_await after they approve.`
+}
 export const MAX_AWAIT_SECONDS = 120
 export const DEFAULT_AWAIT_SECONDS = 60
 const POLL_INTERVAL_MS = 2000
@@ -406,6 +417,8 @@ export class BridgeTools {
       target,
       status: typeof payload.status === "string" ? payload.status : "accepted",
       status_url: typeof payload.status_url === "string" ? payload.status_url : `${trimSlash(peer.url)}/jobs/${returnedId}`,
+      ...(typeof payload.sha === "string" ? { sha: payload.sha } : {}),
+      ...(payload.status === "awaiting_approval" ? { message: awaitingApprovalHint(returnedId, target, payload.approve_hint) } : {}),
     }
   }
 
@@ -480,6 +493,10 @@ export class BridgeTools {
       const job = await this.fetchJob(jobId, target)
       const status = typeof job.status === "string" ? job.status : "unknown"
       if (TERMINAL_STATUSES.has(status)) return { ...this.shapeResult(jobId, target, job), still_running: false }
+      // Not final, but waiting on a human: polling longer will not change it.
+      if (status === "awaiting_approval") {
+        return { job_id: jobId, target, status, still_running: true, message: awaitingApprovalHint(jobId, target, undefined) }
+      }
       const remaining = deadline - this.deps.now()
       if (remaining <= 0) {
         return { job_id: jobId, target, status, still_running: true, message: "Still running. Call bridge_await again." }

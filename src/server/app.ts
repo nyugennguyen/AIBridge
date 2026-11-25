@@ -19,6 +19,9 @@ import type { ClaudeJobRunner } from "../runtime/claude-job-runner.js"
 import { registerEnrollRoute } from "./routes/enroll.js"
 import type { RequestIdentityGuard } from "../pairing/verifier.js"
 import type { PairingAcceptor } from "../pairing/service.js"
+import type { RepoWorkspaceManager } from "../runtime/repo-workspace.js"
+import { InMemoryApprovalLedger, type ApprovalLedger } from "../jobs/approval-ledger.js"
+import { registerOperatorRoutes } from "./routes/operator.js"
 import type {
   NotificationBus,
   NotificationStore,
@@ -58,7 +61,24 @@ export interface AppDependencies {
    * an OpenCode node; a Claude node without one answers 503 rather than
    * falling back to OpenCode.
    */
-  claudeJobRunner?: Pick<ClaudeJobRunner, "start" | "monitor">
+  claudeJobRunner?: Pick<ClaudeJobRunner, "start" | "monitor"> & Partial<Pick<ClaudeJobRunner, "hasCapacity" | "stopAll">>
+  /**
+   * Resolves a trigger's `repo` + `ref` to a pinned sha (Phase 5). Absent: a
+   * trigger naming a `repo` is answered 503.
+   */
+  repoWorkspaces?: Pick<RepoWorkspaceManager, "resolveSha">
+  /**
+   * Audit log of approval requests, operator decisions and kill-switch use
+   * (ADR 0013). Absent: an in-memory ledger (tests); `startBridge` always
+   * supplies the file-backed one.
+   */
+  approvalLedger?: ApprovalLedger
+  /** Delivers the report of a job an operator ended (reject / expiry). Defaults to one built from `callbackReporter`. */
+  reportTerminalJob?: (job: JobRecord) => Promise<void>
+  /** The profile this bridge serves; only used to print an exact `aibr approve` hint. */
+  profileName?: string
+  /** This host's own addresses, for the operator endpoints' same-host check. Injectable for tests. */
+  localAddresses?: () => ReadonlySet<string>
   taskGraphSyncer: TaskGraphSyncer
   shadowMirror?: ShadowIngressMirror
   /**
@@ -96,11 +116,15 @@ export interface AppDependencies {
 
 export function createApp(dependencies: AppDependencies): FastifyInstance {
   const app = Fastify({ bodyLimit: 1_048_576, logger: false })
+  // One ledger for the trigger route (approval requested) and the operator
+  // routes (decisions), so the chain is a single sequence.
+  if (dependencies.approvalLedger === undefined) dependencies = { ...dependencies, approvalLedger: new InMemoryApprovalLedger() }
   registerHealthRoute(app, dependencies)
   registerTriggerRoute(app, dependencies)
   registerJobsRoute(app, dependencies)
   registerReportRoute(app, dependencies)
   registerOrchestrationRoutes(app, dependencies)
   registerEnrollRoute(app, dependencies)
+  registerOperatorRoutes(app, dependencies)
   return app
 }

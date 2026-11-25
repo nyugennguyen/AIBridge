@@ -13,6 +13,8 @@ import type {
   projectConfigSchema,
   remoteDependencySchema,
   requestSigningModeSchema,
+  repositoryConfigSchema,
+  scriptResultSchema,
   reportCallbackSchema,
   runtimeConfigSchema,
   triggerRequestSchema,
@@ -34,6 +36,8 @@ export type PlanMetadata = z.infer<typeof planMetadataSchema>
 export type ProjectConfig = z.infer<typeof projectConfigSchema>
 export type RemoteDependency = z.infer<typeof remoteDependencySchema>
 export type RequestSigningMode = z.infer<typeof requestSigningModeSchema>
+export type RepositoryConfig = z.infer<typeof repositoryConfigSchema>
+export type ScriptResult = z.infer<typeof scriptResultSchema>
 export type ReportCallback = z.infer<typeof reportCallbackSchema>
 export type ReportFinding = ReportCallback["findings"][number]
 export type RuntimeConfig = z.infer<typeof runtimeConfigSchema>

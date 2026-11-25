@@ -102,10 +102,22 @@ export const capabilityProfileSchema = z.object({
   max_budget_usd: z.number().positive().optional(),
   max_turns: z.number().int().positive().optional(),
   timeout_s: z.number().int().positive().optional(),
-  /** Refused with 403 `approval_required` until operator approval exists (Phase 4). */
+  /**
+   * Held as `awaiting_approval` until an operator approves the job on this node
+   * (`aibr approve <job>`, Phase 4). A caller's `metadata.plan_status` is never
+   * consulted for this runtime.
+   */
   requires_approval: z.boolean().default(false),
-  /** Deterministic script instead of an LLM run. Parsed now, executed in Phase 5 (501 until then). */
+  /**
+   * Deterministic script run INSTEAD of Claude Code (no LLM). A path relative
+   * to the job's working directory that must resolve inside it; executed
+   * directly (no shell), with a sanitized environment and the profile timeout.
+   */
   script: z.string().min(1).optional(),
+  /** Scripts run before the main step (Claude or `script`); same rules as `script`. */
+  pre: z.array(z.string().min(1)).optional(),
+  /** Scripts run after a main step that completed; same rules as `script`. */
+  post: z.array(z.string().min(1)).optional(),
   model: z.string().min(1).optional(),
   append_system_prompt: z.string().min(1).optional(),
 })
@@ -124,6 +136,32 @@ export const claudeConfigSchema = z.object({
   setting_sources: z.array(claudeSettingSourceSchema).default(["user"]),
   /** `--strict-mcp-config`: ignore `.mcp.json`, `~/.claude.json` and plugin MCP servers. */
   strict_mcp_config: z.boolean().default(true),
+})
+
+/**
+ * A repository a `/trigger` may name in `repo`. Only repositories listed here
+ * are ever fetched: a peer names a key, never an arbitrary URL to clone.
+ */
+export const repositoryConfigSchema = z.object({
+  url: z.string().min(1),
+  /** Ref used when a trigger names the repository without a `ref`. Defaults to `HEAD`. */
+  default_branch: z.string().min(1).optional(),
+})
+
+/** Repository keys are path components (`<state>/repos/<name>.git`), so they are opaque ids. */
+export const REPOSITORY_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
+
+/**
+ * A git ref or sha a peer may ask for. Deliberately narrower than git's own
+ * grammar: no leading `-` (never an option to git), no whitespace, no `..`,
+ * no `@{`, no control characters.
+ */
+export const GIT_REF_PATTERN = /^(?!-)(?!.*\.\.)(?!.*@\{)[A-Za-z0-9._/+-]{1,200}$/
+
+/** Node-wide execution limits. */
+export const limitsConfigSchema = z.object({
+  /** Claude/script jobs that may run at once on this node; excess triggers get 429. Default 2. */
+  max_concurrent_jobs: z.number().int().positive().optional(),
 })
 
 const opencodeConfigSchema = z.object({
@@ -148,10 +186,20 @@ export const bridgeConfigSchema = z.object({
   opencode: opencodeConfigSchema.optional(),
   capability_profiles: z.record(z.string(), capabilityProfileSchema).optional(),
   claude: claudeConfigSchema.optional(),
+  /** Repositories `/trigger` may pin a job to (`repo` + `ref`). Absent: `repo` is refused. */
+  repositories: z.record(z.string(), repositoryConfigSchema).optional(),
+  limits: limitsConfigSchema.optional(),
   security: z.object({
     auth_mode: authModeSchema.default("bearer-token"),
     request_signing: requestSigningModeSchema.optional(),
     allowed_sources: z.array(allowedSourceSchema),
+    /**
+     * Operator endpoints (approve/reject/pending/stop-all) answer only requests
+     * from this host itself: loopback or one of the host's own interface
+     * addresses (the CLI connects through the bridge's bound address). Absent
+     * means true; set false only to approve from another machine.
+     */
+    approval_from_loopback_only: z.boolean().optional(),
   }),
   permissions: z.object({
     default_response: permissionResponseSchema,
@@ -199,6 +247,15 @@ export const bridgeConfigSchema = z.object({
         `request_signing to "off" (Docs/adr/0012-request-signing-and-pairing.md).`,
     })
   }
+  for (const name of Object.keys(config.repositories ?? {})) {
+    if (!REPOSITORY_NAME_PATTERN.test(name)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["repositories", name],
+        message: `Repository name "${name}" must match ${REPOSITORY_NAME_PATTERN.source}.`,
+      })
+    }
+  }
   for (const name of Object.keys(config.capability_profiles ?? {})) {
     if (!CAPABILITY_PROFILE_NAME_PATTERN.test(name)) {
       ctx.addIssue({
@@ -238,6 +295,15 @@ export const triggerRequestSchema = z.object({
   depends_on: z.array(dependencyReferenceSchema).default([]).optional(),
   task_id: z.string().optional(),
   metadata: planMetadataSchema,
+  /**
+   * A key of the worker's `repositories` map (or that entry's exact `url`).
+   * The worker runs the job in a fresh worktree of that repository, checked
+   * out at the resolved sha, instead of `project_dir`'s working tree. Claude
+   * runtime only; `project_dir` must still be allowlisted.
+   */
+  repo: z.string().min(1).max(512).optional(),
+  /** Branch, tag or sha inside `repo`; resolved to a sha when the job is accepted. Requires `repo`. */
+  ref: z.string().regex(GIT_REF_PATTERN).optional(),
 })
 
 export const triggerResponseSchema = z.object({
@@ -248,8 +314,24 @@ export const triggerResponseSchema = z.object({
   /** The runtime's own session id for non-OpenCode runtimes (Claude Code's session UUID). */
   runtime_session_id: z.string().min(1).optional(),
   status_url: z.url(),
-  status: z.enum(["accepted", "blocked", "failed"]).optional(),
+  status: z.enum(["accepted", "blocked", "failed", "awaiting_approval"]).optional(),
   task_id: z.string().optional(),
+  /** For `awaiting_approval`: what the operator runs on the worker node to approve. */
+  approve_hint: z.string().min(1).optional(),
+  /** The commit the job is pinned to, when the trigger named a `repo`. */
+  sha: z.string().regex(/^[0-9a-f]{40,64}$/).optional(),
+})
+
+/** One deterministic script step of a job, as reported back. Output tails are bounded and redacted. */
+export const scriptResultSchema = z.object({
+  phase: z.enum(["pre", "main", "post"]),
+  script: z.string().min(1),
+  exit_code: z.number().int().nullable(),
+  signal: z.string().optional(),
+  timed_out: z.boolean(),
+  duration_ms: z.number().int().nonnegative(),
+  stdout_tail: z.string(),
+  stderr_tail: z.string(),
 })
 
 export const reportCallbackSchema = z.object({
@@ -270,4 +352,8 @@ export const reportCallbackSchema = z.object({
   artifacts: z.array(z.object({ type: z.string(), path: z.string() })),
   started_at: z.string(),
   completed_at: z.string(),
+  /** The commit the job ran at, when the trigger named a `repo`. */
+  sha: z.string().optional(),
+  /** Deterministic steps the job ran (`pre`, `script`, `post`), in order. */
+  script_results: z.array(scriptResultSchema).optional(),
 })

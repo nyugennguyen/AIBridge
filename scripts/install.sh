@@ -35,6 +35,8 @@ Options:
 
 Environment:
   AIBRIDGE_VERSION        npm version/tag to install (default: latest)
+  AIBRIDGE_PACKAGE        full package spec to install instead (e.g. a local
+                          ./nyugennguyen-aibridge-3.0.0.tgz for pre-release testing)
   AIBRIDGE_ROUTER_BIN     path to an aibr-router binary (with --ingress router)
   AIBRIDGE_INGRESS_OUTBOX absolute path of the admission store (with --ingress router)
 USAGE
@@ -291,6 +293,7 @@ install_aibridge() {
   VER="${AIBRIDGE_VERSION:-latest}"
   PKG="@nyugennguyen/aibridge"
   if [ "$VER" != "latest" ]; then PKG="${PKG}@${VER}"; fi
+  if [ -n "${AIBRIDGE_PACKAGE:-}" ]; then PKG="$AIBRIDGE_PACKAGE"; fi
   echo "Installing $PKG via bun..."
   bun install -g "$PKG"
   ensure_aibr_on_path

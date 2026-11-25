@@ -121,11 +121,19 @@ jobs:
           # systemd-analyze reports those as missing executables. That is expected
           # on a builder and is the only class of message tolerated below; a unit
           # syntax error still fails the job.
+          #
+          # systemd-analyze also loads the RUNNER's own units while resolving
+          # dependencies, and newer runner images ship units that use options
+          # systemd has since removed ("/usr/lib/systemd/system/xfs_scrub_all.service:
+          # Support for option CPUAccounting= has been removed"). Those lines name a
+          # host unit path, never ours, so they are dropped first; any message about
+          # packaging/systemd/aibr-*.service still fails the job.
           systemd-analyze verify packaging/systemd/aibr-router.service packaging/systemd/aibr-worker.service 2>&1 \
             | tee /tmp/systemd-verify.log
-          if grep -qvE "Command .* is not executable|No such file or directory|does not exist" /tmp/systemd-verify.log; then
+          grep -vE "^(/usr)?/lib/systemd/" /tmp/systemd-verify.log > /tmp/systemd-verify-ours.log || true
+          if grep -qvE "Command .* is not executable|No such file or directory|does not exist" /tmp/systemd-verify-ours.log; then
             echo "Error: systemd-analyze reported a unit error beyond the missing-router-binary class:"
-            grep -vE "Command .* is not executable|No such file or directory|does not exist" /tmp/systemd-verify.log
+            grep -vE "Command .* is not executable|No such file or directory|does not exist" /tmp/systemd-verify-ours.log
             exit 1
           fi
           echo "systemd unit syntax verified by systemd-analyze."

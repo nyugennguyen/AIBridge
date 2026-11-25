@@ -659,7 +659,7 @@ describe("node role and runtime", () => {
     const calls: string[] = []
     const { outcome, fileOps, prompter, daemon } = await runWizard(
       {
-        inputs: ["orch", "orchestrator", "", "", "", "/mock/path", "", "", ""],
+        inputs: ["orch", "orchestrator", "", "", "", ""],
         confirms: [""],
       },
       { processRunner: makeFakeProcessRunner({ tmux: false, opencode: false, claude: true, calls }) },
@@ -684,6 +684,11 @@ describe("node role and runtime", () => {
     expect(saved.opencode).toMatchObject({ server_port: 4096 })
     expect(() => bridgeConfigSchema.parse(saved)).not.toThrow()
     expect(fileOps.writtenSecrets[OC_PASSWORD("orch")]).toBeUndefined()
+    // No bridge runs on an orchestrator: no token prompt ("copy this to your
+    // peer" was wrong advice) and no project to allowlist.
+    expect(prompter.inputs.some((label) => label.startsWith("Bearer authentication"))).toBe(false)
+    expect(prompter.inputs.some((label) => label.includes("project path"))).toBe(false)
+    expect(saved.projects).toEqual([])
   })
 
   it("orchestrator: Step 4 offers pairing by code first and writes the paired worker", async () => {
@@ -691,7 +696,7 @@ describe("node role and runtime", () => {
     const seen: { code: string; agentId: string }[] = []
     const { outcome, fileOps, prompter, output } = await runWizard(
       {
-        inputs: ["orch", "orchestrator", "", "", "", "/mock/path", "aibr1-somecode", ""],
+        inputs: ["orch", "orchestrator", "", "aibr1-somecode", ""],
         confirms: [""],
       },
       {
@@ -717,7 +722,7 @@ describe("node role and runtime", () => {
   it("orchestrator: a failed pairing falls back to discovery", async () => {
     const { outcome, output } = await runWizard(
       {
-        inputs: ["orch", "orchestrator", "", "", "", "/mock/path", "aibr1-bad", "", ""],
+        inputs: ["orch", "orchestrator", "", "aibr1-bad", "", ""],
         confirms: [""],
       },
       {

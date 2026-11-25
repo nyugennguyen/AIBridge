@@ -1005,14 +1005,21 @@ async function runSetupSteps(io: WizardIo, ctx: SetupContext): Promise<SetupOutc
   // are the released behaviour; "none" runs the routes unauthenticated and is
   // only offered for a bridge that is genuinely protected by its network.
   const hasExistingToken = await pathExists(bearerTokenPath)
-  const tokenChoiceRaw = await deps.prompter.promptInput(
+  // An orchestrator runs no bridge, so nothing authenticates against its token:
+  // its peers' tokens arrive through pairing. Asking the user to generate and
+  // "copy this token to your peer" was wrong advice (seen in the dev -> staging
+  // run), so the token is kept, or generated silently for a later `both`/bridge.
+  const tokenChoiceRaw =
+    role === "orchestrator"
+      ? hasExistingToken ? "k" : "g"
+      : await deps.prompter.promptInput(
     hasExistingToken
       ? "Bearer authentication — this profile already has a token. [K]eep existing (default), " +
           "[G]enerate new (peers using the old token will get 401), [P]aste a different one, " +
           "or type 'none' for no authentication:"
       : "Bearer authentication — [G]enerate a new token (default), " +
           "[P]aste an existing one, or type 'none' for no authentication:",
-  )
+      )
   const tokenChoice = parseBearerTokenChoice(tokenChoiceRaw, { hasExisting: hasExistingToken })
 
   let authMode: "bearer-token" | "none" = "bearer-token"
@@ -1082,6 +1089,9 @@ async function runSetupSteps(io: WizardIo, ctx: SetupContext): Promise<SetupOutc
   } else {
     // Generate 64 hex characters (32 bytes) CSPRNG token.
     newBearerToken = generateBearerToken(false)
+    if (role === "orchestrator") {
+      // Silent: see the comment at the token prompt. Never displayed.
+    } else {
     const rotationWarning = hasExistingToken
       ? "\nThis REPLACES the existing token: every peer still using the old one will get " +
         "HTTP 401 until it is given this one."
@@ -1090,6 +1100,7 @@ async function runSetupSteps(io: WizardIo, ctx: SetupContext): Promise<SetupOutc
       `Generated shared token: ${newBearerToken}${rotationWarning}\n` +
         `(IMPORTANT: Copy this token to use on your peer machine. Press Enter to continue)`,
     )
+    }
   }
 
   // ── OpenCode password (opencode runtime only) ───────────────────────
@@ -1129,7 +1140,8 @@ async function runSetupSteps(io: WizardIo, ctx: SetupContext): Promise<SetupOutc
 
   const existingProjects = Array.isArray(base.projects) ? base.projects.filter(isRecord) : []
   const firstProject = existingProjects[0]
-  const projectPath = await promptProjectPath(io, env, firstProject)
+  // An orchestrator runs no jobs here, so it has no project to allowlist.
+  const projectPath = role === "orchestrator" ? null : await promptProjectPath(io, env, firstProject)
 
   // ── Step 4: Tailnet Discovery & Explicit Peer Enrolment ─────────────
   //
@@ -1237,7 +1249,7 @@ async function runSetupSteps(io: WizardIo, ctx: SetupContext): Promise<SetupOutc
           allow_tools: ["read", "grep", "glob"],
           require_plan_approval_for_tools: ["bash", "edit", "write"],
         },
-    projects: [
+    projects: projectPath === null ? existingProjects : [
       {
         ...(firstProject ?? {}),
         id: typeof firstProject?.id === "string" ? firstProject.id : profileName,

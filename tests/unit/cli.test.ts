@@ -376,7 +376,7 @@ describe("cli setup", () => {
 
     expect(output).toContain('Profile "orch" updated.')
     expect(output).toContain("aibr verify --profile orch")
-    expect(output).toContain("Claude Code plugin")
+    expect(output).toContain("aibr plugin install claude")
     expect(output).not.toContain("aibr start --profile orch")
   })
 

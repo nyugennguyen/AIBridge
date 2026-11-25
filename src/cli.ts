@@ -422,8 +422,8 @@ function nextStepsText(profile: string, role: string | undefined, daemonStarted:
   }
   if (role === "orchestrator" || role === "both") {
     lines.push(
-      "  Claude Code dispatches work through the AIBridge Claude Code plugin;",
-      "  install it once it ships for your version (no supervisor unit is needed here).",
+      `  ${PROG} plugin install claude      # add the AIBridge plugin to Claude Code (no supervisor unit is needed here)`,
+      "  Then, in Claude Code, ask it to dispatch work to a peer (e.g. \"run the tests on staging\").",
     )
   }
   lines.push("")

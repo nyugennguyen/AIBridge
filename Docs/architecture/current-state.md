@@ -1,13 +1,13 @@
 # Current architecture guide
 
 > **Status:** Current
-> **Applies to:** AIBridge 3.0.0
+> **Applies to:** AIBridge 3.1.0
 > **Last verified:** 2026-10-16 against commit a887380 (core architecture, port bindings, trust boundaries, and wizard probe semantics)
 > **Owner:** maintainers
 
 ## 1. Purpose and status
 
-This document defines the as-built architecture of AIBridge 3.0.0. Every statement in this guide describes running code in the repository; planned extensions or historical prototypes are explicitly labeled as such.
+This document defines the as-built architecture of AIBridge 3.1.0. Every statement in this guide describes running code in the repository; planned extensions or historical prototypes are explicitly labeled as such.
 
 For historical design notes and earlier recovery surface proposals, see [`Docs/archive/failure-modes-and-recovery.md`](../archive/failure-modes-and-recovery.md) (marked with status *Archived*). For executable command syntax, see the generated [`Docs/reference/cli-reference.md`](../reference/cli-reference.md).
 

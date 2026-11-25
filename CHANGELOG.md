@@ -2,6 +2,79 @@
 
 ## [Unreleased]
 
+## [3.1.0] - 2026-11-26
+
+Claude Code becomes a first-class AIBridge runtime and the main orchestrator, and a new machine can now be set up in a few commands. Configuration files, the HTTP API and the OpenCode runtime path stay backward compatible; see **Behaviour changes** before upgrading a running node.
+
+### Behaviour changes
+- **`aibr start` installs a user service by default** (launchd agent / systemd user unit running `aibr serve`) instead of starting a tmux session. The previous behaviour is `aibr start --foreground` (alias `--tmux`); scripts that `tmux attach -t aibridge-<profile>` need that flag.
+- **New profiles require signed requests.** Profiles created by `aibr setup` or `aibr init` get `security.request_signing: "required"`; existing profiles keep their setting (absent means `"off"`). An unpaired peer then gets `401 signature_required` until the two nodes are paired with `aibr enroll`.
+- **Re-running `aibr setup` keeps the bearer token** by default (it used to generate a new one, silently breaking peers). Rotation is an explicit choice that warns about the 401s it causes.
+- **The router's static musl size bound is now 3 MiB** (was 2.25 MiB), recorded in ADR 0008 §13.
+
+### Claude Code runtime (Claude plan, Phases 0–2)
+- **Claude adapter rewritten for the real CLI protocol** (`src/runtime/claude-adapter.ts`, ADR 0005):
+  - It uses `--verbose`, stream-json user turns, and the real `result` fields (`subtype`, `is_error`, `result`, `total_cost_usd`, `usage`, `num_turns`, `permission_denials`).
+  - Unknown event types are ignored.
+  - stdin is closed after the result, so the process exits.
+  - A process killed by a signal is reported as failed.
+  - It passes `--append-system-prompt`, not `--system-prompt`.
+  - The fake permission round-trip is removed: permissions are decided up front under `--permission-mode dontAsk`.
+  - Denied tool calls are recorded and become report findings.
+- **Live harness**: `bun run test:live` (`AIBR_LIVE_CLAUDE=1`) runs the real `claude` CLI, defaulting to haiku with a 0.25 USD cap. Note that `--max-budget-usd` is a soft cap, checked after each turn.
+- **`/trigger` runs Claude Code under capability profiles**:
+  - New config keys: `role`, `runtime`, `capability_profiles` (allow/deny/budget/turns/timeout/model/append prompt), and `claude` (`setting_sources`, `strict_mcp_config`, `settings_path`). `opencode` is now optional for Claude workers.
+  - Every launch also gets a frozen **safety floor** of deny rules (secrets, SSH/cloud credentials, AIBridge state, `curl`/`wget`/`ssh`/`sudo`) that no profile can remove.
+  - An unknown capability gets `403 unknown_capability_profile`.
+  - Workers created by `aibr setup` get read-only `investigate` and test-only `run-tests` profiles.
+- `GET /jobs/:id` returns a Claude job's `summary`, `findings`, `cost_usd`, `num_turns`, `runtime_session_id`, and (with repositories) `sha` and `script_results`. `/health` reports `runtime: "claude"`.
+
+### Security: signed requests, pairing, operator approval (Claude plan, Phases 3–4)
+- **`security.request_signing`** (`off`/`optional`/`required`) adds ed25519 node signatures on `/trigger` and `/report`:
+  - The sender's identity comes from the verified key, and a `source_agent_id` that does not match it gets 403.
+  - Replays are rejected.
+  - Callbacks and the MCP client sign their requests.
+  - Signing is refused in router ingress mode (ADR 0012).
+- **`aibr enroll issue | join | list | revoke`** pairs nodes with a one-time code, replacing manual token copying. Both sides pin each other's key and write their configs; the worker's bearer token is stored without being shown.
+- **Operator approval**:
+  - Approval-gated jobs (`requires_approval`) wait as `awaiting_approval`, and the caller's `metadata.plan_status` is no longer trusted.
+  - Only `aibr approve` / `aibr reject` can release one. They need the operator token and must run on the same host; a peer's bearer gets 403.
+  - `aibr jobs pending` lists waiting jobs.
+  - Every decision goes to a hash-chained `approvals.jsonl` ledger (ADR 0013).
+  - Kill switch: `aibr stop --all-jobs`.
+
+### Jobs pinned to a commit (Claude plan, Phase 5)
+- **`repo` + `ref` on `/trigger`**: the repository must be configured under `repositories`. The `ref` is resolved to a sha when the job is accepted, so an operator approves an exact commit. Each job runs in its own detached worktree, which is removed afterwards and swept at startup.
+- **Deterministic steps**: profiles accept `script`, `pre` and `post`. Scripts run without a shell, contained to the job directory, with a cleaned environment; the exit code and a redacted output tail go into `script_results`.
+- **Concurrency limit**: `limits.max_concurrent_jobs` (default 2). Jobs over the limit get `429 node_at_capacity`.
+
+### Claude Code as orchestrator (Claude plan, Phase 6)
+- **Claude Code plugin** in `plugins/aibridge`, with the marketplace at `.claude-plugin/marketplace.json`, shipped in the npm package:
+  - an MCP server (`aibr mcp serve`) with tools `bridge_peers`, `bridge_dispatch`, `bridge_status`, `bridge_await`, `bridge_result` and `bridge_cancel` — deliberately no approve tool;
+  - the `aibridge-dispatch` skill, the `/bridge-send` and `/bridge-status` commands, and a SessionStart summary hook (`aibr mcp summary`).
+- **`aibr plugin install | uninstall | status claude`** registers the plugin through the official `claude plugin` CLI and never edits `~/.claude` files.
+
+### Installation for new users (installation UX review, wave A)
+- **`scripts/install.sh`**:
+  - Prompts read `/dev/tty`, so `curl … | bash` no longer swallows script lines, and `--yes` covers every prompt.
+  - New flags: `--role worker|orchestrator|both`, `--runtime opencode|claude|auto`, `--with-claude-plugin`, `--ingress router`.
+  - Prerequisites are checked per role, and missing ones are installed with consent (official Tailscale installer).
+  - It offers to fix `PATH`.
+  - The router is only mentioned with `--ingress router`.
+  - `--version` matches the package.
+  - `AIBRIDGE_PACKAGE` installs a local tarball.
+- **`aibr setup`**:
+  - Secrets are entered with echo off.
+  - "Save?" defaults to yes.
+  - The config path and ports are asked only with `--advanced`.
+  - The project defaults to the git root, and `$HOME` is refused.
+  - New role and runtime questions, with a role-aware preflight, so Claude-only machines are no longer blocked on `opencode`.
+  - Orchestrators get no token or project questions; they can pair by code instead.
+  - Discovery output is shorter.
+  - It prints next steps for the chosen role.
+- `aibr status` probes the configured bridge host. Before, every correctly configured node showed as unavailable.
+- Every command has its own `--help`.
+
 ### Quickstart and one run model (installation UX review, waves B–C)
 - **`aibr init`**: sets up a machine in at most four questions — role, runtime (only when both or neither is installed), project directory (git root by default; `$HOME` refused), and new network (prints a one-time pairing code) or join (paste the code). Runs the setup wizard in quickstart mode and the `aibr enroll` code paths; secrets are generated and never shown; every answer has a flag for scripted installs. `aibr setup --advanced` remains the full wizard.
 - **`aibr doctor`**: one ✓/✗ list merging `verify`, `status` and discovery, ending with a signed ping of every peer; every ✗ carries the command that fixes it.
@@ -13,6 +86,14 @@
 - `aibr setup` no longer writes a supervisor unit unasked: its last step offers to start the user service. Its "next steps" point at `aibr enroll` and `aibr doctor`; the installer's point at `aibr init` and offer to run it.
 - A callback the durable egress outbox queued for retry is recorded as `callbackDelivery: pending` instead of `delivered`.
 - CI runs a two-profile smoke test (`bun run test:smoke`: init → pair → ping → doctor on one machine).
+
+### Operations (Claude plan, Phase 7)
+- **`Docs/runbooks/claude-dev-staging.md`**: an operator runbook covering worker and orchestrator install, pairing, signed requests, the operator token, approve/reject, the kill switch, reading the approval ledger, key and token rotation, capability profile design, and troubleshooting.
+- **`Docs/runbooks/tailscale-policy.example.hujson`**: an example policy. Dev may reach staging's port 8787, staging may reach dev's port 8787 for callbacks, staging has no route to prod, and Tailscale SSH is off for staging.
+
+### Fixes
+- The Milestone 7 systemd check ignores warnings from the CI runner's own system units. Messages about AIBridge's units still fail it.
+- Wizard tests no longer write a launchd unit into the real `~/Library/LaunchAgents`.
 
 ## [3.0.0] - 2026-10-14
 

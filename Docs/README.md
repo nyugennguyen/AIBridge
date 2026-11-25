@@ -1,7 +1,7 @@
 # AIBridge Documentation
 
 > **Status:** Current  
-> **Applies to:** AIBridge 3.0.0  
+> **Applies to:** AIBridge 3.1.0  
 > **Owner:** Maintainers  
 
 Welcome to the AIBridge documentation hub. This index organizes documentation around user needs, establishing one canonical source of truth for each architectural, operational, and development topic.

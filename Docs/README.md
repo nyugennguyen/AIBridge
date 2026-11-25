@@ -26,6 +26,9 @@ Docs/
 │   ├── deployment.md               # Tmux, macOS launchd, Linux systemd, and multi-node mesh
 │   ├── monitoring.md               # Health probes, diagnostics bundles, and queue telemetry
 │   └── troubleshooting.md          # Real triage ladder, HTTP error matrix, and recovery
+├── runbooks/
+│   ├── claude-dev-staging.md       # Operator runbook: Claude dev -> staging worker
+│   └── tailscale-policy.example.hujson  # Tailscale ACL example for dev/staging tags
 ├── security/
 │   └── security-model.md           # Inviolable security invariants and threat boundaries
 ├── reference/
@@ -55,6 +58,7 @@ Docs/
 - [**Deployment & Operations Guide**](operations/deployment.md) — Managing nodes via tmux, systemd, launchd, and multi-node mesh topologies.
 - [**Monitoring & Diagnostics Guide**](operations/monitoring.md) — Probing node status, reading `/health`, generating redacted support bundles (`aibr bundle`), and tracking queues.
 - [**Operational Troubleshooting Guide**](operations/troubleshooting.md) — Step-by-step triage ladder, root-cause fixes for HTTP 400/401/403/409/503 errors, and warnings on non-existent commands.
+- [**Claude Dev → Staging Runbook**](runbooks/claude-dev-staging.md) — Install and pair a Claude worker and orchestrator, Tailscale ACLs, operator approval, kill switch, audit, key rotation, and capability profile design.
 
 ### Security
 - [**Security Model & Architecture**](security/security-model.md) — The 8 core security invariants, commit-before-202 WAL, constant-time authentication, and project filesystem containment.

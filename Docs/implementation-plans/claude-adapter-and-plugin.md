@@ -122,13 +122,13 @@ plugins/aibridge/
 
 ## Phase 7 — Mạng & vận hành
 
-- [ ] Tailscale ACL:
+- [x] Tailscale ACL (ví dụ đầy đủ: [`Docs/runbooks/tailscale-policy.example.hujson`](../runbooks/tailscale-policy.example.hujson)):
   ```jsonc
   {"action":"accept","src":["tag:aibr-dev"],"dst":["tag:aibr-staging:8787"]},
   {"action":"accept","src":["tag:aibr-staging"],"dst":["tag:aibr-dev:8787"]}
   // staging không có rule tới tag:prod; tắt Tailscale SSH cho tag:aibr-staging
   ```
-- [ ] Runbook `Docs/runbooks/claude-dev-staging.md`: enroll, xoay key, kill switch (`aibr stop --all-jobs`), đọc audit log.
+- [x] Runbook [`Docs/runbooks/claude-dev-staging.md`](../runbooks/claude-dev-staging.md): enroll, xoay key, kill switch (`aibr stop --all-jobs`), đọc audit log.
 
 ---
 

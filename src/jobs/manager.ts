@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto"
 import type { RemoteDependency, TriggerRequest } from "../config/types.js"
-import type { JobRecord, JobStatus, RemoteDependencyReport } from "./types.js"
+import type { JobRecord, JobStatus, RemoteDependencyReport, RuntimeJobResult } from "./types.js"
 import type { JobStore } from "./store.js"
 
 const TERMINAL_STATUSES: JobStatus[] = ["completed", "failed", "timed_out", "callback_failed"]
@@ -29,6 +29,32 @@ export class JobManager {
 
   async attachSession(id: string, opencodeSessionId: string, now = new Date().toISOString()): Promise<JobRecord> {
     return this.transition(id, "session_created", now, { opencodeSessionId })
+  }
+
+  /**
+   * Binds a job to a non-OpenCode runtime session. Same lifecycle step as
+   * `attachSession` (`session_created`), but the id lives in its own field so
+   * `opencodeSessionId` keeps meaning exactly what it says.
+   */
+  async attachRuntimeSession(
+    id: string,
+    runtime: "claude",
+    runtimeSessionId: string,
+    now = new Date().toISOString(),
+  ): Promise<JobRecord> {
+    return this.transition(id, "session_created", now, { runtime, runtimeSessionId })
+  }
+
+  /**
+   * Records what the runtime reported, without changing the job's status. Call
+   * it before the terminal `mark*` so the terminal record already carries the
+   * summary and findings the report callback is built from.
+   */
+  async recordRuntimeResult(id: string, runtimeResult: RuntimeJobResult, now = new Date().toISOString()): Promise<JobRecord> {
+    const current = await this.getJob(id)
+    const next: JobRecord = { ...current, runtimeResult, updatedAt: now }
+    await this.store.save(next)
+    return next
   }
 
   async markRunning(id: string, now = new Date().toISOString()): Promise<JobRecord> {

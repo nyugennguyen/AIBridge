@@ -33,7 +33,10 @@ export function acceptedCapabilities(config: BridgeConfig): readonly string[] {
 
 export interface HealthResponse {
   readonly ok: boolean
-  readonly opencode: boolean
+  /** OpenCode reachability. Present on OpenCode nodes only. */
+  readonly opencode?: boolean
+  /** The executing runtime. Present on non-OpenCode nodes only, so an OpenCode node's body is unchanged. */
+  readonly runtime?: "claude"
   readonly agent_id: string
   readonly capabilities: readonly string[]
 }
@@ -88,10 +91,26 @@ export function registerHealthRoute(app: FastifyInstance, dependencies: AppDepen
   //      only question here is how much it should say — not whether to say it.
   //
   // `ok` and `opencode` are untouched; this is additive.
-  app.get("/health", async (): Promise<HealthResponse> => ({
-    ok: true,
-    opencode: await dependencies.opencodeClient.health(),
-    agent_id: dependencies.config.agent_id,
-    capabilities: acceptedCapabilities(dependencies.config),
-  }))
+  //
+  // A Claude Code node has no OpenCode server to ask, so it reports which
+  // runtime it runs instead of an `opencode: false` that would read as an
+  // outage. Its `capabilities` are still the allowlist's, not the profile
+  // names: discovery answers "what will you accept from me", not "what is
+  // configured".
+  app.get("/health", async (): Promise<HealthResponse> => {
+    if (dependencies.config.runtime?.kind === "claude") {
+      return {
+        ok: true,
+        runtime: "claude",
+        agent_id: dependencies.config.agent_id,
+        capabilities: acceptedCapabilities(dependencies.config),
+      }
+    }
+    return {
+      ok: true,
+      opencode: await dependencies.opencodeClient.health(),
+      agent_id: dependencies.config.agent_id,
+      capabilities: acceptedCapabilities(dependencies.config),
+    }
+  })
 }

@@ -31,6 +31,39 @@ import { waitForIdle } from "../opencode/monitor.js"
 import { CallbackReporter } from "../callback/reporter.js"
 import { EgressOutboxStore } from "../callback/egress-outbox.js"
 import { FileTaskGraphSyncer } from "../tasks/syncer.js"
+import { createTerminalJobReporter } from "../jobs/report.js"
+import { ClaudeJobRunner, type ClaudeJobRunnerOptions } from "../runtime/claude-job-runner.js"
+
+/**
+ * The OpenCode client of a node whose runtime is not OpenCode. Health is
+ * `false` and every session operation throws, so a path that still reaches
+ * for OpenCode (the router drain loop, `/report` unblocking) fails loudly
+ * instead of contacting a server that was never configured.
+ */
+class UnconfiguredOpencodeClient implements OpencodeClient {
+  async health(): Promise<boolean> {
+    return false
+  }
+  async createSession(): Promise<never> {
+    throw new Error("OpenCode is not configured on this node (runtime.kind is not \"opencode\")")
+  }
+  async sendPromptAsync(): Promise<never> {
+    return this.createSession()
+  }
+  async subscribeEvents(): Promise<never> {
+    return this.createSession()
+  }
+  async getSessionStatus(): Promise<never> {
+    return this.createSession()
+  }
+  async replyPermission(): Promise<never> {
+    return this.createSession()
+  }
+  async abortSession(): Promise<never> {
+    return this.createSession()
+  }
+}
+
 export interface RuntimeOptions {
   readonly configPath: string
   readonly stateDir: string
@@ -54,6 +87,8 @@ export interface RuntimeOptions {
     readonly opencodeClient?: OpencodeClient
     readonly monitorSession?: (job: JobRecord) => Promise<void>
     readonly egressOutboxStore?: EgressOutboxStore
+    /** Adapter overrides for the Claude runner (tests inject a fake `spawn`). */
+    readonly claudeAdapterOptions?: ClaudeJobRunnerOptions["adapterOptions"]
   }
 }
 
@@ -64,6 +99,8 @@ export interface Runtime {
   readonly taskGraphSyncer: FileTaskGraphSyncer
   readonly callbackReporter: CallbackReporter
   readonly egressOutboxStore?: EgressOutboxStore
+  /** Present when `runtime.kind` is `claude`: executes `/trigger` jobs on Claude Code. */
+  readonly claudeJobRunner?: ClaudeJobRunner
   /** Drives one job to a terminal state and delivers its report. */
   readonly monitorSession: (job: JobRecord) => Promise<void>
   /** Re-delivers the report of a job already known to be terminal. */
@@ -73,13 +110,18 @@ export interface Runtime {
 export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   const config = await loadConfig(options.configPath)
 
-  const opencodeClient =
+  // A Claude node never constructs (or contacts) an OpenCode client: the
+  // `opencode` block is optional for it and usually absent.
+  const opencodeConfig = config.runtime.kind === "opencode" ? config.opencode : undefined
+  const opencodeClient: OpencodeClient =
     options.deps?.opencodeClient ??
-    new SdkOpencodeClientAdapter({
-      baseUrl: config.opencode.base_url,
-      username: config.opencode.username,
-      password: options.environment[config.opencode.password_env],
-    })
+    (opencodeConfig
+      ? new SdkOpencodeClientAdapter({
+          baseUrl: opencodeConfig.base_url,
+          username: opencodeConfig.username,
+          password: options.environment[opencodeConfig.password_env],
+        })
+      : new UnconfiguredOpencodeClient())
 
   const jobManager = new JobManager(new JsonFileJobStore(join(options.stateDir, "jobs")))
   const taskGraphSyncer = new FileTaskGraphSyncer(join(options.stateDir, "tasks.md"))
@@ -92,52 +134,29 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     agents: config.agents,
     outboxStore: egressOutboxStore,
   })
-  function terminalReportStatus(
-    status: Awaited<ReturnType<typeof jobManager.getJob>>["status"],
-  ): "completed" | "failed" | "timed_out" | "callback_failed" {
-    switch (status) {
-      case "completed":
-      case "failed":
-      case "timed_out":
-      case "callback_failed":
-        return status
-      case "received":
-      case "accepted":
-      case "blocked":
-      case "session_created":
-      case "running":
-      case "reporting":
-        throw new Error(`Cannot report non-terminal job status ${status}`)
-    }
-  }
+  const reportTerminalJob = createTerminalJobReporter({
+    jobManager,
+    callbackReporter,
+    agentId: config.agent_id,
+    bearerToken: options.bearerToken,
+  })
 
-  async function reportTerminalJob(job: Awaited<ReturnType<typeof jobManager.getJob>>): Promise<void> {
-    try {
-      await jobManager.markCallbackDelivery(job.id, "pending")
-      const report = {
-        job_id: job.id,
-        source_agent_id: config.agent_id,
-        target_agent_id: job.trigger.source_agent_id,
-        ...(job.opencodeSessionId ? { opencode_session_id: job.opencodeSessionId } : {}),
-        status: terminalReportStatus(job.status),
-        summary: job.error ?? `Job ${job.id} ${job.status}`,
-        findings: [],
-        artifacts: [],
-        started_at: job.createdAt,
-        completed_at: job.updatedAt,
-      }
-      await callbackReporter.send(job.trigger.callback_url, report, options.bearerToken, {
-        jobId: job.id,
-      })
-      await jobManager.markCallbackDelivery(job.id, "delivered")
-    } catch (error) {
-      await jobManager.markCallbackDelivery(
-        job.id,
-        "failed",
-        error instanceof Error ? error.message : "Callback delivery failed",
-      )
-    }
-  }
+  const claudeJobRunner =
+    config.runtime.kind === "claude"
+      ? new ClaudeJobRunner({
+          config,
+          jobManager,
+          taskGraphSyncer,
+          reportTerminalJob,
+          adapterOptions: {
+            // The adapter's sanitizer forwards PATH, HOME and the Claude
+            // provider credentials (ANTHROPIC_API_KEY / CLAUDE_CODE_OAUTH_TOKEN)
+            // from this environment and strips other secrets.
+            env: options.environment,
+            ...options.deps?.claudeAdapterOptions,
+          },
+        })
+      : undefined
 
   const monitorSession =
     options.deps?.monitorSession ??
@@ -199,6 +218,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     taskGraphSyncer,
     callbackReporter,
     egressOutboxStore,
+    ...(claudeJobRunner ? { claudeJobRunner } : {}),
     monitorSession,
     reportTerminalJob,
   }

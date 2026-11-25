@@ -1,9 +1,11 @@
-import type { FastifyInstance } from "fastify"
+import type { FastifyInstance, FastifyReply } from "fastify"
 import { triggerRequestSchema, triggerResponseSchema } from "../../config/schemas.js"
 import { createAuthProvider } from "../../security/auth-provider.js"
 import { assertProjectAllowed } from "../../security/allowlist.js"
 import { assertSourceAuthorized } from "../../security/source-authorization.js"
 import { ConfigPlanReviewProvider } from "../../planning/provider.js"
+import { authorizeClaudeCapability } from "../../runtime/claude-job-runner.js"
+import type { TriggerRequest } from "../../config/types.js"
 import type { AppDependencies } from "../app.js"
 
 export function registerTriggerRoute(app: FastifyInstance, dependencies: AppDependencies): void {
@@ -15,6 +17,8 @@ export function registerTriggerRoute(app: FastifyInstance, dependencies: AppDepe
     dependencies.bearerToken,
   )
   const planReview = new ConfigPlanReviewProvider(dependencies.config.planning.require_approval_for)
+  // Optional chaining: a hand-built config object (tests, embedders) may predate the field.
+  const runtimeKind = dependencies.config.runtime?.kind ?? "opencode"
 
   app.post("/trigger", async (request, reply) => {
     if (!auth.validate(request.headers.authorization)) return reply.code(401).send({ error: "Unauthorized" })
@@ -31,10 +35,16 @@ export function registerTriggerRoute(app: FastifyInstance, dependencies: AppDepe
     try {
       assertSourceAuthorized(trigger.source_agent_id, trigger.capability, dependencies.config.security.allowed_sources)
       assertProjectAllowed(trigger.project_dir, dependencies.config.projects)
-      if (!planReview.isApproved(trigger.capability, trigger.metadata)) return reply.code(403).send({ error: "Plan approval required" })
+      // The Claude runtime does not trust the caller-written `metadata.plan_status`;
+      // its approval gate is `authorizeClaudeCapability` below.
+      if (runtimeKind !== "claude" && !planReview.isApproved(trigger.capability, trigger.metadata)) {
+        return reply.code(403).send({ error: "Plan approval required" })
+      }
     } catch (error) {
       return reply.code(403).send({ error: error instanceof Error ? error.message : "Forbidden" })
     }
+
+    if (runtimeKind === "claude") return await handleClaudeTrigger(trigger, request.body, reply, dependencies)
 
     if (!(await dependencies.opencodeClient.health())) return reply.code(503).send({ error: "OpenCode server unhealthy" })
 
@@ -139,4 +149,79 @@ export function registerTriggerRoute(app: FastifyInstance, dependencies: AppDepe
       return reply.code(500).send({ error: message })
     }
   })
+}
+
+/**
+ * `/trigger` for `runtime.kind: "claude"`, after the shared bearer, source and
+ * project allowlist checks. OpenCode is never contacted on this path.
+ */
+async function handleClaudeTrigger(
+  trigger: TriggerRequest,
+  rawBody: unknown,
+  reply: FastifyReply,
+  dependencies: AppDependencies,
+): Promise<FastifyReply> {
+  const decision = authorizeClaudeCapability(dependencies.config, trigger)
+  if (!decision.ok) return reply.code(decision.statusCode).send(decision.body)
+
+  const dependencyReferences = trigger.depends_on ?? []
+  if (dependencyReferences.length > 0) {
+    // Unblocking a dependent launches it from the OpenCode monitor and the
+    // `/report` route; neither knows the Claude runner yet.
+    return reply
+      .code(501)
+      .send({ error: "depends_on is not implemented for runtime claude", code: "not_implemented" })
+  }
+
+  const runner = dependencies.claudeJobRunner
+  if (runner === undefined) {
+    return reply.code(503).send({ error: "Claude Code runtime is not available", code: "runtime_unavailable" })
+  }
+
+  let job
+  try {
+    job = await dependencies.jobManager.createJob(trigger)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Trigger failed"
+    if (message.includes("already exists")) return reply.code(409).send({ error: message })
+    return reply.code(500).send({ error: message })
+  }
+  const resolvedTaskId = trigger.task_id ?? `#${job.id}`
+
+  // Same kernel seam as the OpenCode path: record the accepted intent first,
+  // and fail closed if the kernel cannot account for it.
+  const acceptance = dependencies.orchestration?.translation?.acceptTrigger(job)
+  if (acceptance !== undefined && !acceptance.ok) {
+    await dependencies.jobManager.markFailed(job.id, acceptance.error.message)
+    return reply.code(500).send({ error: acceptance.error.message, code: acceptance.error.code })
+  }
+
+  let launch
+  try {
+    launch = await runner.start(job)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Claude Code launch failed"
+    await dependencies.jobManager.markFailed(job.id, message).catch(() => undefined)
+    return reply.code(500).send({ error: message })
+  }
+
+  await dependencies.taskGraphSyncer.syncJobToTask(resolvedTaskId, "running", {
+    Job: job.id,
+    Session: launch.runtimeSessionId,
+  })
+  // `monitor` never rejects: it records the outcome and delivers the report itself.
+  void runner.monitor(launch)
+
+  dependencies.shadowMirror?.mirrorTrigger(rawBody, true)
+  return reply.code(202).send(
+    triggerResponseSchema.parse({
+      accepted: true,
+      job_id: job.id,
+      target_agent_id: dependencies.config.agent_id,
+      runtime_session_id: launch.runtimeSessionId,
+      status_url: `${dependencies.config.bridge.public_url}/jobs/${job.id}`,
+      status: "accepted",
+      task_id: trigger.task_id,
+    }),
+  )
 }

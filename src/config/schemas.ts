@@ -46,8 +46,78 @@ export const terminalConfigSchema = z.object({
   backend: terminalBackendSchema.default("tmux"),
 })
 
+/**
+ * What this node does in the mesh. `worker` executes `/trigger` jobs,
+ * `orchestrator` dispatches them, `both` does both. Defaulted so every config
+ * written before the field existed keeps its meaning (a worker).
+ */
+export const nodeRoleSchema = z.enum(["worker", "orchestrator", "both"])
+
+/** Which agent runtime executes `/trigger` jobs on this node. */
+export const bridgeRuntimeKindSchema = z.enum(["opencode", "claude"])
+
+export const runtimeConfigSchema = z.object({
+  kind: bridgeRuntimeKindSchema,
+  /** Executable for the runtime CLI. Claude defaults to `claude` on PATH. */
+  executable: z.string().min(1).optional(),
+  /** Default model passed to the runtime; a capability profile's `model` wins. */
+  model: z.string().min(1).optional(),
+})
+
+/**
+ * Names a capability profile can carry. A profile name IS the `capability`
+ * string of a `/trigger`, and it is stamped into the runtime dispatch envelope,
+ * so it must be an opaque identifier (the same pattern as every kernel id).
+ */
+export const CAPABILITY_PROFILE_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
+
+/**
+ * What a Claude Code worker may do for one capability. Rules use Claude Code
+ * permission-rule syntax (`Read`, `Bash(git log *)`). Deny always wins over
+ * allow inside Claude Code, and the safety floor in
+ * `src/runtime/claude-job-runner.ts` (`CLAUDE_SAFETY_FLOOR_DENY`) is unioned
+ * into every profile's deny list in code, so no profile can remove it.
+ */
+export const capabilityProfileSchema = z.object({
+  allow: z.array(z.string().min(1)).optional(),
+  deny: z.array(z.string().min(1)).optional(),
+  max_budget_usd: z.number().positive().optional(),
+  max_turns: z.number().int().positive().optional(),
+  timeout_s: z.number().int().positive().optional(),
+  /** Refused with 403 `approval_required` until operator approval exists (Phase 4). */
+  requires_approval: z.boolean().default(false),
+  /** Deterministic script instead of an LLM run. Parsed now, executed in Phase 5 (501 until then). */
+  script: z.string().min(1).optional(),
+  model: z.string().min(1).optional(),
+  append_system_prompt: z.string().min(1).optional(),
+})
+
+export const claudeSettingSourceSchema = z.enum(["user", "project", "local"])
+
+/** Isolation knobs applied to every Claude Code launch on this node. */
+export const claudeConfigSchema = z.object({
+  /** `--settings <file>`: operator-owned settings layered on top of the sources below. */
+  settings_path: z.string().min(1).optional(),
+  /**
+   * `--setting-sources`. Defaults to `user` only, so a repository's own
+   * `.claude/settings.json`, hooks and MCP servers cannot widen what a worker
+   * may do: the code under test comes from a peer, not from the operator.
+   */
+  setting_sources: z.array(claudeSettingSourceSchema).default(["user"]),
+  /** `--strict-mcp-config`: ignore `.mcp.json`, `~/.claude.json` and plugin MCP servers. */
+  strict_mcp_config: z.boolean().default(true),
+})
+
+const opencodeConfigSchema = z.object({
+  base_url: z.url(),
+  server_port: z.number().int().positive(),
+  username: z.string().default("opencode"),
+  password_env: z.string().default("OPENCODE_SERVER_PASSWORD"),
+})
+
 export const bridgeConfigSchema = z.object({
   agent_id: z.string().min(1),
+  role: nodeRoleSchema.default("worker"),
   bridge: z.object({
     host: z.string().min(1),
     port: z.number().int().positive(),
@@ -55,12 +125,11 @@ export const bridgeConfigSchema = z.object({
     ingress_mode: z.enum(["engine", "router"]).default("engine"),
   }),
   terminal: terminalConfigSchema.default({ backend: "tmux" }),
-  opencode: z.object({
-    base_url: z.url(),
-    server_port: z.number().int().positive(),
-    username: z.string().default("opencode"),
-    password_env: z.string().default("OPENCODE_SERVER_PASSWORD"),
-  }),
+  runtime: runtimeConfigSchema.default({ kind: "opencode" }),
+  /** Required when `runtime.kind` is `opencode` (the default); unused for `claude`. */
+  opencode: opencodeConfigSchema.optional(),
+  capability_profiles: z.record(z.string(), capabilityProfileSchema).optional(),
+  claude: claudeConfigSchema.optional(),
   security: z.object({
     auth_mode: authModeSchema.default("bearer-token"),
     allowed_sources: z.array(allowedSourceSchema),
@@ -80,6 +149,32 @@ export const bridgeConfigSchema = z.object({
     plan_annotator_enabled: z.boolean(),
     require_approval_for: z.array(z.string().min(1)),
   }),
+}).superRefine((config, ctx) => {
+  if (config.runtime.kind === "opencode" && config.opencode === undefined) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["opencode"],
+      message: 'The "opencode" block is required when runtime.kind is "opencode" (the default). Add it, or set runtime.kind to "claude".',
+    })
+  }
+  if (config.runtime.kind === "claude" && config.bridge.ingress_mode === "router") {
+    // The router's drain loop (src/ingress/drainer.ts) still launches OpenCode
+    // only; accepting this combination would admit work that can never run.
+    ctx.addIssue({
+      code: "custom",
+      path: ["bridge", "ingress_mode"],
+      message: 'runtime.kind "claude" is only supported with bridge.ingress_mode "engine".',
+    })
+  }
+  for (const name of Object.keys(config.capability_profiles ?? {})) {
+    if (!CAPABILITY_PROFILE_NAME_PATTERN.test(name)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["capability_profiles", name],
+        message: `Capability profile name "${name}" must match ${CAPABILITY_PROFILE_NAME_PATTERN.source}.`,
+      })
+    }
+  }
 })
 
 export const planMetadataSchema = z
@@ -117,6 +212,8 @@ export const triggerResponseSchema = z.object({
   job_id: z.string().min(1),
   target_agent_id: z.string().min(1),
   opencode_session_id: z.string().min(1).optional(),
+  /** The runtime's own session id for non-OpenCode runtimes (Claude Code's session UUID). */
+  runtime_session_id: z.string().min(1).optional(),
   status_url: z.url(),
   status: z.enum(["accepted", "blocked", "failed"]).optional(),
   task_id: z.string().optional(),

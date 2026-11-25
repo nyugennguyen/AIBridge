@@ -1,0 +1,76 @@
+{
+  "agent_id": "staging",
+  "role": "worker",
+  "bridge": {
+    "host": "100.64.0.3",
+    "port": 8787,
+    "public_url": "http://staging.tailnet:8787",
+    "ingress_mode": "engine"
+  },
+  "runtime": {
+    "kind": "claude",
+    "executable": "claude"
+  },
+  "claude": {
+    "setting_sources": ["user"],
+    "strict_mcp_config": true
+  },
+  "capability_profiles": {
+    "investigate": {
+      "allow": ["Read", "Grep", "Glob", "Bash(git log *)", "Bash(git diff *)", "Bash(docker logs *)"],
+      "deny": ["Edit", "Write", "Bash(git push *)"],
+      "max_budget_usd": 2,
+      "timeout_s": 900
+    },
+    "run-tests": {
+      "allow": ["Read", "Grep", "Glob", "Bash(npm test *)", "Bash(npm run test *)"],
+      "deny": ["Edit", "Write"],
+      "max_budget_usd": 2,
+      "timeout_s": 1800
+    },
+    "fix-on-branch": {
+      "allow": ["Read", "Grep", "Glob", "Edit", "Write", "Bash(npm test *)", "Bash(git commit *)", "Bash(git push origin aibr/*)"],
+      "deny": ["Bash(git push origin main*)", "Bash(git push --force *)"],
+      "max_budget_usd": 5,
+      "timeout_s": 1800,
+      "requires_approval": true
+    }
+  },
+  "security": {
+    "auth_mode": "bearer-token",
+    "allowed_sources": [
+      {
+        "source_agent_id": "dev-main",
+        "capabilities": ["investigate", "run-tests", "fix-on-branch"],
+        "requires_plan_approval": []
+      }
+    ]
+  },
+  "permissions": {
+    "default_response": "reject",
+    "allow_tools": [],
+    "require_plan_approval_for_tools": []
+  },
+  "projects": [
+    {
+      "id": "app-under-test",
+      "path": "/srv/apps/app-under-test",
+      "capabilities": ["investigate", "run-tests", "fix-on-branch"]
+    }
+  ],
+  "agents": [
+    {
+      "id": "dev-main",
+      "url": "http://dev-main.tailnet:8787",
+      "capabilities": ["development", "orchestration"]
+    }
+  ],
+  "timeouts": {
+    "default_job_seconds": 1800,
+    "callback_retry_attempts": 3
+  },
+  "planning": {
+    "plan_annotator_enabled": false,
+    "require_approval_for": []
+  }
+}

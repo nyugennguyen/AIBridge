@@ -1,8 +1,9 @@
-import type { RemoteDependency, ReportFinding, TriggerRequest } from "../config/types.js"
+import type { RemoteDependency, ReportFinding, ScriptResult, TriggerRequest } from "../config/types.js"
 
 export type JobStatus =
   | "received"
   | "accepted"
+  | "awaiting_approval" // held until an operator approves it on this node (Claude runtime)
   | "blocked"        // waiting for dependencies
   | "session_created"
   | "running"
@@ -23,6 +24,10 @@ export interface JobRecord {
   runtimeSessionId?: string
   /** What the runtime reported when the job reached a terminal state; carried into the report callback. */
   runtimeResult?: RuntimeJobResult
+  /** The operator decision for an approval-gated job. Written only by the operator endpoints. */
+  approval?: JobApproval
+  /** The commit the job is pinned to, resolved when the trigger was accepted (`repo` + `ref`). */
+  checkout?: JobCheckout
   error?: string
   depends_on?: string[]      // dependency job IDs
   remoteDependencies?: RemoteDependencyState[]
@@ -60,6 +65,26 @@ export interface RuntimeJobResult {
   summary: string
   findings: ReportFinding[]
   usage?: RuntimeJobUsage
+  /** Deterministic steps (`pre`, `script`, `post`) the job ran, in order. */
+  scriptResults?: ScriptResult[]
+}
+
+export interface JobApproval {
+  status: "pending" | "approved" | "rejected"
+  requestedAt: string
+  decidedAt?: string
+  /** Who decided: always the operator credential on this node, never a caller claim. */
+  decidedBy?: "operator"
+  reason?: string
+}
+
+export interface JobCheckout {
+  /** Key of the worker's `repositories` map. */
+  repo: string
+  /** The ref the trigger asked for (or the repository's default). */
+  ref: string
+  /** The full commit sha `ref` resolved to; the job runs at exactly this commit. */
+  sha: string
 }
 
 export interface RuntimeJobUsage {

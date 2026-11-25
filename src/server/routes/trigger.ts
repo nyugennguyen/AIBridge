@@ -5,8 +5,12 @@ import { assertProjectAllowed } from "../../security/allowlist.js"
 import { assertSourceAuthorized } from "../../security/source-authorization.js"
 import { ConfigPlanReviewProvider } from "../../planning/provider.js"
 import { authorizeClaudeCapability } from "../../runtime/claude-job-runner.js"
+import { GitRefNotFoundError, resolveConfiguredRepository } from "../../runtime/repo-workspace.js"
+import { legacyJobProjection } from "../../jobs/legacy-projection.js"
+import type { JobCheckout } from "../../jobs/types.js"
 import type { TriggerRequest } from "../../config/types.js"
 import type { AppDependencies } from "../app.js"
+import { approveHint, atCapacityBody, launchClaudeJob } from "./claude-dispatch.js"
 
 export function registerTriggerRoute(app: FastifyInstance, dependencies: AppDependencies): void {
   // Built at registration, not per request: a null token with `bearer-token` mode
@@ -45,6 +49,12 @@ export function registerTriggerRoute(app: FastifyInstance, dependencies: AppDepe
     }
 
     if (runtimeKind === "claude") return await handleClaudeTrigger(trigger, request.body, reply, dependencies)
+
+    if (trigger.repo !== undefined || trigger.ref !== undefined) {
+      return reply
+        .code(501)
+        .send({ error: "repo/ref pinning is only implemented for runtime claude", code: "not_implemented" })
+    }
 
     if (!(await dependencies.opencodeClient.health())) return reply.code(503).send({ error: "OpenCode server unhealthy" })
 
@@ -154,6 +164,12 @@ export function registerTriggerRoute(app: FastifyInstance, dependencies: AppDepe
 /**
  * `/trigger` for `runtime.kind: "claude"`, after the shared bearer, source and
  * project allowlist checks. OpenCode is never contacted on this path.
+ *
+ * Order: capability profile -> unsupported features -> concurrency (jobs that
+ * run now) -> repository pinning (resolve `repo`@`ref` to a sha, so an
+ * operator approves an exact commit, not a moving branch) -> create the job,
+ * held as `awaiting_approval` when this node's config requires an operator ->
+ * record it in the kernel -> launch, or record the approval request.
  */
 async function handleClaudeTrigger(
   trigger: TriggerRequest,
@@ -177,51 +193,102 @@ async function handleClaudeTrigger(
   if (runner === undefined) {
     return reply.code(503).send({ error: "Claude Code runtime is not available", code: "runtime_unavailable" })
   }
+  if (trigger.ref !== undefined && trigger.repo === undefined) {
+    return reply.code(400).send({ error: "ref requires repo", code: "ref_requires_repo" })
+  }
+  // Honest, not queued: a peer is told the node is full and retries.
+  if (!decision.approvalRequired && runner.hasCapacity?.() === false) {
+    return reply.code(429).send(atCapacityBody(dependencies))
+  }
+
+  let checkout: JobCheckout | undefined
+  if (trigger.repo !== undefined) {
+    const repository = resolveConfiguredRepository(dependencies.config, trigger.repo)
+    if (repository === undefined) {
+      return reply
+        .code(403)
+        .send({ error: "Repository is not configured on this node", code: "repository_not_allowed" })
+    }
+    if (dependencies.repoWorkspaces === undefined) {
+      return reply.code(503).send({ error: "Repository checkouts are not available on this node", code: "workspaces_unavailable" })
+    }
+    const ref = trigger.ref ?? repository.defaultRef
+    try {
+      checkout = { repo: repository.name, ref, sha: await dependencies.repoWorkspaces.resolveSha(repository, ref) }
+    } catch (error) {
+      if (error instanceof GitRefNotFoundError) return reply.code(400).send({ error: error.message, code: error.code })
+      const message = error instanceof Error ? error.message : "git failed"
+      return reply.code(502).send({ error: message, code: "git_failed" })
+    }
+  }
 
   let job
   try {
-    job = await dependencies.jobManager.createJob(trigger)
+    job = await dependencies.jobManager.createJob(trigger, undefined, {
+      awaitingApproval: decision.approvalRequired,
+      ...(checkout !== undefined ? { checkout } : {}),
+    })
   } catch (error) {
     const message = error instanceof Error ? error.message : "Trigger failed"
     if (message.includes("already exists")) return reply.code(409).send({ error: message })
     return reply.code(500).send({ error: message })
   }
-  const resolvedTaskId = trigger.task_id ?? `#${job.id}`
 
   // Same kernel seam as the OpenCode path: record the accepted intent first,
-  // and fail closed if the kernel cannot account for it.
-  const acceptance = dependencies.orchestration?.translation?.acceptTrigger(job)
+  // and fail closed if the kernel cannot account for it. A held job is, to the
+  // kernel, the same held DRAFT/PAUSED run every legacy trigger records.
+  const acceptance = dependencies.orchestration?.translation?.acceptTrigger(legacyJobProjection(job))
   if (acceptance !== undefined && !acceptance.ok) {
     await dependencies.jobManager.markFailed(job.id, acceptance.error.message)
     return reply.code(500).send({ error: acceptance.error.message, code: acceptance.error.code })
   }
 
-  let launch
-  try {
-    launch = await runner.start(job)
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Claude Code launch failed"
-    await dependencies.jobManager.markFailed(job.id, message).catch(() => undefined)
-    return reply.code(500).send({ error: message })
+  const base = {
+    accepted: true,
+    job_id: job.id,
+    target_agent_id: dependencies.config.agent_id,
+    status_url: `${dependencies.config.bridge.public_url}/jobs/${job.id}`,
+    task_id: trigger.task_id,
+    ...(checkout !== undefined ? { sha: checkout.sha } : {}),
   }
 
-  await dependencies.taskGraphSyncer.syncJobToTask(resolvedTaskId, "running", {
-    Job: job.id,
-    Session: launch.runtimeSessionId,
-  })
-  // `monitor` never rejects: it records the outcome and delivers the report itself.
-  void runner.monitor(launch)
+  if (decision.approvalRequired) {
+    // Fail closed: an approval nobody can audit is not one this node holds.
+    try {
+      await dependencies.approvalLedger?.append({
+        type: "approval.requested",
+        jobId: job.id,
+        capability: trigger.capability,
+        sourceAgentId: trigger.source_agent_id,
+        ...(checkout !== undefined ? { sha: checkout.sha } : {}),
+        actor: "trigger",
+        at: job.createdAt,
+      })
+    } catch (error) {
+      const message = `Approval request could not be recorded: ${error instanceof Error ? error.message : "ledger error"}`
+      await dependencies.jobManager.markFailed(job.id, message).catch(() => undefined)
+      return reply.code(500).send({ error: message })
+    }
+    await dependencies.taskGraphSyncer.syncJobToTask(trigger.task_id ?? `#${job.id}`, "blocked", { Job: job.id })
+    dependencies.shadowMirror?.mirrorTrigger(rawBody, true)
+    return reply.code(202).send(
+      triggerResponseSchema.parse({
+        ...base,
+        status: "awaiting_approval",
+        approve_hint: approveHint(job.id, dependencies.profileName),
+      }),
+    )
+  }
+
+  const launched = await launchClaudeJob(job, dependencies, { reportFailure: false })
+  if (!launched.ok) return reply.code(launched.statusCode).send(launched.body)
 
   dependencies.shadowMirror?.mirrorTrigger(rawBody, true)
   return reply.code(202).send(
     triggerResponseSchema.parse({
-      accepted: true,
-      job_id: job.id,
-      target_agent_id: dependencies.config.agent_id,
-      runtime_session_id: launch.runtimeSessionId,
-      status_url: `${dependencies.config.bridge.public_url}/jobs/${job.id}`,
+      ...base,
+      ...(launched.launch.runtimeSessionId !== undefined ? { runtime_session_id: launched.launch.runtimeSessionId } : {}),
       status: "accepted",
-      task_id: trigger.task_id,
     }),
   )
 }

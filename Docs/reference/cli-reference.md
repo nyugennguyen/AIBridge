@@ -36,6 +36,10 @@ Commands:
   plugin   Install/remove the AIBridge plugin for Claude Code
   mcp      MCP server used by the Claude Code plugin (serve, summary)
   discover List tailnet peers and probe their /health (read-only)
+  approve  Approve a job held for operator approval (on the worker node)
+  reject   Reject a job held for operator approval
+  jobs     List jobs awaiting approval (jobs pending)
+  stop     Stop a profile's tmux session, or every running job (--all-jobs)
 
 Options:
   --profile, -p <name>   Profile name (required for start/serve/worker/status/tui)

@@ -34,17 +34,33 @@
       "max_budget_usd": 5,
       "timeout_s": 1800,
       "requires_approval": true
+    },
+    "deploy": {
+      "script": "scripts/deploy-staging.sh",
+      "pre": ["scripts/build.sh"],
+      "timeout_s": 900,
+      "requires_approval": true
     }
+  },
+  "repositories": {
+    "app-under-test": {
+      "url": "git@github.com:example-org/app-under-test.git",
+      "default_branch": "main"
+    }
+  },
+  "limits": {
+    "max_concurrent_jobs": 2
   },
   "security": {
     "auth_mode": "bearer-token",
     "allowed_sources": [
       {
         "source_agent_id": "dev-main",
-        "capabilities": ["investigate", "run-tests", "fix-on-branch"],
+        "capabilities": ["investigate", "run-tests", "fix-on-branch", "deploy"],
         "requires_plan_approval": []
       }
-    ]
+    ],
+    "approval_from_loopback_only": true
   },
   "permissions": {
     "default_response": "reject",
@@ -55,7 +71,7 @@
     {
       "id": "app-under-test",
       "path": "/srv/apps/app-under-test",
-      "capabilities": ["investigate", "run-tests", "fix-on-branch"]
+      "capabilities": ["investigate", "run-tests", "fix-on-branch", "deploy"]
     }
   ],
   "agents": [

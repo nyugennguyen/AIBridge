@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify"
 import type { JobRecord } from "../../jobs/types.js"
+import { legacyJobProjection } from "../../jobs/legacy-projection.js"
 import type { AppDependencies } from "../app.js"
 
 /**
@@ -13,26 +14,20 @@ import type { AppDependencies } from "../app.js"
  * and which never holds a credential.
  */
 export function jobResultFields(job: JobRecord): Record<string, unknown> {
+  // The pinned commit is known from acceptance on, so it is shown before any result.
+  const checkout = job.checkout !== undefined ? { repo: job.checkout.repo, ref: job.checkout.ref, sha: job.checkout.sha } : {}
   const result = job.runtimeResult
-  if (result === undefined) return {}
+  if (result === undefined) return checkout
   return {
+    ...checkout,
     summary: result.summary,
     findings: result.findings,
     artifacts: [],
     ...(result.usage?.totalCostUsd !== undefined ? { cost_usd: result.usage.totalCostUsd } : {}),
     ...(result.usage?.numTurns !== undefined ? { num_turns: result.usage.numTurns } : {}),
     ...(job.runtimeSessionId !== undefined ? { runtime_session_id: job.runtimeSessionId } : {}),
+    ...(result.scriptResults !== undefined ? { script_results: result.scriptResults } : {}),
   }
-}
-
-/**
- * The record as the legacy translation knows it. `legacyJobRecordSchema` is
- * strict and predates runtime selection, so the runtime fields are dropped
- * before correlation rather than widening the frozen legacy contract.
- */
-function legacyProjection(job: JobRecord): JobRecord {
-  const { runtime: _runtime, runtimeSessionId: _session, runtimeResult: _result, ...legacy } = job
-  return legacy
 }
 
 export function registerJobsRoute(app: FastifyInstance, dependencies: AppDependencies): void {
@@ -56,7 +51,7 @@ export function registerJobsRoute(app: FastifyInstance, dependencies: AppDepende
     const translation = dependencies.orchestration?.translation
     if (translation === undefined) return body
 
-    const correlated = translation.correlate(legacyProjection(job))
+    const correlated = translation.correlate(legacyJobProjection(job))
     if (!correlated.ok) {
       // A stored job the canonical model cannot represent is a diagnosable
       // condition, not a 404: the record exists, the mapping does not. Reporting

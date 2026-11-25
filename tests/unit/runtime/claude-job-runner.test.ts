@@ -11,8 +11,10 @@ import {
   CLAUDE_SAFETY_FLOOR_DENY,
   claudeTimeoutSeconds,
   createConfigProjectResolver,
+  maxConcurrentJobs,
   permissionDenialFindings,
   toOpaqueId,
+  worktreePathId,
 } from "../../../src/runtime/claude-job-runner.js"
 import { testConfig, validTrigger } from "../../integration/fixtures.js"
 
@@ -103,23 +105,42 @@ describe("authorizeClaudeCapability", () => {
   const trigger = (capability: string, extra: Record<string, unknown> = {}) =>
     validTrigger({ capability, ...extra }) as JobRecord["trigger"]
 
-  it("refuses unknown, inherited and approval-gated capabilities", () => {
+  it("refuses unknown and inherited capabilities, and marks approval-gated ones whatever the metadata says", () => {
     const cfg = config({ ok: {}, gated: { requires_approval: true }, scripted: { script: "x.sh" } })
     expect(authorizeClaudeCapability(cfg, trigger("missing"))).toMatchObject({ ok: false, statusCode: 403, body: { code: "unknown_capability_profile" } })
     expect(authorizeClaudeCapability(cfg, trigger("toString"))).toMatchObject({ ok: false, statusCode: 403 })
     expect(
       authorizeClaudeCapability(cfg, trigger("gated", { metadata: { plan_status: "approved" } })),
-    ).toMatchObject({ ok: false, statusCode: 403, body: { code: "approval_required" } })
-    expect(authorizeClaudeCapability(cfg, trigger("scripted"))).toMatchObject({ ok: false, statusCode: 501 })
-    expect(authorizeClaudeCapability(cfg, trigger("ok"))).toMatchObject({ ok: true, name: "ok" })
+    ).toMatchObject({ ok: true, approvalRequired: true })
+    expect(authorizeClaudeCapability(cfg, trigger("scripted"))).toMatchObject({ ok: true, approvalRequired: false })
+    expect(authorizeClaudeCapability(cfg, trigger("ok"))).toMatchObject({ ok: true, name: "ok", approvalRequired: false })
   })
 
-  it("treats planning.require_approval_for as approval-gated without trusting metadata", () => {
+  it("treats planning.require_approval_for and source requires_plan_approval as approval-gated without trusting metadata", () => {
     const cfg = config({ ok: {} }, { planning: { plan_annotator_enabled: false, require_approval_for: ["ok"] } })
     expect(authorizeClaudeCapability(cfg, trigger("ok", { metadata: { plan_status: "approved" } }))).toMatchObject({
-      ok: false,
-      body: { code: "approval_required" },
+      ok: true,
+      approvalRequired: true,
     })
+    const bySource = config(
+      { ok: {} },
+      {
+        security: {
+          auth_mode: "bearer-token",
+          allowed_sources: [{ source_agent_id: "dev-main", capabilities: ["ok"], requires_plan_approval: ["ok"] }],
+        },
+      },
+    )
+    expect(authorizeClaudeCapability(bySource, trigger("ok", { metadata: { plan_status: "approved" } }))).toMatchObject({
+      approvalRequired: true,
+    })
+  })
+})
+
+describe("maxConcurrentJobs", () => {
+  it("defaults to 2 and follows limits.max_concurrent_jobs", () => {
+    expect(maxConcurrentJobs(config({}))).toBe(2)
+    expect(maxConcurrentJobs(config({}, { limits: { max_concurrent_jobs: 5 } }))).toBe(5)
   })
 })
 
@@ -163,6 +184,27 @@ describe("buildClaudeLaunchRequest", () => {
   it("falls back to the trigger timeout", () => {
     expect(claudeTimeoutSeconds(config({ investigate: {} }), job().trigger)).toBe(60)
   })
+
+  it("points a pinned job at its worktree, names the sha, and carries the operator approval id", () => {
+    const sha = "a".repeat(40)
+    const request = buildClaudeLaunchRequest({
+      config: config({ investigate: {} }),
+      job: job({
+        checkout: { repo: "app", ref: "main", sha },
+        approval: { status: "approved", requestedAt: "2026-11-25T00:00:00.000Z", decidedAt: "2026-11-25T00:01:00.000Z", decidedBy: "operator" },
+      }),
+      nodeId: "test-vps",
+      installationId: CLAUDE_INSTALLATION_ID,
+      now: "2026-11-25T00:00:00.000Z",
+      inWorktree: true,
+      timeoutSeconds: 30,
+    })
+    expect(request.dispatchEnvelope.projectPathId).toBe(worktreePathId("job_1"))
+    expect(request.dispatchEnvelope.projectId).toBe("app")
+    expect(request.dispatchEnvelope.timeoutSeconds).toBe(30)
+    expect(request.dispatchEnvelope.roleSnapshot.instructions).toContain(sha)
+    expect(request.approvalId).toBe("approval-job_1")
+  })
 })
 
 describe("createConfigProjectResolver", () => {
@@ -170,6 +212,15 @@ describe("createConfigProjectResolver", () => {
     const resolver = createConfigProjectResolver(testConfig().projects)
     expect(await resolver.resolve({ projectId: "app", projectPathId: "app", nodeId: "n" })).toEqual({ ok: true, value: "/srv/apps/app" })
     expect((await resolver.resolve({ projectId: "x", projectPathId: "x", nodeId: "n" })).ok).toBe(false)
+  })
+
+  it("resolves a worktree id only while the runner has registered it", async () => {
+    const worktrees = new Map([[worktreePathId("job_1"), "/state/worktrees/job_1"]])
+    const resolver = createConfigProjectResolver(testConfig().projects, worktrees)
+    const scope = { projectId: "app", projectPathId: worktreePathId("job_1"), nodeId: "n" }
+    expect(await resolver.resolve(scope)).toEqual({ ok: true, value: "/state/worktrees/job_1" })
+    worktrees.clear()
+    expect((await resolver.resolve(scope)).ok).toBe(false)
   })
 })
 

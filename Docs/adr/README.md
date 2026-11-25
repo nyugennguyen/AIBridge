@@ -23,6 +23,7 @@ This directory is the canonical repository for all formal Architecture Decision 
 | [**ADR 0009**](0009-herdr-terminal-backend-evaluation.md) | Herdr Terminal Backend Evaluation | Deferred | 2026-10-06 | Initial spike evaluation of Herdr terminal primitives (partially superseded by ADR 0011). |
 | [**ADR 0010**](0010-tui-daemon-modernization.md) | TUI & Daemon Modernization | Superseded | 2026-10-07 | Terminal UI state machine and daemon communication (superseded by Herdr plugin in ADR 0011). |
 | [**ADR 0011**](0011-herdr-orchestration-architecture.md) | Herdr Orchestration Architecture | Accepted | 2026-10-08 | Definitive separation: Herdr owns terminal presentation; AIBridge kernel owns intent. |
+| [**ADR 0012**](0012-operator-approval-ledger.md) | Operator Approval Ledger | Accepted | 2026-11-25 | Claude-runtime jobs held as `awaiting_approval`; operator-only, same-host approve/reject; hash-chained local approval ledger instead of kernel dispatch approval. |
 
 ---
 

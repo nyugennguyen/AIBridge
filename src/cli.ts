@@ -57,6 +57,8 @@ export type CliExitCode = 0 | 1 | 2 | 3 | 64
 export interface CliDeps {
   /** `aibr plugin …` handler (tests inject a fake; default: src/cli/plugin.ts). */
   readonly runPlugin?: (args: readonly string[]) => Promise<number>
+  /** `aibr approve|reject|jobs|stop …` handler (tests inject a fake; default: src/cli/operator-commands.ts). */
+  readonly runOperator?: (command: "approve" | "reject" | "jobs" | "stop", args: readonly string[]) => Promise<number>
   /** `aibr mcp serve|summary …` handler (tests inject a fake; default: src/cli/mcp.ts). */
   readonly runMcp?: (sub: "serve" | "summary", args: readonly string[]) => Promise<number>
   /** Write a string to stdout (or a fake writer in tests). */
@@ -270,6 +272,10 @@ function helpText(): string {
     "  plugin   Install/remove the AIBridge plugin for Claude Code",
     "  mcp      MCP server used by the Claude Code plugin (serve, summary)",
     "  discover List tailnet peers and probe their /health (read-only)",
+    "  approve  Approve a job held for operator approval (on the worker node)",
+    "  reject   Reject a job held for operator approval",
+    "  jobs     List jobs awaiting approval (jobs pending)",
+    "  stop     Stop a profile's tmux session, or every running job (--all-jobs)",
     "",
     "Options:",
     "  --profile, -p <name>   Profile name (required for start/serve/worker/status/tui)",
@@ -679,6 +685,11 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<Cl
   // `plugin` and `mcp` own their argv (--scope, --marketplace, subcommands), so
   // they are dispatched before the global parser would reject those flags.
   const first = argv[0]
+  // Operator commands (Phase 4/7) own their argv too (job id, --reason, --all-jobs).
+  if (first === "approve" || first === "reject" || first === "jobs" || first === "stop") {
+    const run = deps.runOperator ?? (await import("./cli/operator-commands.js")).runOperatorCommand(deps.writer, deps.processRunner)
+    return toExitCode(await run(first, argv.slice(1)))
+  }
   if (first === "plugin" || first === "mcp") {
     const rest = argv.slice(1)
     if (rest.length === 0 || rest.includes("--help") || rest.includes("-h")) {
@@ -1199,10 +1210,16 @@ async function createRealDeps(): Promise<CliDeps> {
         }
       }
       const bearerToken = await readOptionalSecret(`${paths.secretsDir}/bearer_token`)
+      // The operator credential (approve/reject/stop-all): env first, then the
+      // profile's 0600 secret file. Absent -> operator endpoints fail closed.
+      const operatorToken =
+        process.env.AIBRIDGE_OPERATOR_TOKEN || (await readOptionalSecret(`${paths.secretsDir}/operator_token`))?.trim() || null
       const bridge = await startBridge({
         configPath,
         stateDir: paths.stateDir,
         bearerToken,
+        operatorToken,
+        profileName: profile,
         environment: {
           ...process.env as Record<string, string>,
           ...(ocPassword ? { OPENCODE_SERVER_PASSWORD: ocPassword } : {}),

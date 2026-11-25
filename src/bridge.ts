@@ -1,4 +1,6 @@
+import { join } from "node:path"
 import { createRuntime, type RuntimeOptions } from "./ingress/runtime.js"
+import { FileApprovalLedger } from "./jobs/approval-ledger.js"
 import { createApp, type AppDependencies } from "./server/app.js"
 import type { FastifyInstance } from "fastify"
 import { ShadowIngressMirror } from "./server/shadow.js"
@@ -23,6 +25,8 @@ export interface BridgeOptions extends RuntimeOptions {
   readonly notificationStore?: NotificationStore
   readonly notificationBus?: NotificationBus
   readonly notificationConsumer?: OrchestrationNotificationConsumer
+  /** The profile being served; only used to print an exact `aibr approve` hint. */
+  readonly profileName?: string
 }
 
 export interface BridgeInstance {
@@ -105,6 +109,11 @@ export async function startBridge(options: BridgeOptions): Promise<BridgeInstanc
     // Present only when `runtime.kind` is `claude`; the OpenCode client above
     // is then an inert stand-in that is never contacted.
     ...(runtime.claudeJobRunner ? { claudeJobRunner: runtime.claudeJobRunner } : {}),
+    ...(runtime.repoWorkspaces ? { repoWorkspaces: runtime.repoWorkspaces } : {}),
+    // Approval requests, operator decisions and kill-switch use (ADR 0012).
+    approvalLedger: new FileApprovalLedger(join(options.stateDir, "approvals.jsonl")),
+    reportTerminalJob: runtime.reportTerminalJob,
+    ...(options.profileName !== undefined ? { profileName: options.profileName } : {}),
     shadowMirror,
     orchestration: options.orchestration,
     notificationStore,

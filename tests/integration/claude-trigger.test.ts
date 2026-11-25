@@ -188,22 +188,16 @@ describe("POST /trigger with runtime.kind claude", () => {
     expect(response.json().error).toMatch(/not authorized for capability testing/)
   })
 
-  it("refuses requires_approval profiles even when the caller claims plan_status approved", async () => {
+  it("holds requires_approval profiles even when the caller claims plan_status approved", async () => {
     const h = await harness()
     const response = await post(h, {
       capability: "fix-on-branch",
       metadata: { plan_status: "approved", approved_by: "someone", approved_at: "2026-11-25T00:00:00.000Z" },
     })
-    expect(response.statusCode).toBe(403)
-    expect(response.json()).toEqual({ error: "Approval required", code: "approval_required" })
+    expect(response.statusCode).toBe(202)
+    expect(response.json()).toMatchObject({ status: "awaiting_approval", job_id: "job_1", approve_hint: "aibr approve job_1" })
+    expect((await h.jobManager.getJob("job_1")).status).toBe("awaiting_approval")
     expect(h.spawns).toHaveLength(0)
-  })
-
-  it("answers 501 for a script profile until Phase 5", async () => {
-    const h = await harness()
-    const response = await post(h, { capability: "deploy" })
-    expect(response.statusCode).toBe(501)
-    expect(response.json().code).toBe("not_implemented")
   })
 
   it("answers 501 for depends_on instead of accepting work it cannot unblock", async () => {

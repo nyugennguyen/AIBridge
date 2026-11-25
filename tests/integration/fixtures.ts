@@ -143,6 +143,12 @@ export interface BuildTestAppOverrides {
   orchestration?: AppDependencies["orchestration"]
   /** The Claude job runner, for a config whose `runtime.kind` is `claude`. */
   claudeJobRunner?: AppDependencies["claudeJobRunner"]
+  /** Phase 4/5 seams: repository pinning, approval ledger, reporting, same-host check. */
+  repoWorkspaces?: AppDependencies["repoWorkspaces"]
+  approvalLedger?: AppDependencies["approvalLedger"]
+  reportTerminalJob?: AppDependencies["reportTerminalJob"]
+  profileName?: string
+  localAddresses?: AppDependencies["localAddresses"]
 }
 
 export async function buildTestApp(overrides: BuildTestAppOverrides = {}) {
@@ -161,6 +167,11 @@ export async function buildTestApp(overrides: BuildTestAppOverrides = {}) {
     taskGraphSyncer,
     ...(overrides.orchestration === undefined ? {} : { orchestration: overrides.orchestration }),
     ...(overrides.claudeJobRunner === undefined ? {} : { claudeJobRunner: overrides.claudeJobRunner }),
+    ...(overrides.repoWorkspaces === undefined ? {} : { repoWorkspaces: overrides.repoWorkspaces }),
+    ...(overrides.approvalLedger === undefined ? {} : { approvalLedger: overrides.approvalLedger }),
+    ...(overrides.reportTerminalJob === undefined ? {} : { reportTerminalJob: overrides.reportTerminalJob }),
+    ...(overrides.profileName === undefined ? {} : { profileName: overrides.profileName }),
+    ...(overrides.localAddresses === undefined ? {} : { localAddresses: overrides.localAddresses }),
   })
   return { app, config, opencode, taskGraphSyncer, jobManager }
 }

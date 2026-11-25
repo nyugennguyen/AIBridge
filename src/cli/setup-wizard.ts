@@ -285,6 +285,9 @@ export const DEFAULT_CLAUDE_CAPABILITY_PROFILES = {
     deny: ["Edit", "Write", "NotebookEdit"],
     max_budget_usd: 1,
     timeout_s: 900,
+    append_system_prompt:
+      "This is a read-only investigation: you cannot edit files. Use Read, Grep and Glob to inspect code; " +
+      "only plain `git log/diff/status/show` shell commands are allowed, never chained with other commands.",
   },
   "run-tests": {
     allow: [
@@ -296,6 +299,16 @@ export const DEFAULT_CLAUDE_CAPABILITY_PROFILES = {
     deny: ["Edit", "Write", "NotebookEdit"],
     max_budget_usd: 2,
     timeout_s: 1800,
+    // Claude Code checks every sub-command of a chained shell line, so
+    // `npm test; echo $?; cat -n x.js` is denied as a whole when only the test
+    // command is allowed (seen in the dev -> staging run). Allowing cat/echo
+    // would let Bash read files the Read deny rules protect, so the worker is
+    // told how to work inside the profile instead.
+    append_system_prompt:
+      "Permissions for this job are fixed in advance and cannot be approved interactively. " +
+      "Run the test command on its own (for example `npm test` or `bun run test`), never chained with " +
+      "`;`, `&&`, `||` or pipes and without other shell commands — a chained command is denied as a whole. " +
+      "Use the Read, Grep and Glob tools to inspect files instead of shell commands.",
   },
 } as const
 

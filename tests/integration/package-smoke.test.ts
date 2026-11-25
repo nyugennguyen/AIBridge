@@ -142,7 +142,7 @@ describe("package smoke — pack manifest", () => {
     expect(files).not.toContain("bun.lock")
   })
 
-  it("only includes dist/, bin/, README.md, LICENSE, and package.json", async () => {
+  it("only includes dist/, bin/, the Claude Code plugin, README.md, LICENSE, and package.json", async () => {
     const { stdout, stderr } = await run("bun pm pack --dry-run")
     const files = parsePackFiles(stdout, stderr)
 
@@ -152,7 +152,11 @@ describe("package smoke — pack manifest", () => {
         file === "README.md" ||
         file === "LICENSE" ||
         file.startsWith("dist/") ||
-        file.startsWith("bin/")
+        file.startsWith("bin/") ||
+        // The bundled Claude Code plugin + marketplace that `aibr plugin install`
+        // registers; shipping it in the package keeps plugin and CLI versions equal.
+        file.startsWith("plugins/aibridge/") ||
+        file === ".claude-plugin/marketplace.json"
       if (!allowed) {
         throw new Error(`Unexpected file in pack: ${file}`)
       }

@@ -45,7 +45,8 @@ export { CLI_VERSION }
  * bug". A supervising script must be able to tell those apart, and a type that only
  * admits `0 | 1` would quietly collapse them.
  */
-export type CliExitCode = 0 | 1 | 2
+/** 3 and 64 come from `aibr plugin` (claude too old, usage error). */
+export type CliExitCode = 0 | 1 | 2 | 3 | 64
 
 /**
  * Injectable CLI dependencies.
@@ -54,6 +55,10 @@ export type CliExitCode = 0 | 1 | 2
  * fakes without touching the real filesystem, tmux, or network.
  */
 export interface CliDeps {
+  /** `aibr plugin …` handler (tests inject a fake; default: src/cli/plugin.ts). */
+  readonly runPlugin?: (args: readonly string[]) => Promise<number>
+  /** `aibr mcp serve|summary …` handler (tests inject a fake; default: src/cli/mcp.ts). */
+  readonly runMcp?: (sub: "serve" | "summary", args: readonly string[]) => Promise<number>
   /** Write a string to stdout (or a fake writer in tests). */
   readonly writer: (data: string) => void
   /** Whether the current process stdout is a TTY. */
@@ -262,6 +267,8 @@ function helpText(): string {
     "  update   Check and update to the latest version",
     "  tui      Open the interactive manager (Herdr plugin)",
     "  bundle   Generate diagnostic support bundle",
+    "  plugin   Install/remove the AIBridge plugin for Claude Code",
+    "  mcp      MCP server used by the Claude Code plugin (serve, summary)",
     "  discover List tailnet peers and probe their /health (read-only)",
     "",
     "Options:",
@@ -354,6 +361,26 @@ const COMMAND_HELP: Readonly<Record<string, readonly string[]>> = {
     "",
     "Options:",
     "  --shadow-mode          Mirror ingress to the router (shadow mode)",
+    "",
+  ],
+  plugin: [
+    `${PROG} plugin — manage the AIBridge plugin for Claude Code`,
+    "",
+    "Usage:",
+    `  ${PROG} plugin install claude   [--scope user|project|local] [--marketplace bundled|github]`,
+    `  ${PROG} plugin uninstall claude [--scope user|project|local]`,
+    `  ${PROG} plugin status claude`,
+    "",
+    "Uses the official `claude plugin` CLI; never edits ~/.claude files directly.",
+    "Exit codes: 0 ok, 1 failure, 2 claude missing, 3 claude too old, 64 usage.",
+    "",
+  ],
+  mcp: [
+    `${PROG} mcp — stdio MCP server for the Claude Code plugin`,
+    "",
+    "Usage:",
+    `  ${PROG} mcp serve   [--profile <name>]   MCP over stdin/stdout (started by Claude Code)`,
+    `  ${PROG} mcp summary [--profile <name>]   one-shot peer/job summary (SessionStart hook)`,
     "",
   ],
   discover: [
@@ -644,7 +671,34 @@ async function runDiscovery(deps: CliDeps, profile: string | undefined): Promise
  *
  * @returns 0 on success, 1 on any error.
  */
+function toExitCode(code: number): CliExitCode {
+  return code === 0 || code === 1 || code === 2 || code === 3 || code === 64 ? code : 1
+}
+
 export async function runCli(argv: readonly string[], deps: CliDeps): Promise<CliExitCode> {
+  // `plugin` and `mcp` own their argv (--scope, --marketplace, subcommands), so
+  // they are dispatched before the global parser would reject those flags.
+  const first = argv[0]
+  if (first === "plugin" || first === "mcp") {
+    const rest = argv.slice(1)
+    if (rest.length === 0 || rest.includes("--help") || rest.includes("-h")) {
+      deps.writer(commandHelpText(first))
+      return rest.length === 0 ? 1 : 0
+    }
+    if (first === "plugin") {
+      const run = deps.runPlugin ?? (async (a: readonly string[]) => (await import("./cli/plugin.js")).runPluginCommand(a))
+      return toExitCode(await run(rest))
+    }
+    const sub = rest[0]
+    const mcp = await import("./cli/mcp.js")
+    const run = deps.runMcp ?? (async (s: string, a: readonly string[]) => (s === "serve" ? mcp.runMcpServe(a) : mcp.runMcpSummary(a)))
+    if (sub !== "serve" && sub !== "summary") {
+      deps.writer(`Error: unknown mcp subcommand "${sub ?? ""}" (expected serve or summary)\n`)
+      return 64
+    }
+    return toExitCode(await run(sub, rest.slice(1)))
+  }
+
   const args = parseArgs(argv)
 
   // ── Global flags (synchronous, no deps needed) ─────────────────────

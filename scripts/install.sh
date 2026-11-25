@@ -481,13 +481,14 @@ print_next_steps() {
   echo "✓ Installed. Next:"
   case "$ROLE" in
     orchestrator)
-      echo "  aibr setup --profile $p   # interactive host setup"
+      echo "  aibr init --profile $p --role orchestrator   # at most 4 questions; paste the worker's pairing code"
+      echo "  aibr doctor --profile $p                     # checks everything and pings your workers"
       echo "  Then use the AIBridge Claude Code plugin from Claude Code (install it with --with-claude-plugin)."
       ;;
     *)
-      echo "  aibr setup --profile $p   # interactive host setup"
-      echo "  aibr start --profile $p   # start tmux session"
-      echo "  aibr status --profile $p  # verify bridge health"
+      echo "  aibr init --profile $p --role $ROLE   # at most 4 questions; starts the bridge and prints a pairing code"
+      echo "  aibr doctor --profile $p              # checks everything end to end, with a fix for each problem"
+      echo "  (full wizard: aibr setup --profile $p --advanced)"
       if [ "$ROLE" = "both" ]; then echo "  Also use the AIBridge Claude Code plugin from Claude Code."; fi
       ;;
   esac
@@ -502,11 +503,11 @@ print_next_steps() {
 
 offer_setup() {
   if [ "$YES" -eq 1 ] || ! has_tty || ! has_cmd aibr; then return 0; fi
-  if confirm "Run 'aibr setup' now?"; then
+  if confirm "Run 'aibr init' now?"; then
     local p
-    p="$(ask_line "Profile name" "${PROFILE:-default}")"
+    p="${PROFILE:-default}"
     PROFILE="$p"
-    aibr setup --profile "$p" < /dev/tty || echo "⚠ aibr setup did not finish; re-run: aibr setup --profile $p"
+    aibr init --profile "$p" --role "$ROLE" < /dev/tty || echo "⚠ aibr init did not finish; re-run: aibr init --profile $p (aibr doctor shows what is missing)"
   fi
 }
 

@@ -63,6 +63,17 @@ export interface CliDeps {
   readonly runMcp?: (sub: "serve" | "summary", args: readonly string[]) => Promise<number>
   /** Overridable for tests; defaults to `runEnrollCommand` (src/cli/enroll.ts). */
   readonly runEnroll?: (args: readonly string[]) => Promise<number>
+  /**
+   * Own-argv commands added by the quickstart work (init, doctor, ping, send,
+   * logs). Each is overridable for tests; the default lazily loads its module.
+   */
+  readonly runInit?: (args: readonly string[]) => Promise<number>
+  readonly runDoctor?: (args: readonly string[]) => Promise<number>
+  readonly runPing?: (args: readonly string[]) => Promise<number>
+  readonly runSend?: (args: readonly string[]) => Promise<number>
+  readonly runLogs?: (args: readonly string[]) => Promise<number>
+  /** `aibr start` without --foreground: install and load the user service. Returns the exit code. */
+  readonly startService?: (profile: string) => Promise<number>
   /** Write a string to stdout (or a fake writer in tests). */
   readonly writer: (data: string) => void
   /** Whether the current process stdout is a TTY. */
@@ -97,14 +108,14 @@ export interface CliDeps {
       readonly error: string | null
     }
   }>
-  /** Start a tmux profile (opencode + bridge windows). */
+  /** Start a tmux profile (opencode + bridge windows): `aibr start --foreground`. */
   readonly startProfile: (profile: string) => Promise<{
     readonly kind: "started" | "already_running" | "tmux_error"
     readonly sessionName: string
     readonly stderr?: string
   }>
-  /** Serve the bridge for a given profile. */
-  readonly serveBridge: (profile: string, options?: { readonly shadowMode?: boolean }) => Promise<void>
+  /** Serve the bridge for a given profile (`withOpencode`: also supervise `opencode serve`). */
+  readonly serveBridge: (profile: string, options?: { readonly shadowMode?: boolean; readonly withOpencode?: boolean }) => Promise<void>
   /**
    * Run the Tier 2 ingress drain loop for a profile until a signal arrives.
    *
@@ -118,12 +129,20 @@ export interface CliDeps {
    * listener's does.
    */
   readonly runWorker: (profile: string, options?: { readonly publishIpc?: boolean }) => Promise<void>
-  /** Query status of a tmux profile. */
+  /**
+   * Query a profile: whichever of the user service and the tmux session runs
+   * it, and `/health`. `session_missing` is the tmux-only answer older
+   * embedders give; `not_running` is the same fact when nothing runs it.
+   */
   readonly statusProfile: (profile: string) => Promise<{
-    readonly kind: "healthy" | "session_missing" | "bridge_unavailable"
+    readonly kind: "healthy" | "session_missing" | "bridge_unavailable" | "not_running" | "no_bridge"
     readonly sessionName: string
     readonly body?: string
     readonly probeStatus?: number
+    /** What runs it: launchd, systemd, tmux, or unmanaged. */
+    readonly runner?: string
+    /** One line on what to do about it. */
+    readonly hint?: string
   }>
   /** Run `opencode serve` for a given profile. */
   readonly runOpencode: (profile: string) => Promise<void>
@@ -172,6 +191,10 @@ export interface SetupCommandOptions {
   readonly configPath?: string
   /** `--advanced`: also ask for the bridge and OpenCode ports. */
   readonly advanced?: boolean
+  /** `aibr init`: run the wizard in quickstart mode with these answers. */
+  readonly quickstart?: import("./cli/setup-wizard.js").QuickstartAnswers
+  /** `aibr init`: the prompter it already holds (one reader on stdin). */
+  readonly prompter?: import("./host/types.js").Prompter
 }
 
 // ── Constants ──────────────────────────────────────────────────────────
@@ -234,6 +257,10 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
       knownFlags.push("--check")
     } else if (arg === "--json") {
       knownFlags.push("--json")
+    } else if (arg === "--foreground" || arg === "--tmux") {
+      knownFlags.push("--foreground")
+    } else if (arg === "--with-opencode") {
+      knownFlags.push("--with-opencode")
     } else if (command === null) {
       command = arg
     } else {
@@ -262,11 +289,16 @@ function helpText(): string {
     `  ${PROG} <command> [options]`,
     "",
     "Commands:",
-    "  setup    Interactive host setup (profile optional)",
-    "  start    Start opencode + bridge in tmux",
+    "  init     Quickstart: set up this machine in at most four questions",
+    "  doctor   Check this node end to end (verify + status + ping), with fixes",
+    "  ping     Send a signed no-op job to a peer and wait for its result",
+    "  send     Dispatch a job to a peer and wait for its result",
+    "  logs     Print the bridge log of a profile (-f to follow)",
+    "  setup    Interactive host setup (profile optional; --advanced for all options)",
+    "  start    Start the bridge as a user service (launchd/systemd); --foreground: tmux",
     "  serve    Run the bridge server",
     "  worker   Drain the router's admission queue (no listener)",
-    "  status   Check tmux session and bridge health",
+    "  status   Check the service or tmux session and bridge health",
     "  verify   Validate role-specific dependencies, bearer token, and config",
     "  update   Check and update to the latest version",
     "  tui      Open the interactive manager (Herdr plugin)",
@@ -278,12 +310,13 @@ function helpText(): string {
     "  approve  Approve a job held for operator approval (on the worker node)",
     "  reject   Reject a job held for operator approval",
     "  jobs     List jobs awaiting approval (jobs pending)",
-    "  stop     Stop a profile's tmux session, or every running job (--all-jobs)",
+    "  stop     Stop a profile's service and tmux session, or every running job (--all-jobs)",
     "",
     "Options:",
     "  --profile, -p <name>   Profile name (required for start/serve/worker/status/tui)",
     "  --config <path>        Config file to write instead of the standard path (for setup)",
     "  --advanced             Also ask for bridge and OpenCode ports (for setup)",
+    "  --foreground, --tmux   Run in the tmux session aibridge-<profile> (for start)",
     "  --check, -c            Check for updates without installing (for update)",
     "  --yes, -y              Automatic yes to prompts (for update)",
     "  --json                 Emit one JSON document and nothing else (for discover)",
@@ -325,24 +358,33 @@ const COMMAND_HELP: Readonly<Record<string, readonly string[]>> = {
     "",
   ],
   start: [
-    `${PROG} start — start OpenCode and the bridge in a tmux session`,
+    `${PROG} start — start the bridge as a user service, or in tmux`,
     "",
     "Usage:",
     `  ${PROG} start --profile <name>`,
+    `  ${PROG} start --profile <name> --foreground   (alias --tmux)`,
     "",
-    "Creates the tmux session aibridge-<name> with two windows: opencode",
-    "(opencode serve on 127.0.0.1) and aibridge (the bridge on the Tailscale IP).",
-    `Check it with "${PROG} status --profile <name>".`,
+    "Installs and loads the profile's user service — a launchd agent",
+    "(~/Library/LaunchAgents/com.aibridge.<name>.plist, launchctl bootstrap gui/<uid>)",
+    "on macOS, a systemd user unit (aibridge-<name>.service) on Linux — which runs",
+    `"${PROG} serve" (and opencode serve beside it for an OpenCode worker), restarts it`,
+    "on failure and at login, and logs to <state dir>/logs/aibridge.log. It waits",
+    "until /health answers. Re-running restarts it with the current config.",
+    "",
+    "--foreground runs the same thing in the tmux session aibridge-<name> instead",
+    "(windows stay open when a process exits), for development and debugging.",
+    `Stop either with "${PROG} stop --profile <name>".`,
     "",
   ],
   status: [
-    `${PROG} status — check the tmux session and the bridge /health endpoint`,
+    `${PROG} status — check what runs the bridge and its /health endpoint`,
     "",
     "Usage:",
     `  ${PROG} status --profile <name>`,
     "",
-    "Reports healthy, session_missing, or bridge_unavailable. /health is",
-    "unauthenticated, so healthy does not prove peers can authenticate.",
+    "Reports healthy (and whether the launchd/systemd service or the tmux session",
+    "runs it), not_running, or bridge_unavailable. /health is unauthenticated, so",
+    `healthy does not prove peers can authenticate: "${PROG} doctor" pings them.`,
     "",
   ],
   verify: [
@@ -362,13 +404,15 @@ const COMMAND_HELP: Readonly<Record<string, readonly string[]>> = {
     `${PROG} serve — run the bridge HTTP server in the foreground`,
     "",
     "Usage:",
-    `  ${PROG} serve --profile <name> [--shadow-mode]`,
+    `  ${PROG} serve --profile <name> [--with-opencode] [--shadow-mode]`,
     "",
     "Binds the bridge to the profile's Tailscale address and port. This is what",
-    `the "aibridge" window of "${PROG} start" runs, and what the supervisor unit`,
-    "written by setup runs in the default engine ingress mode.",
+    `the user service of "${PROG} start" runs, and the bridge window of`,
+    `"${PROG} start --foreground". Logs go to <state dir>/logs/aibridge.log (and to`,
+    "the terminal when there is one).",
     "",
     "Options:",
+    "  --with-opencode        Also run opencode serve (127.0.0.1) as a child process",
     "  --shadow-mode          Mirror ingress to the router (shadow mode)",
     "",
   ],
@@ -416,16 +460,17 @@ function commandHelpText(command: string | null): string {
 function nextStepsText(profile: string, role: string | undefined, daemonStarted: boolean): string {
   const lines = ["", "Next steps:"]
   if (role === "orchestrator" || role === "both") {
-    lines.push(`  ${PROG} verify --profile ${profile}     # check this machine for the orchestrator role`)
+    lines.push(`  ${PROG} enroll join <code> --profile ${profile}   # pair with a worker (code from its aibr init / enroll issue)`)
   }
   if (role !== "orchestrator") {
     // With the supervisor unit already serving the bridge, `aibr start` would
     // launch a second bridge on the same port; only point at it otherwise.
     if (!daemonStarted) {
-      lines.push(`  ${PROG} start --profile ${profile}      # start the runtime and the bridge (tmux)`)
+      lines.push(`  ${PROG} start --profile ${profile}      # start the bridge as a user service`)
     }
-    lines.push(`  ${PROG} status --profile ${profile}     # confirm the bridge answers /health`)
+    lines.push(`  ${PROG} enroll issue --profile ${profile}   # print a pairing code for the other machine`)
   }
+  lines.push(`  ${PROG} doctor --profile ${profile}     # check everything end to end, with fixes`)
   if (role === "orchestrator" || role === "both") {
     lines.push(
       `  ${PROG} plugin install claude      # add the AIBridge plugin to Claude Code (no supervisor unit is needed here)`,
@@ -699,6 +744,32 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<Cl
     const run = deps.runEnroll ?? ((a: readonly string[]) => enroll.runEnrollCommand(a, { ...enroll.defaultEnrollDeps(), write: deps.writer }))
     return toExitCode(await run(rest))
   }
+  // The quickstart commands own their argv (positional peer and prompt, -f, --join <code>, ...).
+  if (first === "init" || first === "doctor" || first === "ping" || first === "send" || first === "logs") {
+    const rest = argv.slice(1)
+    const q = await import("./cli/quickstart-commands.js")
+    const host: import("./cli/quickstart-commands.js").QuickstartHost = {
+      writer: deps.writer,
+      isTTY: deps.isTTY,
+      ...(deps.isInputTTY !== undefined ? { isInputTTY: deps.isInputTTY } : {}),
+      ...(deps.processRunner !== undefined ? { processRunner: deps.processRunner } : {}),
+      runSetup: (profile, options) => deps.runSetup(profile, options),
+      ...(deps.startService !== undefined ? { startService: deps.startService } : {}),
+    }
+    try {
+      if (first === "init") {
+        if (deps.isTTY && !rest.includes("--help") && !rest.includes("-h")) printCliBanner(deps.writer)
+        return toExitCode(await (deps.runInit ?? ((a: readonly string[]) => q.defaultInit(a, host)))(rest))
+      }
+      if (first === "doctor") return toExitCode(await (deps.runDoctor ?? ((a: readonly string[]) => q.defaultDoctor(a, host)))(rest))
+      if (first === "ping") return toExitCode(await (deps.runPing ?? ((a: readonly string[]) => q.defaultPing(a, host)))(rest))
+      if (first === "send") return toExitCode(await (deps.runSend ?? ((a: readonly string[]) => q.defaultSend(a, host)))(rest))
+      return toExitCode(await (deps.runLogs ?? ((a: readonly string[]) => q.defaultLogs(a, host)))(rest))
+    } catch (err) {
+      deps.writer(`Error: ${err instanceof Error ? err.message : `${first} failed`}\n`)
+      return 1
+    }
+  }
   // Operator commands (Phase 4/7) own their argv too (job id, --reason, --all-jobs).
   if (first === "approve" || first === "reject" || first === "jobs" || first === "stop") {
     const run = deps.runOperator ?? (await import("./cli/operator-commands.js")).runOperatorCommand(deps.writer, deps.processRunner)
@@ -768,6 +839,14 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<Cl
     deps.writer(`Error: ${args.configPath !== null ? "--config" : "--advanced"} is only supported by setup\n`)
     return 1
   }
+  if (command !== "start" && args.hasFlag("--foreground")) {
+    deps.writer("Error: --foreground is only supported by start\n")
+    return 1
+  }
+  if (command !== "serve" && args.hasFlag("--with-opencode")) {
+    deps.writer("Error: --with-opencode is only supported by serve\n")
+    return 1
+  }
 
   // ── setup ──────────────────────────────────────────────────────────
   if (command === "setup") {
@@ -815,10 +894,10 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<Cl
             } else if (outcome.daemon.installed) {
               deps.writer(
                 `Daemon: unit written to ${outcome.daemon.unitPath ?? "?"} but not started. ` +
-                  `To run the bridge under the supervisor instead of tmux: ${outcome.daemon.command ?? "?"}\n`,
+                  `Start it with: ${outcome.daemon.command ?? "?"}\n`,
               )
             } else {
-              deps.writer("Daemon: no supervisor unit written on this platform\n")
+              deps.writer(`Daemon: not started. Start the bridge with: ${outcome.daemon.command ?? `${PROG} start --profile ${profileName}`}\n`)
             }
           }
           deps.writer(nextStepsText(profileName, outcome.role, outcome.daemon?.started === true))
@@ -977,11 +1056,33 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<Cl
 
   // ── start ──────────────────────────────────────────────────────────
   if (command === "start") {
+    if (!args.hasFlag("--foreground")) {
+      try {
+        const run =
+          deps.startService ??
+          (async (p: string) => {
+            const q = await import("./cli/quickstart-commands.js")
+            return q.defaultStartService(p, {
+              writer: deps.writer,
+              isTTY: deps.isTTY,
+              ...(deps.processRunner !== undefined ? { processRunner: deps.processRunner } : {}),
+              runSetup: (prof, options) => deps.runSetup(prof, options),
+            })
+          })
+        return toExitCode(await run(profile))
+      } catch (err) {
+        deps.writer(`Error: ${err instanceof Error ? err.message : "start failed"}\n`)
+        return 1
+      }
+    }
     try {
       const result = await deps.startProfile(profile)
       switch (result.kind) {
         case "started":
-          deps.writer(`Started tmux session: ${result.sessionName}\n`)
+          deps.writer(
+            `Started tmux session: ${result.sessionName}\n` +
+              `Attach: tmux attach -t ${result.sessionName}    Logs: ${PROG} logs --profile ${profile}    Stop: ${PROG} stop --profile ${profile}\n`,
+          )
           return 0
         case "already_running":
           deps.writer(`Already running: ${result.sessionName}\n`)
@@ -999,7 +1100,10 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<Cl
   // ── serve ──────────────────────────────────────────────────────────
   if (command === "serve") {
     try {
-      await deps.serveBridge(profile, { shadowMode: args.hasFlag("--shadow-mode") })
+      await deps.serveBridge(profile, {
+        shadowMode: args.hasFlag("--shadow-mode"),
+        ...(args.hasFlag("--with-opencode") ? { withOpencode: true } : {}),
+      })
       return 0
     } catch (err) {
       deps.writer(`Error: ${err instanceof Error ? err.message : "serve failed"}\n`)
@@ -1022,15 +1126,23 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<Cl
   if (command === "status") {
     try {
       const result = await deps.statusProfile(profile)
+      const runner = result.runner !== undefined ? ` (${result.runner})` : ""
+      const hint = result.hint !== undefined ? `  ${result.hint}\n` : ""
       switch (result.kind) {
         case "healthy":
-          deps.writer(`healthy: ${result.sessionName}\n${result.body ?? ""}\n`)
+          deps.writer(`healthy: ${result.sessionName}${runner}\n${result.body ?? ""}\n${hint}`)
           return 0
         case "session_missing":
-          deps.writer(`session_missing: ${result.sessionName}\n`)
+          deps.writer(`session_missing: ${result.sessionName}\n${hint}`)
           return 1
+        case "not_running":
+          deps.writer(`not_running: ${profile}\n${hint}`)
+          return 1
+        case "no_bridge":
+          deps.writer(`no_bridge: ${profile}\n${hint}`)
+          return 0
         case "bridge_unavailable":
-          deps.writer(`bridge_unavailable: ${result.sessionName} (status ${result.probeStatus ?? "?"})\n`)
+          deps.writer(`bridge_unavailable: ${result.sessionName}${runner} (status ${result.probeStatus ?? "?"})\n${hint}`)
           return 1
       }
     } catch (err) {
@@ -1117,10 +1229,9 @@ async function createRealDeps(): Promise<CliDeps> {
     },
 
     runSetup: async (profile?: string, setupOptions?: SetupCommandOptions) => {
-      const reader = createStreamLineReader(Bun.stdin.stream())
       const stdin = process.stdin as NodeJS.ReadStream | undefined
-      const prompter = new BunPrompter({
-        reader,
+      const prompter = setupOptions?.prompter ?? new BunPrompter({
+        reader: createStreamLineReader(Bun.stdin.stream()),
         writer: { write: (d: Uint8Array) => { void process.stdout.write(d) } },
         isTTY: Boolean(stdin?.isTTY),
         // Echo suppression for secrets: raw mode on the controlling terminal
@@ -1138,6 +1249,7 @@ async function createRealDeps(): Promise<CliDeps> {
         initialProfile: profile,
         ...(setupOptions?.configPath !== undefined ? { configPath: setupOptions.configPath } : {}),
         ...(setupOptions?.advanced === true ? { advanced: true } : {}),
+        ...(setupOptions?.quickstart !== undefined ? { quickstart: setupOptions.quickstart } : {}),
         env: process.env as Record<string, string | undefined>,
         fileOps: {
           writeConfig: async (path, data) => writeConfig(path, data),
@@ -1213,9 +1325,18 @@ async function createRealDeps(): Promise<CliDeps> {
       )
     },
 
-    serveBridge: async (profile: string, serveOptions?: { readonly shadowMode?: boolean }) => {
+    serveBridge: async (profile: string, serveOptions?: { readonly shadowMode?: boolean; readonly withOpencode?: boolean }) => {
       const paths = resolveProfilePaths(profile)
       const configPath = `${paths.configDir}/config.json`
+      // The profile's log file (aibr logs). Mirrored to the terminal only when
+      // there is one, so a supervisor that captures stdout into the same file
+      // does not get every line twice.
+      const { bridgeLogPath, createFileLogger, formatRequestLine } = await import("./host/logs.js")
+      const logger = createFileLogger({
+        path: bridgeLogPath(paths.stateDir),
+        ...(process.stdout.isTTY ? { mirror: (line: string) => void process.stdout.write(line) } : {}),
+      })
+      logger.info(`aibr ${CLI_VERSION} serve --profile ${profile} starting (pid ${process.pid})`)
       let ocPassword = process.env.OPENCODE_SERVER_PASSWORD
       if (!ocPassword) {
         try {
@@ -1229,17 +1350,61 @@ async function createRealDeps(): Promise<CliDeps> {
       // profile's 0600 secret file. Absent -> operator endpoints fail closed.
       const operatorToken =
         process.env.AIBRIDGE_OPERATOR_TOKEN || (await readOptionalSecret(`${paths.secretsDir}/operator_token`))?.trim() || null
-      const bridge = await startBridge({
-        configPath,
-        stateDir: paths.stateDir,
-        bearerToken,
-        operatorToken,
-        profileName: profile,
-        environment: {
-          ...process.env as Record<string, string>,
-          ...(ocPassword ? { OPENCODE_SERVER_PASSWORD: ocPassword } : {}),
-        },
-        shadowMode: serveOptions?.shadowMode,
+
+      // `--with-opencode` (the user service of an OpenCode worker): run
+      // `opencode serve` on loopback as this process's child, so one unit
+      // supervises both. If it dies the bridge exits non-zero and the
+      // supervisor restarts the pair.
+      let opencodeChild: { kill: (signal?: NodeJS.Signals) => void } | undefined
+      let stopping = false
+      if (serveOptions?.withOpencode === true) {
+        const raw = (await readConfig(configPath).catch(() => null)) as Record<string, unknown> | null
+        const isOpencode = (raw?.runtime as { kind?: unknown } | undefined)?.kind !== "claude"
+        const port = (raw?.opencode as { server_port?: unknown } | undefined)?.server_port
+        if (isOpencode && typeof port === "number") {
+          const { spawn } = await import("node:child_process")
+          const opencodeBin = process.env.OPENCODE_BIN ?? (findInPath("opencode2") ? "opencode2" : "opencode")
+          const child = spawn(opencodeBin, ["serve", "--port", String(port), "--hostname", "127.0.0.1"], {
+            env: { ...process.env, ...(ocPassword ? { OPENCODE_SERVER_PASSWORD: ocPassword } : {}) },
+            stdio: ["ignore", "inherit", "inherit"],
+          })
+          child.on("error", (error) => logger.error(`opencode serve could not start: ${error.message}`))
+          child.on("exit", (code, signal) => {
+            if (stopping) return
+            logger.error(`opencode serve exited (${signal ?? `code ${code}`}); stopping the bridge so the service restarts both`)
+            process.exit(1)
+          })
+          opencodeChild = child
+          logger.info(`started ${opencodeBin} serve on 127.0.0.1:${port} (pid ${child.pid ?? "?"})`)
+        } else {
+          logger.warn("--with-opencode ignored: the profile is not an OpenCode worker")
+        }
+      }
+
+      let bridge: Awaited<ReturnType<typeof startBridge>>
+      try {
+        bridge = await startBridge({
+          configPath,
+          stateDir: paths.stateDir,
+          bearerToken,
+          operatorToken,
+          profileName: profile,
+          environment: {
+            ...process.env as Record<string, string>,
+            ...(ocPassword ? { OPENCODE_SERVER_PASSWORD: ocPassword } : {}),
+          },
+          shadowMode: serveOptions?.shadowMode,
+        })
+      } catch (error) {
+        logger.error(`startup failed: ${error instanceof Error ? error.message : String(error)}`)
+        stopping = true
+        opencodeChild?.kill("SIGTERM")
+        logger.close()
+        throw error
+      }
+      // One line per request: method, path, status, duration. Never headers or bodies.
+      bridge.app.addHook("onResponse", async (request, reply) => {
+        logger.info(formatRequestLine({ method: request.method, url: request.url, status: reply.statusCode, durationMs: reply.elapsedTime }))
       })
 
       let bus: IpcBusHandle | undefined
@@ -1260,9 +1425,26 @@ async function createRealDeps(): Promise<CliDeps> {
         // IPC bus is optional; bridge continues if socket cannot be bound
       }
 
-      await bridge.app.listen({ host: bridge.config.bridge.host, port: bridge.config.bridge.port })
+      try {
+        await bridge.app.listen({ host: bridge.config.bridge.host, port: bridge.config.bridge.port })
+      } catch (error) {
+        logger.error(
+          `cannot listen on ${bridge.config.bridge.host}:${bridge.config.bridge.port}: ${error instanceof Error ? error.message : String(error)}`,
+        )
+        stopping = true
+        opencodeChild?.kill("SIGTERM")
+        logger.close()
+        throw error
+      }
+      logger.info(
+        `listening on ${bridge.config.bridge.host}:${bridge.config.bridge.port} as ${bridge.config.agent_id} ` +
+          `(${bridge.config.role}, ${bridge.config.runtime.kind} runtime, request_signing ${bridge.config.security.request_signing ?? "off"})`,
+      )
       await new Promise<void>((resolve) => {
         const onSignal = (): void => {
+          stopping = true
+          logger.info("stopping (signal)")
+          opencodeChild?.kill("SIGTERM")
           if (bus !== undefined) {
             void bus.stop().catch(() => {})
           }
@@ -1271,6 +1453,8 @@ async function createRealDeps(): Promise<CliDeps> {
         process.once("SIGINT", onSignal)
         process.once("SIGTERM", onSignal)
       })
+      logger.info("stopped")
+      logger.close()
     },
 
     runWorker: async (profile: string, workerOptions?: { readonly publishIpc?: boolean }) => {
@@ -1341,59 +1525,25 @@ async function createRealDeps(): Promise<CliDeps> {
     },
 
     statusProfile: async (profile: string) => {
+      const { defaultStatus } = await import("./cli/quickstart-commands.js")
+      const status = await defaultStatus(profile, { writer, isTTY: Boolean(process.stdout?.isTTY), processRunner, runSetup: async () => undefined })
+      if (status.kind !== "healthy") return status
+      // `/health` is unauthenticated: summarise the config beside it, and say
+      // what "healthy" does not prove.
       const paths = resolveProfilePaths(profile)
-      const configPath = `${paths.configDir}/config.json`
-      let config: Record<string, unknown> | null = null
-      try {
-        config = await readConfig(configPath) as Record<string, unknown> | null
-      } catch {
-        // unreadable
-      }
-      if (!config) {
-        throw new Error(`Profile "${profile}" not found. Run "aibr setup --profile ${profile}" first.`)
-      }
-      const bridge = config.bridge as Record<string, unknown>
-      // A Claude profile has no `opencode` block (it is optional in the schema
-      // for runtime.kind "claude"), so neither the port nor the window exist.
-      const opencode = config.opencode as Record<string, unknown> | undefined
-      const runtimeKind: "opencode" | "claude" =
-        (config.runtime as { kind?: unknown } | undefined)?.kind === "claude" ? "claude" : "opencode"
-      const res = await statusProfile(
-        { processRunner, httpProbe: { probe: async (url: string) => {
-          try {
-            const resp = await fetch(url)
-            const body = await resp.text()
-            return { status: resp.status, ok: resp.ok, body }
-          } catch {
-            return { status: 0, ok: false, body: "" }
-          }
-        }}, env: process.env as Record<string, string | undefined> },
-        {
-          name: profile,
-          bridgePort: bridge.port as number,
-          ...(typeof bridge.host === "string" && bridge.host !== "" ? { bridgeHost: bridge.host } : {}),
-          ...(runtimeKind === "opencode" && typeof opencode?.server_port === "number"
-            ? { opencodePort: opencode.server_port }
-            : {}),
-          sessionName: `aibridge-${profile}`,
-          runtimeKind,
-        },
-      )
-      if (res.kind === "healthy") {
-        const summary = [
-          "Configuration summary:",
-          `  Agent ID: ${config.agent_id}`,
-          `  Bridge: ${bridge.public_url ?? `http://${bridge.host}:${bridge.port}`}`,
-          runtimeKind === "claude" ? "  Runtime: Claude Code" : `  OpenCode: ${opencode?.base_url ?? "(not configured)"}`,
-          "Readiness state: healthy",
-          res.body ? `Probe response: ${res.body}` : "",
-        ].filter(Boolean).join("\n")
-        return {
-          ...res,
-          body: summary,
-        }
-      }
-      return res
+      const config = (await readConfig(`${paths.configDir}/config.json`).catch(() => null)) as Record<string, unknown> | null
+      const bridge = (config?.bridge ?? {}) as Record<string, unknown>
+      const runtimeKind = (config?.runtime as { kind?: unknown } | undefined)?.kind === "claude" ? "Claude Code" : "OpenCode"
+      const summary = [
+        "Configuration summary:",
+        `  Agent ID: ${String(config?.agent_id ?? profile)}`,
+        `  Bridge: ${String(bridge.public_url ?? `http://${String(bridge.host)}:${String(bridge.port)}`)}`,
+        `  Runtime: ${runtimeKind}`,
+        "Readiness state: healthy",
+        status.body ? `Probe response: ${status.body}` : "",
+        `Peers can authenticate only if a ping succeeds: ${PROG} doctor --profile ${profile}`,
+      ].filter(Boolean).join("\n")
+      return { ...status, body: summary }
     },
     verifyProfile: async (profile: string) => {
       const { runVerify } = await import("./cli/verify.js")

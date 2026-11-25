@@ -28,6 +28,8 @@ export interface JobRecord {
   approval?: JobApproval
   /** The commit the job is pinned to, resolved when the trigger was accepted (`repo` + `ref`). */
   checkout?: JobCheckout
+  /** Set on `aibr ping` jobs only: what this node says about itself to an enrolled caller. */
+  pong?: PongInfo
   error?: string
   depends_on?: string[]      // dependency job IDs
   remoteDependencies?: RemoteDependencyState[]
@@ -67,6 +69,22 @@ export interface RuntimeJobResult {
   usage?: RuntimeJobUsage
   /** Deterministic steps (`pre`, `script`, `post`) the job ran, in order. */
   scriptResults?: ScriptResult[]
+}
+
+/**
+ * The answer to an `aibr ping` (capability `aibr.ping`): a no-op job that proves
+ * a signed, authorized `/trigger` and the `/report` callback both work.
+ * `projects` are the directories this node allowlists, so a caller can address
+ * work (`aibr send`) without guessing a path on another machine.
+ */
+export interface PongInfo {
+  agent_id: string
+  role: string
+  runtime: string
+  version: string
+  /** Capabilities this node accepts from the caller (its `allowed_sources` entry). */
+  capabilities: string[]
+  projects: { id: string; path: string; capabilities: string[] }[]
 }
 
 export interface JobApproval {

@@ -20,7 +20,9 @@ export function runOperatorCommand(
         return runJobsCommand(args, deps)
       case "stop": {
         const runner = processRunner ?? new (await import("../host/runtime.js")).BunProcessRunner()
-        return runStopCommand(args, { ...deps, processRunner: runner })
+        const { defaultUserServiceDeps, stopUserService } = await import("../host/daemonizer.js")
+        const service = defaultUserServiceDeps(runner, process.env)
+        return runStopCommand(args, { ...deps, processRunner: runner, stopService: (profile) => stopUserService(service, profile) })
       }
     }
   }

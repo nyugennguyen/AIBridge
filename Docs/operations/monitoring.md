@@ -18,13 +18,25 @@ Check the health of a running profile:
 aibr status --profile <profile>
 ```
 
-`aibr status` queries the local tmux session and sends a `GET /health` request to the local HTTP listener. It returns one of three states:
+`aibr status` checks what runs the profile — its user service (launchd/systemd) or its tmux session — and sends `GET /health` to the address the bridge binds:
 
-| Status Code | Description | Next Step |
+| Status | Description | Next Step |
 |---|---|---|
-| `healthy` | Tmux session exists and `/health` returned `200 OK`. | System is running normally. |
-| `session_missing` | The `aibridge-<profile>` tmux session is not running. | Run `aibr start --profile <profile>`. |
-| `bridge_unavailable` | The tmux session exists, but `/health` failed to respond. | Inspect tmux session logs (`tmux attach -t aibridge-<profile>`). |
+| `healthy (launchd\|systemd\|tmux\|unmanaged)` | `/health` returned `200 OK`; the label says what runs it. | System is running. Prove peers can use it with `aibr doctor` or `aibr ping <peer>`. |
+| `not_running` | Neither the service nor the tmux session runs the profile, and `/health` does not answer. | `aibr start --profile <profile>`. |
+| `bridge_unavailable` | The service or tmux session is up, but `/health` does not answer. | `aibr logs --profile <profile>`. |
+| `no_bridge` | The profile is an orchestrator; it runs no bridge. | `aibr doctor --profile <profile>` pings its workers. |
+
+`aibr doctor` combines this with `aibr verify` and a signed ping of every peer, and prints a fix for each problem.
+
+### 1.1a Logs
+
+```bash
+aibr logs --profile <profile>        # last 100 lines
+aibr logs --profile <profile> -f     # follow
+```
+
+The log is `~/.local/state/aibridge/<profile>/logs/aibridge.log` (rotated to `.1` past 10 MiB when the bridge starts). The bridge writes startup, listen address and one line per request (method, path, status, duration; no headers, bodies or query strings); the user service appends the process's stdout and stderr, so a startup crash is there too.
 
 ### 1.2 The `/health` Endpoint
 

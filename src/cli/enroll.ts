@@ -7,6 +7,7 @@
  * local bridge (`join` in particular runs on orchestrators, which have none).
  * The bearer token received by `join` is written 0600 and never printed.
  */
+import { rm } from "node:fs/promises"
 import { userInfo } from "node:os"
 import { bridgeConfigSchema } from "../config/schemas.js"
 import type { BridgeConfig } from "../config/types.js"
@@ -142,18 +143,68 @@ function profileOf(paths: ProfilePaths): string {
   return paths.configDir.split("/").pop() ?? "default"
 }
 
-async function issue(args: ParsedEnrollArgs, paths: ProfilePaths, configPath: string, deps: EnrollCliDeps): Promise<number> {
+/**
+ * `aibr enroll issue`'s core, shared with `aibr init` (new network): a
+ * one-time code for this worker profile.
+ */
+export async function issueCodeForProfile(
+  paths: ProfilePaths,
+  configPath: string,
+  options: { readonly capabilities?: readonly string[]; readonly ttlMs: number; readonly now: () => number },
+): Promise<{ readonly config: BridgeConfig; readonly issued: Awaited<ReturnType<typeof issuePairingCode>> }> {
   const config = await loadProfileConfig(configPath, profileOf(paths))
+  const issued = await issuePairingCode({
+    config,
+    stateDir: paths.stateDir,
+    ...(options.capabilities !== undefined ? { capabilities: options.capabilities } : {}),
+    ttlMs: options.ttlMs,
+    issuedBy: `${safeUser()}@aibr-cli`,
+    now: options.now,
+  })
+  return { config, issued }
+}
+
+/**
+ * `aibr enroll join`'s core, shared with `aibr init` (join a network).
+ *
+ * `adoptBearerToken`: replace this profile's own shared bearer token with the
+ * worker's. Only `aibr init` passes it, for a profile it created moments ago:
+ * no peer can be using that token yet, and a `both` node whose token differs
+ * from the worker's would refuse the worker's `/report` callbacks with 401.
+ */
+export async function joinProfileWithCode(
+  paths: ProfilePaths,
+  configPath: string,
+  code: string,
+  deps: Pick<EnrollCliDeps, "fetch" | "now">,
+  options: { readonly adoptBearerToken?: boolean } = {},
+): Promise<{ readonly config: BridgeConfig; readonly joined: Awaited<ReturnType<typeof joinWithPairingCode>>; readonly notes: readonly string[] }> {
+  const config = await loadProfileConfig(configPath, profileOf(paths))
+  const runsBridge = config.role !== "orchestrator"
+  const joined = await joinWithPairingCode({
+    code,
+    agentId: config.agent_id,
+    stateDir: paths.stateDir,
+    displayName: config.agent_id,
+    ...(runsBridge ? { callbackUrl: config.bridge.public_url } : {}),
+    fetch: deps.fetch,
+    now: deps.now,
+  })
+  if (options.adoptBearerToken === true && joined.bearerToken !== null) {
+    await rm(`${paths.secretsDir}/bearer_token`, { force: true })
+  }
+  const applied = await applyJoinToProfile({ paths, configPath, join: joined })
+  return { config, joined, notes: applied.notes }
+}
+
+async function issue(args: ParsedEnrollArgs, paths: ProfilePaths, configPath: string, deps: EnrollCliDeps): Promise<number> {
   const ttlRaw = args.flags.get("--ttl") ?? "10m"
   const ttlMs = parseTtl(ttlRaw)
   if (ttlMs === null) throw new PairingError(`--ttl "${ttlRaw}" is not a duration (e.g. 10m, 1h, 90s).`, "invalid_ttl")
   const capabilities = args.flags.get("--capabilities")?.split(",")
-  const issued = await issuePairingCode({
-    config,
-    stateDir: paths.stateDir,
+  const { config, issued } = await issueCodeForProfile(paths, configPath, {
     ...(capabilities !== undefined ? { capabilities } : {}),
     ttlMs,
-    issuedBy: `${safeUser()}@aibr-cli`,
     now: deps.now,
   })
   const minutes = Math.max(1, Math.round((issued.expiresAt - deps.now()) / 60_000))
@@ -177,18 +228,8 @@ async function issue(args: ParsedEnrollArgs, paths: ProfilePaths, configPath: st
 async function join(args: ParsedEnrollArgs, paths: ProfilePaths, configPath: string, deps: EnrollCliDeps): Promise<number> {
   const code = args.positional[0]
   if (code === undefined) throw new PairingError("Usage: aibr enroll join <code> [--profile <p>]", "usage")
-  const config = await loadProfileConfig(configPath, profileOf(paths))
-  const runsBridge = config.role !== "orchestrator"
-  const joined = await joinWithPairingCode({
-    code,
-    agentId: config.agent_id,
-    stateDir: paths.stateDir,
-    displayName: config.agent_id,
-    ...(runsBridge ? { callbackUrl: config.bridge.public_url } : {}),
-    fetch: deps.fetch,
-    now: deps.now,
-  })
-  const applied = await applyJoinToProfile({ paths, configPath, join: joined })
+  const { config, joined, notes } = await joinProfileWithCode(paths, configPath, code, deps)
+  const applied = { notes }
   deps.write(
     [
       `Paired with ${joined.agent.id} at ${joined.agent.url}; capabilities [${joined.agent.capabilities.join(", ")}].`,

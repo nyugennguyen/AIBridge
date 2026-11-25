@@ -201,8 +201,36 @@ describe("aibr stop", () => {
     expect(await runStopCommand(["--profile", "staging"], { ...h.deps, processRunner: tmux })).toBe(0)
     expect(tmux.calls).toEqual([["tmux", "kill-session", "-t", "aibridge-staging"]])
     expect(await runStopCommand(["-p", "staging"], { ...h.deps, processRunner: runner({ exitCode: 1, stderr: "can't find session: aibridge-staging" }) })).toBe(0)
-    expect(h.text()).toContain("Not running: aibridge-staging")
+    expect(h.text()).toContain("Not running: staging (no user service, no tmux session aibridge-staging)")
     expect(await runStopCommand([], { ...h.deps, processRunner: tmux })).toBe(64)
+  })
+
+  it("--profile also unloads the profile's user service (aibr start)", async () => {
+    const h = await setup()
+    const stopped: string[] = []
+    const deps = {
+      ...h.deps,
+      processRunner: runner({ exitCode: 1, stderr: "no server running on /tmp/tmux-501/default" }),
+      stopService: async (profile: string) => {
+        stopped.push(profile)
+        return { kind: "stopped" as const, manager: "launchd" as const, notes: [] }
+      },
+    }
+    expect(await runStopCommand(["--profile", "staging"], deps)).toBe(0)
+    expect(stopped).toEqual(["staging"])
+    expect(h.text()).toContain("Stopped the launchd service for staging")
+    expect(h.text()).not.toContain("Not running")
+  })
+
+  it("--profile reports a service that would not unload as a failure", async () => {
+    const h = await setup()
+    const deps = {
+      ...h.deps,
+      processRunner: runner({ exitCode: 1, stderr: "can't find session: aibridge-staging" }),
+      stopService: async () => ({ kind: "failed" as const, message: "Failed to connect to bus" }),
+    }
+    expect(await runStopCommand(["--profile", "staging"], deps)).toBe(1)
+    expect(h.text()).toContain("service_error: Failed to connect to bus")
   })
 })
 

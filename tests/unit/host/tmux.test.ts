@@ -143,11 +143,11 @@ describe("startProfile", () => {
           failureResult("no server running"),
         ],
         [
-          "tmux new-session -d -s aibridge-test-profile -n opencode aibr _opencode --profile test-profile",
+          "tmux new-session -d -s aibridge-test-profile -n opencode aibr _opencode --profile test-profile ; set-option -w -t aibridge-test-profile:opencode remain-on-exit on",
           successResult(""),
         ],
         [
-          "tmux new-window -t aibridge-test-profile -n bridge aibr serve --profile test-profile",
+          "tmux new-window -t aibridge-test-profile -n bridge aibr serve --profile test-profile ; set-option -w -t aibridge-test-profile:bridge remain-on-exit on",
           successResult(""),
         ],
       ]),
@@ -167,11 +167,11 @@ describe("startProfile", () => {
       entries([
         ["tmux has-session -t aibridge-test-profile", failureResult()],
         [
-          "tmux new-session -d -s aibridge-test-profile -n opencode aibr _opencode --profile test-profile",
+          "tmux new-session -d -s aibridge-test-profile -n opencode aibr _opencode --profile test-profile ; set-option -w -t aibridge-test-profile:opencode remain-on-exit on",
           successResult(),
         ],
         [
-          "tmux new-window -t aibridge-test-profile -n bridge aibr serve --profile test-profile",
+          "tmux new-window -t aibridge-test-profile -n bridge aibr serve --profile test-profile ; set-option -w -t aibridge-test-profile:bridge remain-on-exit on",
           successResult(),
         ],
       ]),
@@ -194,11 +194,11 @@ describe("startProfile", () => {
       entries([
         ["tmux has-session -t aibridge-test-profile", failureResult()],
         [
-          "tmux new-session -d -s aibridge-test-profile -n opencode aibr _opencode --profile test-profile",
+          "tmux new-session -d -s aibridge-test-profile -n opencode aibr _opencode --profile test-profile ; set-option -w -t aibridge-test-profile:opencode remain-on-exit on",
           successResult(),
         ],
         [
-          "tmux new-window -t aibridge-test-profile -n bridge aibr serve --profile test-profile",
+          "tmux new-window -t aibridge-test-profile -n bridge aibr serve --profile test-profile ; set-option -w -t aibridge-test-profile:bridge remain-on-exit on",
           successResult(),
         ],
       ]),
@@ -233,11 +233,11 @@ describe("startProfile", () => {
       entries([
         ["tmux has-session -t aibridge-test-profile", failureResult()],
         [
-          "tmux new-session -d -s aibridge-test-profile -n opencode aibr _opencode --profile test-profile",
+          "tmux new-session -d -s aibridge-test-profile -n opencode aibr _opencode --profile test-profile ; set-option -w -t aibridge-test-profile:opencode remain-on-exit on",
           successResult(),
         ],
         [
-          "tmux new-window -t aibridge-test-profile -n bridge aibr serve --profile test-profile",
+          "tmux new-window -t aibridge-test-profile -n bridge aibr serve --profile test-profile ; set-option -w -t aibridge-test-profile:bridge remain-on-exit on",
           successResult(),
         ],
       ]),
@@ -261,7 +261,7 @@ describe("startProfile", () => {
       entries([
         ["tmux has-session -t aibridge-test-profile", failureResult()],
         [
-          "tmux new-session -d -s aibridge-test-profile -n opencode aibr _opencode --profile test-profile",
+          "tmux new-session -d -s aibridge-test-profile -n opencode aibr _opencode --profile test-profile ; set-option -w -t aibridge-test-profile:opencode remain-on-exit on",
           failureResult("sessions should be nested"),
         ],
       ]),
@@ -283,11 +283,11 @@ describe("startProfile", () => {
       entries([
         ["tmux has-session -t aibridge-test-profile", failureResult()],
         [
-          "tmux new-session -d -s aibridge-test-profile -n opencode aibr _opencode --profile test-profile",
+          "tmux new-session -d -s aibridge-test-profile -n opencode aibr _opencode --profile test-profile ; set-option -w -t aibridge-test-profile:opencode remain-on-exit on",
           successResult(),
         ],
         [
-          "tmux new-window -t aibridge-test-profile -n bridge aibr serve --profile test-profile",
+          "tmux new-window -t aibridge-test-profile -n bridge aibr serve --profile test-profile ; set-option -w -t aibridge-test-profile:bridge remain-on-exit on",
           failureResult("can't find window: bridge"),
         ],
       ]),
@@ -308,11 +308,11 @@ describe("startProfile", () => {
       entries([
         ["tmux has-session -t custom-session", failureResult()],
         [
-          "tmux new-session -d -s custom-session -n opencode aibr _opencode --profile my-proj",
+          "tmux new-session -d -s custom-session -n opencode aibr _opencode --profile my-proj ; set-option -w -t custom-session:opencode remain-on-exit on",
           successResult(),
         ],
         [
-          "tmux new-window -t custom-session -n bridge aibr serve --profile my-proj",
+          "tmux new-window -t custom-session -n bridge aibr serve --profile my-proj ; set-option -w -t custom-session:bridge remain-on-exit on",
           successResult(),
         ],
       ]),
@@ -468,7 +468,7 @@ describe("startProfile with runtime claude", () => {
       entries([
         ["tmux has-session -t aibridge-test-profile", failureResult()],
         [
-          "tmux new-session -d -s aibridge-test-profile -n bridge aibr serve --profile test-profile",
+          "tmux new-session -d -s aibridge-test-profile -n bridge aibr serve --profile test-profile ; set-option -w -t aibridge-test-profile:bridge remain-on-exit on",
           successResult(),
         ],
       ]),

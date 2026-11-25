@@ -4,6 +4,8 @@
 > Đối chiếu với `dev@9402bd9`, ngày 2026-11-25.
 > Phương pháp: đọc `scripts/install.sh`, `src/cli/setup-wizard.ts`, `src/host/*`, README và `Docs/getting-started.md`; **chạy thật** `aibr --help`, `aibr verify`, `aibr setup` (qua pseudo-TTY, HOME/XDG cô lập trong thư mục tạm), `aibr serve` + `GET /health`. Chưa chạy `install.sh` thật (sẽ cài global) và chưa thử luồng hai máy.
 > Mỗi phát hiện ghi rõ là **[quan sát]** (đã thấy khi chạy) hay **[theo code]** (suy ra từ source).
+>
+> **Trạng thái (2026-11-25):** đợt A, D, E đã có trên nhánh `claude/claude-code-enhancement-00ce71`. Đợt B–C đã triển khai trên nhánh `claude/install-ux-waves-bc`: `aibr init` (≤ 4 câu hỏi), `aibr doctor`, `aibr ping`, `aibr send`, `aibr logs`, `aibr start`/`stop` thành user service (launchd/systemd) với `--foreground` cho tmux, `aibr status` nhận ra service. Smoke test hai profile (init → pair → ping → doctor) chạy trong CI (`bun run test:smoke`). Còn lại: tmux vẫn là prerequisite bắt buộc của worker trong preflight; nhánh systemd chưa chạy thử trên VPS thật.
 
 ---
 

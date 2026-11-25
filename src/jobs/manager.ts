@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto"
 import type { RemoteDependency, TriggerRequest } from "../config/types.js"
-import type { JobCheckout, JobRecord, JobStatus, RemoteDependencyReport, RuntimeJobResult } from "./types.js"
+import type { JobCheckout, JobRecord, JobStatus, PongInfo, RemoteDependencyReport, RuntimeJobResult } from "./types.js"
 import type { JobStore } from "./store.js"
 
 const TERMINAL_STATUSES: JobStatus[] = ["completed", "failed", "timed_out", "callback_failed"]
@@ -110,6 +110,14 @@ export class JobManager {
 
   async markCompleted(id: string, now = new Date().toISOString()): Promise<JobRecord> {
     return this.transition(id, "completed", now)
+  }
+
+  /** `aibr ping`: `accepted` -> `completed` at once, carrying the pong. No runtime is involved. */
+  async completePing(id: string, pong: PongInfo, now = new Date().toISOString()): Promise<JobRecord> {
+    return this.transition(id, "completed", now, {
+      pong,
+      runtimeResult: { summary: `pong from ${pong.agent_id}`, findings: [] },
+    })
   }
 
   async markFailed(id: string, error: string, now = new Date().toISOString()): Promise<JobRecord> {

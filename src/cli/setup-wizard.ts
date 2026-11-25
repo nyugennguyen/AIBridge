@@ -12,7 +12,11 @@
  *   runtime (worker/both) → role-aware preflight → bearer token → OpenCode
  *   password (opencode runtime only) → agent id → project path → tailnet
  *   discovery & explicit peer enrolment → ports (`--advanced` only) → save →
- *   supervisor unit (not for orchestrators).
+ *   offer to start the user service (not for orchestrators).
+ *
+ * Quickstart (`aibr init`, `SetupWizardDeps.quickstart`): role → runtime (only
+ * when ambiguous) → preflight → project path; every other answer takes its
+ * default silently, and init does pairing and the service itself.
  *
  * Invariants:
  * - Security Floor: 256-bit CSPRNG bearer token stored with 0600 permissions.
@@ -28,7 +32,7 @@
 
 import { randomBytes } from "node:crypto"
 import { access } from "node:fs/promises"
-import { homedir } from "node:os"
+import { homedir, hostname } from "node:os"
 import { isAbsolute, resolve as resolvePath } from "node:path"
 import type { PlatformInspector, ProcessRunner, Prompter } from "../host/types.js"
 import { resolveProfilePaths, type ProfilePaths } from "../host/paths.js"
@@ -58,10 +62,13 @@ import {
   scrubCredentialShapedAgentId,
 } from "./discovery-safety.js"
 import {
+  currentAibrEntry,
   installDaemonUnit,
   loadDaemonUnit,
+  serviceEnvironment,
   type DaemonIngressMode,
 } from "../host/daemonizer.js"
+import { bridgeLogPath } from "../host/logs.js"
 
 export interface SetupWizardDeps {
   readonly platformInspector: PlatformInspector
@@ -115,6 +122,24 @@ export interface SetupWizardDeps {
    * after the operator saves.
    */
   readonly pairWithCode?: (input: { readonly code: string; readonly agentId: string; readonly paths: ProfilePaths }) => Promise<WizardPairing>
+  /**
+   * `aibr init`: the quickstart. Only the role, the runtime (when both or
+   * neither is installed) and the project directory are asked; everything else
+   * takes its safe default without a question — the bearer token and OpenCode
+   * password are kept or generated silently and never shown, the agent id is
+   * derived, no discovery or peer step runs (pairing does that), there is no
+   * "Save?" and no supervisor unit (init starts the user service itself).
+   * Fields given here are answers already made (command-line flags).
+   */
+  readonly quickstart?: QuickstartAnswers
+}
+
+/** Answers `aibr init` already has from its flags; each one skips its question. */
+export interface QuickstartAnswers {
+  readonly role?: NodeRole
+  readonly runtime?: RuntimeKind
+  readonly projectPath?: string
+  readonly bridgePort?: number
 }
 
 export interface WizardPairing {
@@ -883,7 +908,7 @@ export async function runSetupWizard(deps: SetupWizardDeps): Promise<SetupOutcom
       : `${paths.configDir}/config.json`
 
   const existing = await deps.fileOps.readConfig(configPath)
-  if (existing !== null) {
+  if (existing !== null && deps.quickstart === undefined) {
     // A re-run is how an operator enrols the second machine, so it is an
     // update by default: every answer below defaults to what is already there,
     // and nothing secret changes unless explicitly asked for.
@@ -904,9 +929,10 @@ export async function runSetupWizard(deps: SetupWizardDeps): Promise<SetupOutcom
   // must not be blocked on them.
   const current = nodeRoleFromConfig(existing)
   const hasCurrentRole = existing !== null && parseNodeRole(existing.role) !== null
-  const role = await promptNodeRole(io, hasCurrentRole ? current.role : DEFAULT_NODE_ROLE)
+  const quick = deps.quickstart
+  const role = quick?.role ?? (await promptNodeRole(io, hasCurrentRole ? current.role : DEFAULT_NODE_ROLE))
   const runtime: RuntimeKind | null = roleRunsJobs(role)
-    ? await chooseRuntime(io, existing !== null ? current.runtime : null)
+    ? (quick?.runtime ?? (await chooseRuntime(io, existing !== null ? current.runtime : null)))
     : null
 
   // ── Step 0: Preflight checks (role-aware) ────────────────────────────
@@ -1009,8 +1035,11 @@ async function runSetupSteps(io: WizardIo, ctx: SetupContext): Promise<SetupOutc
   // its peers' tokens arrive through pairing. Asking the user to generate and
   // "copy this token to your peer" was wrong advice (seen in the dev -> staging
   // run), so the token is kept, or generated silently for a later `both`/bridge.
+  // The quickstart never asks either: pairing hands the token over (`aibr init`
+  // adopts the worker's when it joins), so the user never sees or copies one.
+  const quick = deps.quickstart
   const tokenChoiceRaw =
-    role === "orchestrator"
+    role === "orchestrator" || quick !== undefined
       ? hasExistingToken ? "k" : "g"
       : await deps.prompter.promptInput(
     hasExistingToken
@@ -1089,7 +1118,7 @@ async function runSetupSteps(io: WizardIo, ctx: SetupContext): Promise<SetupOutc
   } else {
     // Generate 64 hex characters (32 bytes) CSPRNG token.
     newBearerToken = generateBearerToken(false)
-    if (role === "orchestrator") {
+    if (role === "orchestrator" || quick !== undefined) {
       // Silent: see the comment at the token prompt. Never displayed.
     } else {
     const rotationWarning = hasExistingToken
@@ -1110,7 +1139,12 @@ async function runSetupSteps(io: WizardIo, ctx: SetupContext): Promise<SetupOutc
   /** `null` = keep what is on disk (or none needed); a string = write this value. */
   let newOcPassword: string | null = null
   const hasExistingOcPassword = usesOpencode ? await pathExists(ocPasswordPath) : false
-  if (usesOpencode) {
+  if (usesOpencode && quick !== undefined) {
+    if (!hasExistingOcPassword) {
+      newOcPassword = generateOpencodePassword()
+      io.write(`Generated a random OpenCode password (${ocPasswordPath}); the bridge passes it to opencode serve.\n`)
+    }
+  } else if (usesOpencode) {
     if (hasExistingOcPassword) {
       const typed = await deps.prompter.promptSecret(
         "OpenCode server password (Enter = keep the existing one):",
@@ -1135,13 +1169,31 @@ async function runSetupSteps(io: WizardIo, ctx: SetupContext): Promise<SetupOutc
   // ── Step 3: Project Allowlists & Containment ────────────────────────
   const defaultAgentId =
     typeof base.agent_id === "string" && base.agent_id.trim() !== "" ? base.agent_id : profileName
-  const rawAgentId = await deps.prompter.promptInput(`Enter agent ID [${defaultAgentId}]:`)
-  const agentId = rawAgentId.trim() === "" ? defaultAgentId : rawAgentId.trim()
+  let agentId: string
+  if (quick !== undefined) {
+    agentId =
+      typeof base.agent_id === "string" && base.agent_id.trim() !== ""
+        ? base.agent_id
+        : quickstartAgentId(profileName, preflight.tailscale.hostname)
+  } else {
+    const rawAgentId = await deps.prompter.promptInput(`Enter agent ID [${defaultAgentId}]:`)
+    agentId = rawAgentId.trim() === "" ? defaultAgentId : rawAgentId.trim()
+  }
 
   const existingProjects = Array.isArray(base.projects) ? base.projects.filter(isRecord) : []
   const firstProject = existingProjects[0]
   // An orchestrator runs no jobs here, so it has no project to allowlist.
-  const projectPath = role === "orchestrator" ? null : await promptProjectPath(io, env, firstProject)
+  let projectPath: string | null = null
+  if (role !== "orchestrator") {
+    if (quick?.projectPath !== undefined) {
+      const absolute = resolvePath(io.cwd ?? process.cwd(), quick.projectPath)
+      const problem = projectPathProblem(absolute, env.HOME ?? homedir())
+      if (problem !== null) return { kind: "blocked", reason: `Refusing to allowlist ${absolute}: ${problem}`, preflight }
+      projectPath = absolute
+    } else {
+      projectPath = await promptProjectPath(io, env, firstProject)
+    }
+  }
 
   // ── Step 4: Tailnet Discovery & Explicit Peer Enrolment ─────────────
   //
@@ -1155,9 +1207,11 @@ async function runSetupSteps(io: WizardIo, ctx: SetupContext): Promise<SetupOutc
     : []
   // Phase 3: an orchestrator's first option is pairing by one-time code
   // (`aibr enroll join`'s code path); discovery is the fallback.
-  const paired = role === "orchestrator" ? await promptPairing(io, agentId, paths) : null
+  const paired = role === "orchestrator" && quick === undefined ? await promptPairing(io, agentId, paths) : null
   const peers =
-    paired !== null
+    quick !== undefined
+      ? { agents: existingAgents, sources: existingSources }
+      : paired !== null
       ? {
           agents: [...existingAgents.filter((a) => a.id !== paired.agent.id), { ...paired.agent, capabilities: [...paired.agent.capabilities] }],
           sources: existingSources,
@@ -1165,9 +1219,9 @@ async function runSetupSteps(io: WizardIo, ctx: SetupContext): Promise<SetupOutc
       : await configurePeers(io, await runSetupDiscovery(io, existing, existingBridgePort), existingAgents, existingSources)
 
   // ── Ports (--advanced only) ─────────────────────────────────────────
-  let bridgePort = existingBridgePort
+  let bridgePort = quick?.bridgePort ?? existingBridgePort
   let ocPort = existingOcPort
-  if (deps.advanced === true) {
+  if (deps.advanced === true && quick === undefined) {
     bridgePort = parsePort(
       await deps.prompter.promptInput(`Enter bridge port [${existingBridgePort}]:`),
       existingBridgePort,
@@ -1282,12 +1336,14 @@ async function runSetupSteps(io: WizardIo, ctx: SetupContext): Promise<SetupOutc
 
   // Enter saves. After a dozen answers, Enter meaning "throw it all away" was
   // the single most expensive keystroke in the wizard.
-  const finalConfirm = await deps.prompter.promptConfirm(
-    `Save configuration to "${configPath}"?`,
-    { defaultYes: true },
-  )
-  if (!isYesDefaultYes(finalConfirm)) {
-    return { kind: "declined", preflight }
+  if (quick === undefined) {
+    const finalConfirm = await deps.prompter.promptConfirm(
+      `Save configuration to "${configPath}"?`,
+      { defaultYes: true },
+    )
+    if (!isYesDefaultYes(finalConfirm)) {
+      return { kind: "declined", preflight }
+    }
   }
 
   // ── Persist directories, config, and secrets (0600) ─────────────────
@@ -1329,8 +1385,8 @@ async function runSetupSteps(io: WizardIo, ctx: SetupContext): Promise<SetupOutc
   // confirmation: the unit is `KeepAlive`, so loading one whose config does not
   // match turns a setup mistake into a restart loop.
   let daemon: DaemonOutcome | undefined
-  if (role !== "orchestrator") {
-    daemon = await installAndMaybeStartDaemon(io, env, profileName, ingressModeOf(baseBridge))
+  if (role !== "orchestrator" && quick === undefined) {
+    daemon = await installAndMaybeStartDaemon(io, env, profileName, ingressModeOf(baseBridge), runtime, paths)
   }
 
   return {
@@ -1343,6 +1399,18 @@ async function runSetupSteps(io: WizardIo, ctx: SetupContext): Promise<SetupOutc
     updated: existing !== null,
     ...(daemon !== undefined ? { daemon } : {}),
   }
+}
+
+/**
+ * The quickstart's agent id. A named profile is its own id; the "default"
+ * profile is named after the machine, because every machine has a "default"
+ * profile and two peers with one id cannot pair.
+ */
+export function quickstartAgentId(profileName: string, tailscaleHostname: string | null, osHostname: string = hostname()): string {
+  if (profileName !== "default") return profileName
+  const raw = (tailscaleHostname ?? osHostname).split(".")[0] ?? ""
+  const slug = raw.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 63)
+  return /^[a-z0-9]/.test(slug) ? slug : "default"
 }
 
 function ingressModeOf(bridge: Record<string, unknown>): DaemonIngressMode {
@@ -1385,51 +1453,61 @@ async function promptProjectPath(
   }
 }
 
+/**
+ * Step 5 of the full wizard: offer to start the bridge as the profile's user
+ * service — the same thing `aibr start` does. Nothing is written unless the
+ * operator says yes: a unit on disk that nobody started is a second way of
+ * running the node that `aibr status` would have to explain.
+ */
 async function installAndMaybeStartDaemon(
   io: WizardIo,
   env: Record<string, string | undefined>,
   profileName: string,
   ingressMode: DaemonIngressMode,
+  runtime: RuntimeKind | null,
+  paths: ProfilePaths,
 ): Promise<DaemonOutcome> {
   const install = io.installDaemon ?? installDaemonUnit
   const load = io.loadDaemon ?? loadDaemonUnit
+  const startCommand = `aibr start --profile ${profileName}`
+  const activate = await io.prompter.promptConfirm(
+    `Start the bridge now as a user service (${startCommand}; it restarts on failure and at login)?`,
+  )
+  if (!isExplicitYes(activate)) {
+    return { installed: false, unitPath: null, command: startCommand, stopCommand: null, started: false, error: null }
+  }
   let daemonUnit: Awaited<ReturnType<typeof installDaemonUnit>> | null = null
-  let daemonError: string | null = null
   try {
+    const home = env.HOME !== undefined && env.HOME !== "" ? env.HOME : homedir()
     daemonUnit = await install({
       profile: profileName,
       skipLoad: true,
       ingressMode,
-      ...(env.HOME !== undefined && env.HOME !== "" ? { homeDir: env.HOME } : {}),
+      withOpencode: runtime === "opencode" && ingressMode === "engine",
+      entry: currentAibrEntry(),
+      logPath: bridgeLogPath(paths.stateDir),
+      environment: serviceEnvironment(env, home),
+      homeDir: home,
     })
   } catch (error) {
-    // Not fatal: the profile and its secrets are already persisted, and the
-    // daemon can be supervised by hand. The operator is told, not left to
-    // discover it later from a `status` that reports nothing running.
-    daemonError = String(error)
+    return { installed: false, unitPath: null, command: startCommand, stopCommand: null, started: false, error: String(error) }
   }
-
-  let daemonStarted = false
-  if (daemonUnit?.installed === true) {
-    const activate = await io.prompter.promptConfirm(
-      `Start the daemon now? (${daemonUnit.command})`,
-    )
-    if (isExplicitYes(activate)) {
-      try {
-        await load({ unitPath: daemonUnit.unitPath })
-        daemonStarted = true
-      } catch (error) {
-        daemonError = String(error)
-      }
+  let daemonError: string | null = null
+  let started = false
+  if (daemonUnit.installed) {
+    try {
+      await load({ unitPath: daemonUnit.unitPath })
+      started = true
+    } catch (error) {
+      daemonError = String(error)
     }
   }
-
   return {
-    installed: daemonUnit?.installed ?? false,
-    unitPath: daemonUnit?.unitPath ?? null,
-    command: daemonUnit?.command ?? null,
-    stopCommand: daemonUnit?.stopCommand ?? null,
-    started: daemonStarted,
+    installed: daemonUnit.installed,
+    unitPath: daemonUnit.unitPath,
+    command: startCommand,
+    stopCommand: `aibr stop --profile ${profileName}`,
+    started,
     error: daemonError,
   }
 }

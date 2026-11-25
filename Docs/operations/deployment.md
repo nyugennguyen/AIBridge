@@ -25,62 +25,39 @@ In larger deployments, N nodes participate in a mesh. Each node defines:
 
 ## 2. Process Supervision
 
-### 2.1 Headless tmux Sessions (Default)
-
-Launch the managed session using:
+One run model per platform: `aibr start` installs and loads the profile's **user service**; `aibr start --foreground` runs the same processes in tmux for development. Both run `aibr serve --profile <name>` (and, on an OpenCode worker, `opencode serve` on `127.0.0.1`), both bind the same port, and `aibr stop --profile <name>` stops either.
 
 ```bash
-aibr start --profile <name>
+aibr start --profile <name>     # install + load the service, wait for /health
+aibr status --profile <name>    # launchd / systemd / tmux, and /health
+aibr logs --profile <name> -f   # ~/.local/state/aibridge/<name>/logs/aibridge.log
+aibr stop --profile <name>      # unload and remove the service; kill the tmux session
 ```
 
-This launches a detached tmux session named `aibridge-<profile>` with separate windows for `opencode` and `aibridge`.
+The service restarts the bridge on failure and at login. Its stdout and stderr go to the profile's log file, which is also where `aibr serve` writes its own lines (startup, listen address, one line per request: method, path, status, duration — never headers or bodies). The unit carries the installing shell's `PATH` and XDG directories and invokes `aibr` by absolute path; it contains no secret.
 
-To inspect or attach:
+### 2.1 macOS launchd
+
+`aibr start` writes `~/Library/LaunchAgents/com.aibridge.<profile>.plist` and loads it with `launchctl bootstrap gui/<uid>` (falling back to `user/<uid>` on a Mac with no GUI session, e.g. over SSH). `aibr stop` runs `launchctl bootout` and removes the file. The shared unit older versions wrote (`com.aibridge.daemon.plist`) is replaced the first time `aibr start` runs for the profile it served.
+
+### 2.2 Linux systemd (user)
+
+`aibr start` writes `~/.config/systemd/user/aibridge-<profile>.service`, then runs `systemctl --user daemon-reload`, `enable`, and `restart`. `aibr stop` runs `systemctl --user disable --now` and removes the file. systemd stops user services at logout unless lingering is enabled; on a server:
 
 ```bash
-tmux attach -t aibridge-<profile>
+sudo loginctl enable-linger "$USER"
 ```
 
-To stop the session:
+`aibr doctor` warns when it is off. Without a user bus (a container, `su` without a login session) `aibr start` fails with the systemd error; use `aibr start --foreground` there.
+
+### 2.3 tmux (`--foreground`)
 
 ```bash
-tmux kill-session -t aibridge-<profile>
+aibr start --profile <name> --foreground
+tmux attach -t aibridge-<name>
 ```
 
-### 2.2 macOS launchd Integration
-
-`aibr setup` generates user agent launchd definitions located at:
-`~/Library/LaunchAgents/com.aibridge.<profile>.plist`
-
-Manage the service using `launchctl`:
-
-```bash
-# Load and start service
-launchctl load ~/Library/LaunchAgents/com.aibridge.<profile>.plist
-
-# Stop and unload service
-launchctl unload ~/Library/LaunchAgents/com.aibridge.<profile>.plist
-```
-
-### 2.3 Linux systemd Integration
-
-On Debian/Ubuntu Linux systems, systemd user services are written to:
-`~/.config/systemd/user/aibridge-<profile>.service`
-
-Manage via `systemctl --user`:
-
-```bash
-# Reload systemd configuration
-systemctl --user daemon-reload
-
-# Enable on boot and start immediately
-systemctl --user enable --now aibridge-<profile>.service
-
-# Inspect service logs
-journalctl --user -u aibridge-<profile>.service -f
-```
-
----
+The detached session `aibridge-<profile>` has an `opencode` window (OpenCode workers) and a `bridge` window. Windows stay open when their process exits (`remain-on-exit`), so a crash stays readable.
 
 ## 3. Two-Tier Admission & Worker Operations
 
@@ -127,8 +104,7 @@ aibr worker --profile <profile> --ipc-publish
 # Update global CLI package
 bun install -g @nyugennguyen/aibridge
 
-# Restart existing sessions
-tmux kill-session -t aibridge-<profile>
+# Restart the bridge with the new version
 aibr start --profile <profile>
 ```
 
@@ -170,11 +146,9 @@ echo "State:  ${XDG_STATE_HOME:-$HOME/.local/state}/aibridge/<profile>"
 
 To decommission a specific profile (e.g. `<profile>`) without affecting other profiles on the machine:
 
-1. **Stop active services:** Ensure tmux sessions and supervisor services for the profile are terminated:
+1. **Stop active services:** unload the profile's user service and kill its tmux session:
    ```bash
-   tmux kill-session -t aibridge-<profile>
-   # If using systemd (Linux): systemctl --user stop aibridge-<profile>.service
-   # If using launchd (macOS): launchctl unload ~/Library/LaunchAgents/com.aibridge.<profile>.plist
+   aibr stop --profile <profile>
    ```
 2. **Inspect and back up data:** Review the files before deletion. Archive any audit databases or tokens you may need to preserve:
    ```bash

@@ -43,18 +43,25 @@ Each returns `Error: unknown command` / `unknown flag`.
 Run in order. Stop at the first failure.
 
 ```bash
+aibr doctor  -p <profile>    # verify + status + a signed ping of every agents[] peer, with fixes
 aibr verify  -p <profile>    # deps, tailscale, config Zod, secret perms. Exit 0/1.
-aibr status  -p <profile>    # tmux session + 127.0.0.1:<port>/health
+aibr status  -p <profile>    # user service (launchd/systemd) or tmux, + <bridge host>:<port>/health
+aibr ping <peer> -p <profile> # signed no-op /trigger, waits for completion and the /report callback
+aibr logs    -p <profile>    # <state>/logs/aibridge.log (-f to follow)
 aibr bundle  -p <profile>    # JSON: integrity, config shape, redacted errors
 ```
 
-`aibr status` returns exactly three states: `healthy`, `session_missing`, `bridge_unavailable`
-(`src/host/tmux.ts:23-26`).
+`aibr status` states: `healthy` (with what runs it: `launchd`, `systemd`, `tmux`, `unmanaged`),
+`not_running`, `bridge_unavailable`, `no_bridge` (orchestrator) — `decideStatus` in
+`src/cli/service.ts`. `session_missing` is only the tmux-only answer of `src/host/tmux.ts`.
 
 **`healthy` proves almost nothing.** The probe hits `/health`, which has **no auth hook** and
 calls into opencode. It cannot detect a token mismatch, a bad allowlist, or a dead worker.
 A green `status` plus a failing `/trigger` is the normal signature of a credential or
-authorization problem — see below.
+authorization problem — see below. **`aibr ping` is the check that proves it**: capability
+`aibr.ping` (`src/jobs/ping.ts`) goes through the bearer, the node signature and the
+`allowed_sources` lookup, completes without a runtime, and reports back; its output names the
+stage that failed (`dispatch`, `job`, `callback`).
 
 ## Status code → cause
 
@@ -88,15 +95,19 @@ Write tokens with `printf '%s'`, never `echo` — a trailing newline becomes par
 
 ## Where output actually goes
 
-**There are no log files.** `Fastify({ logger: false })` (`src/server/app.ts:40`) and
-`StructuredLogger` is never instantiated outside tests. The runbook's
-`~/.aibridge/profiles/<profile>/logs/worker.log` is fiction.
+**One log file per profile:** `~/.local/state/aibridge/<profile>/logs/aibridge.log`
+(`src/host/logs.ts`), printed by `aibr logs`. `aibr serve` writes startup, the listen address,
+startup failures and one line per request (method, path, status, duration — no headers, no
+bodies); the user service (`aibr start`) appends the process's stdout/stderr, so crashes land
+there too. Fastify's own logger stays off and `StructuredLogger` is still test-only. The
+runbook's `~/.aibridge/profiles/<profile>/logs/worker.log` is fiction.
 
-Real sources of truth:
+Other sources of truth:
 
 ```bash
-tmux capture-pane -p -t aibridge-<profile>:bridge -S -2000   # bridge stdout
-tmux capture-pane -p -t aibridge-<profile>:opencode          # opencode serve
+aibr logs -p <profile> -f                                     # the bridge log
+tmux capture-pane -p -t aibridge-<profile>:bridge -S -2000   # --foreground only (remain-on-exit)
+tmux capture-pane -p -t aibridge-<profile>:opencode          # --foreground, opencode serve
 cat ~/.local/state/aibridge/<profile>/jobs/<job_id>.json     # authoritative job record
 grep -n "<session_id>" ~/.local/share/opencode/log/opencode.log   # opencode's own log
 ```
@@ -118,7 +129,7 @@ state    ~/.local/state/aibridge/<profile>/{jobs/*.json,tasks.md,egress_outbox.d
 
 Repo `.aibridge/` is only used by the legacy `bun run dev` entrypoint (`src/index.ts:11`).
 
-To reset: `tmux kill-session -t aibridge-<profile>` first, then `rm -rf ~/.local/state/aibridge/<profile>`.
+To reset: `aibr stop -p <profile>` first (service and tmux), then `rm -rf ~/.local/state/aibridge/<profile>`.
 Never delete terminal outbox rows to clear a backlog — they are forensic evidence and retention
 is enforced in `src/storage/outbox-repair.ts`.
 
@@ -209,8 +220,7 @@ shipped broken this way (`Docs/implementation-reports/milestone-7-progress.md:10
 ## Red flags
 
 - Repeating a command found in `Docs/architecture/failure-modes-and-recovery.md` without grepping `src/cli.ts:152` first.
-- Suggesting `aibr db *`, or any `logs/` path.
-- Looking for a log file.
+- Suggesting `aibr db *`, or a `logs/` path other than `<state>/logs/aibridge.log`.
 - Treating `aibr status: healthy` as proof auth or authorization works.
 - Concluding "opencode is unreachable" from a job timeout without grepping opencode's own log.
 - Concluding the router rejected an unauthorized request — that is by design.
@@ -220,7 +230,7 @@ shipped broken this way (`Docs/implementation-reports/milestone-7-progress.md:10
 | Mistake | Correct |
 |---|---|
 | `aibr db check` | `sqlite3 <state>/egress_outbox.db "PRAGMA integrity_check;"` |
-| `tail -f .../logs/worker.log` | `tmux capture-pane -p -t aibridge-<p>:bridge -S -2000` |
+| `tail -f .../logs/worker.log` | `aibr logs -p <p> -f` |
 | `ls .aibridge/jobs/` | `ls ~/.local/state/aibridge/<profile>/jobs/` |
 | `echo "$TOK" > secrets/bearer_token` | `printf '%s' "$TOK" > ...` (write-once; delete first) |
 | `bunx vitest run` from a subdir | run from repo root |

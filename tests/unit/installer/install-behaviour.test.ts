@@ -30,13 +30,16 @@ describe("install.sh — /dev/tty prompts (C1)", () => {
 
   it("aborts with guidance when there is no tty and no --yes", () => {
     // detached => new session => no controlling terminal => /dev/tty unusable
-    const r = spawnSync("bash", [SCRIPT], {
-      encoding: "utf8",
+    // `detached` is honoured by spawnSync at runtime but missing from its
+    // typings, so the options are built first to skip the excess-property check.
+    const options = {
+      encoding: "utf8" as const,
       detached: true,
-      stdio: ["pipe", "pipe", "pipe"],
+      stdio: ["pipe", "pipe", "pipe"] as ("pipe")[],
       input: "",
       timeout: 15_000,
-    })
+    }
+    const r = spawnSync("bash", [SCRIPT], options)
     expect(r.status).toBe(1)
     expect(r.stderr).toContain("--yes")
     expect(r.stderr).toContain("download the script")

@@ -1,7 +1,7 @@
 # Configuration Guide
 
 > **Status:** Current  
-> **Applies to:** AIBridge 3.0.0  
+> **Applies to:** AIBridge 3.1.0  
 > **Owner:** Maintainers  
 
 AIBridge configurations define network binding, security credentials, project boundaries, agent permissions, and routing policies. Configurations are validated against strict Zod schemas (`src/config/schemas.ts`) and serialized to XDG profile directories.

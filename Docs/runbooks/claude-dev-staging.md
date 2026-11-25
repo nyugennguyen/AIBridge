@@ -1,7 +1,7 @@
 # Runbook: Claude Code dev → staging
 
 > **Status:** Current
-> **Applies to:** the CLI built from this tree (Claude runtime, request signing, operator approval)
+> **Applies to:** AIBridge 3.1.0
 > **Owner:** Maintainers
 
 This runbook is for the operator of a two-node setup: a **dev** machine where Claude Code acts as the orchestrator through the AIBridge plugin, and a **staging** worker (a VPS or cloud VM) that runs Claude Code jobs under capability profiles. It is Phase 7 of the [Claude adapter & plugin plan](../implementation-plans/claude-adapter-and-plugin.md).

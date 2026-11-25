@@ -1,7 +1,7 @@
 # Pairing nodes
 
 > **Status:** Current
-> **Applies to:** the CLI built from this tree
+> **Applies to:** AIBridge 3.1.0
 > **Owner:** Maintainers
 
 Pairing connects an orchestrator (for example Claude Code on your workstation) to a worker without copying a bearer token by hand. Both nodes exchange ed25519 public keys once and pin them; from then on every `/trigger` and `/report` can be signed and verified. Design: [ADR 0012](../adr/0012-request-signing-and-pairing.md).

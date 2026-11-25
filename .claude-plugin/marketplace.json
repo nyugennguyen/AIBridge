@@ -7,7 +7,7 @@
       "name": "aibridge",
       "source": "./plugins/aibridge",
       "description": "Use Claude Code as the orchestrator that dispatches work to remote AIBridge worker nodes.",
-      "version": "3.0.0"
+      "version": "3.1.0"
     }
   ]
 }

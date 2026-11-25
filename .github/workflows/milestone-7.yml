@@ -83,28 +83,29 @@ jobs:
 
           echo "Static binary verification passed: 0 NEEDED entries on musl targets."
 
-      - name: Measure binary size against the 2 MiB bound
+      - name: Measure router binary size against the bound (ADR 0008 §13)
         id: size
-        # Deliberately does NOT fail the job. The bound is currently MISSED
-        # (2,222,768 bytes on x86_64 musl) and `set -e` would abandon the run here,
-        # skipping the systemd, provisioning and nftables checks -- which are the
-        # verifications this milestone actually needs. So this step records the
-        # verdict and the final gate below enforces it: every check runs and
-        # reports, and the job still ends red.
+        # Deliberately does NOT fail the job. If the bound is missed, `set -e`
+        # would abandon the run here and skip the systemd, provisioning and
+        # nftables checks -- which are the verifications this milestone actually
+        # needs. So this step records the verdict and the final gate below
+        # enforces it: every check runs and reports, and the job still ends red.
+        # Last measured: 2,801,680 B x86_64 / 2,616,144 B aarch64 (ADR 0008 §13).
         run: |
           set -uo pipefail
-          # Amended from 2097152 (2.00 MiB) to 2359296 (2.25 MiB) per ADR 0008 §12 (M8.9)
-          echo "size_bound_bytes=2359296" >> "$GITHUB_OUTPUT"
+          # Amended from 2097152 (2.00 MiB) to 2359296 (2.25 MiB) per ADR 0008 §12 (M8.9),
+          # then to 3145728 (3.00 MiB) per ADR 0008 §13 (Claude runtime config contract).
+          echo "size_bound_bytes=3145728" >> "$GITHUB_OUTPUT"
           echo "legacy_bound_bytes=2097152" >> "$GITHUB_OUTPUT"
           worst=0
           for bin in dist-bin/aibr-router-x86_64-unknown-linux-musl dist-bin/aibr-router-aarch64-unknown-linux-musl; do
             size_bytes=$(stat -c%s "$bin")
-            echo "$bin size: $size_bytes bytes (amended bound: 2359296 bytes per ADR 0008 §12; original: 2097152)"
+            echo "$bin size: $size_bytes bytes (amended bound: 3145728 bytes per ADR 0008 §13; original: 2097152)"
             [ "$size_bytes" -gt "$worst" ] && worst=$size_bytes
           done
           echo "worst_size_bytes=$worst" >> "$GITHUB_OUTPUT"
-          if [ "$worst" -gt 2359296 ]; then
-            echo "OVER BOUND by $((worst - 2359296)) bytes."
+          if [ "$worst" -gt 3145728 ]; then
+            echo "OVER BOUND by $((worst - 3145728)) bytes."
             echo "verdict=fail" >> "$GITHUB_OUTPUT"
           else
             echo "verdict=pass" >> "$GITHUB_OUTPUT"
@@ -150,7 +151,7 @@ jobs:
           # there from `router/` so `crates/*` could be siblings of `router/`
           # (Cargo refuses a member that is not below its workspace root). The
           # target directory therefore moved with it. `-p aibr-router` keeps this
-          # step building only the router, so the 2.25 MiB size bound below still
+          # step building only the router, so the 3.00 MiB size bound below still
           # measures the same binary it was calibrated on.
           BIN=./target/release/aibr-router
           cargo build --release -p aibr-router
@@ -193,7 +194,7 @@ jobs:
           sudo nft -c -f packaging/nftables/aibridge.nft
           echo "nftables syntax verification passed."
 
-      - name: Enforce the 2 MiB binary bound
+      - name: Enforce the router binary size bound (ADR 0008 §13)
         if: always()
         # The one gate this job fails on, run LAST so that a size regression cannot
         # hide the systemd, provisioning and nftables results behind it.

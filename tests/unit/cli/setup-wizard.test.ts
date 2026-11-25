@@ -697,6 +697,12 @@ describe("node role and runtime", () => {
     expect(saved.runtime).toEqual({ kind: "claude" })
     expect(prompter.secrets).toEqual([])
     expect(prompter.inputs.some((label) => label.includes("Agent runtime"))).toBe(false)
+    // A new Claude worker must be usable without hand-editing JSON: without
+    // capability_profiles every /trigger is a 403 "Unknown capability profile".
+    expect(Object.keys(saved.capability_profiles as object)).toEqual(["investigate", "run-tests"])
+    const projects = saved.projects as Array<{ capabilities: string[] }>
+    expect(projects[0]!.capabilities).toEqual(["investigate", "run-tests"])
+    expect(bridgeConfigSchema.safeParse(saved).success).toBe(true)
   })
 
   it("asks for the runtime only when both are installed", async () => {

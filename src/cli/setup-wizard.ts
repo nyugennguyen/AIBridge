@@ -269,6 +269,49 @@ export const REACHABILITY_NOT_AUTHENTICATION =
 const DEFAULT_ENROLLED_PEER_CAPABILITIES = ["development", "orchestration"] as const
 
 /**
+ * Capability profiles a NEW Claude worker starts with. Without them every
+ * `/trigger` on a freshly set-up Claude node is a 403 "Unknown capability
+ * profile" (found by the dev → staging end-to-end test), so a new user would have
+ * to hand-edit JSON before anything works. Both are conservative: `investigate`
+ * is read-only, `run-tests` may run the project's test command but not edit.
+ * Running tests still executes repository code — the same caveat as the plan's
+ * "code from dev is untrusted" risk. Write-capable or approval-gated profiles are
+ * left to the operator on purpose. The safety floor in claude-job-runner.ts is
+ * applied on top of these.
+ */
+export const DEFAULT_CLAUDE_CAPABILITY_PROFILES = {
+  investigate: {
+    allow: ["Read", "Grep", "Glob", "Bash(git log *)", "Bash(git diff *)", "Bash(git status *)", "Bash(git show *)"],
+    deny: ["Edit", "Write", "NotebookEdit"],
+    max_budget_usd: 1,
+    timeout_s: 900,
+  },
+  "run-tests": {
+    allow: [
+      "Read", "Grep", "Glob",
+      "Bash(npm test)", "Bash(npm test *)", "Bash(npm run test *)",
+      "Bash(bun test)", "Bash(bun test *)", "Bash(bun run test)", "Bash(bun run test *)",
+      "Bash(pytest *)", "Bash(cargo test *)", "Bash(go test *)",
+    ],
+    deny: ["Edit", "Write", "NotebookEdit"],
+    max_budget_usd: 2,
+    timeout_s: 1800,
+  },
+} as const
+
+/** What a peer may ask a Claude worker for by default: exactly the default profiles. */
+const DEFAULT_CLAUDE_PEER_CAPABILITIES = Object.keys(DEFAULT_CLAUDE_CAPABILITY_PROFILES)
+
+/** Swap the OpenCode-era default capability list for the Claude one; leave operator choices alone. */
+function claudeCapabilities(raw: unknown): string[] {
+  const capabilities = Array.isArray(raw) ? raw.filter((c): c is string => typeof c === "string") : []
+  const isLegacyDefault =
+    capabilities.length === DEFAULT_ENROLLED_PEER_CAPABILITIES.length &&
+    DEFAULT_ENROLLED_PEER_CAPABILITIES.every((c) => capabilities.includes(c))
+  return isLegacyDefault ? [...DEFAULT_CLAUDE_PEER_CAPABILITIES] : [...capabilities]
+}
+
+/**
  * Answers to the "which peer do you want to enrol" question.
  *
  * `skip` is the load-bearing one and it is always available, including as the
@@ -1075,6 +1118,16 @@ async function runSetupSteps(io: WizardIo, ctx: SetupContext): Promise<SetupOutc
   // (terminal, ingress_mode, custom permissions, extra projects) survive an
   // update. Keys it does author are overwritten below.
   const { runtime: _previousRuntime, ...baseWithoutRuntime } = base
+  // A Claude worker answers capabilities with capability_profiles, so the
+  // OpenCode-era defaults ("development", "orchestration") would make every
+  // trigger a 403. Only the untouched default is swapped; typed lists are kept.
+  const claudeWorker = runtime === "claude" && role !== "orchestrator"
+  const peerSources = claudeWorker
+    ? peers.sources.map((src) => ({ ...src, capabilities: claudeCapabilities(src.capabilities) }))
+    : peers.sources
+  const peerAgents = claudeWorker
+    ? peers.agents.map((agent) => ({ ...agent, capabilities: claudeCapabilities(agent.capabilities) }))
+    : peers.agents
   const config: Record<string, unknown> = {
     ...baseWithoutRuntime,
     agent_id: agentId,
@@ -1109,7 +1162,7 @@ async function runSetupSteps(io: WizardIo, ctx: SetupContext): Promise<SetupOutc
       // `source_agent_id` AND capability membership, and `/trigger` answers 403 to
       // a source that is in `agents[]` but absent from `allowed_sources[]`. Both
       // come out of `configurePeers` together.
-      allowed_sources: peers.sources,
+      allowed_sources: peerSources,
     },
     permissions: isRecord(base.permissions)
       ? base.permissions
@@ -1125,11 +1178,16 @@ async function runSetupSteps(io: WizardIo, ctx: SetupContext): Promise<SetupOutc
         path: projectPath,
         capabilities: Array.isArray(firstProject?.capabilities)
           ? firstProject.capabilities
-          : ["development", "orchestration"],
+          : claudeWorker
+            ? [...DEFAULT_CLAUDE_PEER_CAPABILITIES]
+            : ["development", "orchestration"],
       },
       ...existingProjects.slice(1),
     ],
-    agents: peers.agents,
+    agents: peerAgents,
+    ...(claudeWorker && !isRecord(base.capability_profiles)
+      ? { capability_profiles: DEFAULT_CLAUDE_CAPABILITY_PROFILES }
+      : {}),
     timeouts: isRecord(base.timeouts)
       ? base.timeouts
       : {

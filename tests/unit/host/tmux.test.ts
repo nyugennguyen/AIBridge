@@ -444,3 +444,50 @@ describe("statusProfile", () => {
     expect(result.sessionName).toBe("custom-session")
   })
 })
+
+// ── startProfile, runtime claude ────────────────────────────────────────
+
+describe("startProfile with runtime claude", () => {
+  it("starts only the bridge window, with no opencode window", async () => {
+    const runner = new SequenceProcessRunner(
+      entries([
+        ["tmux has-session -t aibridge-test-profile", failureResult()],
+        [
+          "tmux new-session -d -s aibridge-test-profile -n bridge aibr serve --profile test-profile",
+          successResult(),
+        ],
+      ]),
+    )
+    const deps = testDeps({
+      runner,
+      env: { CLAUDE_CODE_OAUTH_TOKEN: "oauth-secret", OPENCODE_SERVER_PASSWORD: "oc-secret", AIBRIDGE_CONFIG: "/cfg.json" },
+    })
+
+    const result = await startProfile(deps, testProfile({ runtimeKind: "claude", opencodePort: undefined }))
+
+    expect(result.kind).toBe("started")
+    expect(runner.calls).toHaveLength(2)
+    for (const call of runner.calls) {
+      expect(call.argv).not.toContain("_opencode")
+      expect(call.argv.join(" ")).not.toContain("oauth-secret")
+    }
+    const bridgeEnv = runner.calls[1]!.options?.env
+    expect(bridgeEnv?.CLAUDE_CODE_OAUTH_TOKEN).toBe("oauth-secret")
+    expect(bridgeEnv?.AIBRIDGE_CONFIG).toBe("/cfg.json")
+  })
+
+  it("does not forward Claude credentials to an OpenCode profile's bridge", async () => {
+    const runner = new SequenceProcessRunner(entries([["tmux has-session -t aibridge-test-profile", failureResult()]]), () => successResult())
+    await startProfile(testDeps({ runner, env: { ANTHROPIC_API_KEY: "sk-ant-x" } }), testProfile())
+    expect(runner.calls[1]!.argv).toContain("_opencode")
+    expect(runner.calls[2]!.options?.env?.ANTHROPIC_API_KEY).toBeUndefined()
+  })
+
+  it("returns tmux_error when the bridge session cannot be created", async () => {
+    const runner = new SequenceProcessRunner(entries([["tmux has-session -t aibridge-test-profile", failureResult()]]), () =>
+      failureResult("no server"),
+    )
+    const result = await startProfile(testDeps({ runner }), testProfile({ runtimeKind: "claude" }))
+    expect(result).toEqual({ kind: "tmux_error", sessionName: "aibridge-test-profile", stderr: "no server" })
+  })
+})

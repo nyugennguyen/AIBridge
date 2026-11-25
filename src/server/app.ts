@@ -15,6 +15,7 @@ import { registerReportRoute } from "./routes/report.js"
 import { registerTriggerRoute } from "./routes/trigger.js"
 import { registerOrchestrationRoutes } from "./routes/orchestration.js"
 import type { ShadowIngressMirror } from "./shadow.js"
+import type { ClaudeJobRunner } from "../runtime/claude-job-runner.js"
 import type {
   NotificationBus,
   NotificationStore,
@@ -49,6 +50,12 @@ export interface AppDependencies {
   opencodeClient: OpencodeClient
   callbackReporter: CallbackReporter
   monitorSession: (job: JobRecord) => Promise<void>
+  /**
+   * Executes `/trigger` jobs when `config.runtime.kind` is `claude`. Absent on
+   * an OpenCode node; a Claude node without one answers 503 rather than
+   * falling back to OpenCode.
+   */
+  claudeJobRunner?: Pick<ClaudeJobRunner, "start" | "monitor">
   taskGraphSyncer: TaskGraphSyncer
   shadowMirror?: ShadowIngressMirror
   /**

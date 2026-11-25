@@ -102,6 +102,9 @@ export async function startBridge(options: BridgeOptions): Promise<BridgeInstanc
     callbackReporter: runtime.callbackReporter,
     taskGraphSyncer: runtime.taskGraphSyncer,
     monitorSession: runtime.monitorSession,
+    // Present only when `runtime.kind` is `claude`; the OpenCode client above
+    // is then an inert stand-in that is never contacted.
+    ...(runtime.claudeJobRunner ? { claudeJobRunner: runtime.claudeJobRunner } : {}),
     shadowMirror,
     orchestration: options.orchestration,
     notificationStore,

@@ -196,17 +196,20 @@ describe("Phase 4 — operator approval", () => {
     expect(response.statusCode).toBe(202)
     expect(response.json()).toMatchObject({ accepted: true, status: "awaiting_approval", approve_hint: "aibr approve job_1" })
     expect(h.spawns).toHaveLength(0)
-    const job = (await h.app.inject({ method: "GET", url: "/jobs/job_1" })).json()
+    const job = (await h.app.inject({ method: "GET", url: "/jobs/job_1", headers: { authorization: "Bearer secret" } })).json()
     expect(job.status).toBe("awaiting_approval")
     expect(job.approval).toMatchObject({ status: "pending" })
     const events = await h.ledger.list()
     expect(events).toEqual([expect.objectContaining({ seq: 1, type: "approval.requested", jobId: "job_1", actor: "trigger" })])
   })
 
-  it("shell-quotes a caller-chosen job id in the approve hint", async () => {
+  it("refuses a caller-chosen job id with shell metacharacters before holding anything (3.2.0 job id charset)", async () => {
     const h = await harness()
     const response = await h.trigger({ capability: "fix-on-branch", job_id: "x;rm -rf ~" })
-    expect(response.json().approve_hint).toBe("aibr approve 'x;rm -rf ~'")
+    expect(response.statusCode).toBe(400)
+    expect(h.spawns).toHaveLength(0)
+    const accepted = await h.trigger({ capability: "fix-on-branch", job_id: "Fix-42_a" })
+    expect(accepted.json().approve_hint).toBe("aibr approve Fix-42_a")
   })
 
   it("refuses approval with the peer bearer (403), without a credential (401) and with no operator token configured (403)", async () => {
@@ -373,7 +376,7 @@ describe("Phase 5 — repo@sha pinning", () => {
     await h.monitors[0]
     expect(h.workspaces.removed).toEqual([{ repo: "app", jobId: "job_1" }])
     expect(h.reports[0]).toMatchObject({ status: "completed", sha: SHA_A })
-    const job = (await h.app.inject({ method: "GET", url: "/jobs/job_1" })).json()
+    const job = (await h.app.inject({ method: "GET", url: "/jobs/job_1", headers: { authorization: "Bearer secret" } })).json()
     expect(job).toMatchObject({ sha: SHA_A, repo: "app", ref: "main" })
   })
 
@@ -426,7 +429,7 @@ describe("Phase 5 — deterministic scripts", () => {
     expect(result.stdout_tail).not.toContain("AIBRIDGE_")
     expect(result.stdout_tail).not.toContain(OPERATOR)
     expect(result.stdout_tail).not.toContain("oauth-token-value")
-    const job = (await h.app.inject({ method: "GET", url: "/jobs/job_1" })).json()
+    const job = (await h.app.inject({ method: "GET", url: "/jobs/job_1", headers: { authorization: "Bearer secret" } })).json()
     expect(job.script_results).toEqual(h.reports[0]!.script_results)
   })
 

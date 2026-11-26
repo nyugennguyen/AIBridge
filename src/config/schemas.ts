@@ -1,4 +1,5 @@
 import { z } from "zod"
+import { jobIdSchema } from "../jobs/job-id.js"
 
 export const planStatusSchema = z.enum(["none", "submitted", "approved", "rejected"])
 export const permissionResponseSchema = z.enum(["reject", "once", "always"])
@@ -271,13 +272,14 @@ export const planMetadataSchema = z
 
 export const remoteDependencySchema = z.object({
   agent_id: z.string().min(1),
-  job_id: z.string().min(1),
+  job_id: jobIdSchema,
 })
 
 export const dependencyReferenceSchema = z.union([z.string().min(1), remoteDependencySchema])
 
 export const triggerRequestSchema = z.object({
-  job_id: z.string().min(1).optional(),
+  /** See `src/jobs/job-id.ts`: it names a file on the worker, so it is a strict charset. */
+  job_id: jobIdSchema.optional(),
   source_agent_id: z.string().min(1),
   target_agent_id: z.string().min(1),
   capability: z.string().min(1),
@@ -328,7 +330,7 @@ export const scriptResultSchema = z.object({
 })
 
 export const reportCallbackSchema = z.object({
-  job_id: z.string().min(1),
+  job_id: jobIdSchema,
   source_agent_id: z.string().min(1),
   target_agent_id: z.string().min(1),
   opencode_session_id: z.string().min(1).optional(),

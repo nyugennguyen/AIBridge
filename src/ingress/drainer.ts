@@ -20,6 +20,7 @@ import {
 import type { BridgeConfig } from "../config/types.js"
 import { RemoteReportApplyError, type DependentsOutcome, type JobManager } from "../jobs/manager.js"
 import type { JobRecord } from "../jobs/types.js"
+import { JobIdRejectedError } from "../jobs/store.js"
 import type { OpencodeClient } from "../opencode/types.js"
 import { startOpencodeSession } from "../opencode/launch.js"
 import type { TaskGraphSyncer } from "../tasks/types.js"
@@ -412,6 +413,12 @@ export class IngressDrainer {
         job_id: record.job_id,
       })
     } catch (error) {
+      // Not the same job: an id that differs from a stored one only in case
+      // would share its file on a case-insensitive filesystem.
+      if (error instanceof JobIdRejectedError) {
+        this.fail(record.job_id, claimToken, error.code.toUpperCase(), Date.now())
+        return
+      }
       const message = error instanceof Error ? error.message : "Creation failed"
       if (message.includes("already exists")) {
         // ON CONFLICT convergence: already created, acknowledge admission

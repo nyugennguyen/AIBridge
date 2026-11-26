@@ -221,9 +221,7 @@ fn emit_target(
     header.push_str(
         "// A hand edit to this file is a build failure, not a review comment: CI runs\n",
     );
-    header.push_str(
-        "// `git diff --exit-code contracts/ router/src/contracts.rs`\n",
-    );
+    header.push_str("// `git diff --exit-code contracts/ router/src/contracts.rs`\n");
     header.push_str("// after generation.\n");
     header.push_str("//\n");
     header.push_str("// Unknown keys are REJECTED, not stripped: every object schema carries\n");

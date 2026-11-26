@@ -4,6 +4,7 @@
  */
 import type { JobRecord } from "../../jobs/types.js"
 import { waitUntil } from "../../jobs/reconcile.js"
+import { LaunchRefusedError } from "../../jobs/manager.js"
 import { OpencodeLaunchError, startOpencodeSession } from "../../opencode/launch.js"
 import type { AppDependencies } from "../app.js"
 import { terminalReporter } from "./claude-dispatch.js"
@@ -31,11 +32,37 @@ export type OpencodeDispatchOutcome =
     }
   | {
       readonly ok: false
-      readonly statusCode: 400 | 500
+      readonly statusCode: 400 | 409 | 500
       readonly body: { readonly error: string; readonly code?: string }
-      /** The job is already failed and its report delivered: do neither again. */
-      readonly reported?: true
+      /**
+       * What dispatching already did to the job:
+       * - `reported`: OpenCode refused the launch; the job is failed and reported. Do neither again.
+       * - `refused`: the launch marker was refused; the job belongs to another path. Do not touch it.
+       * - `failed`: dispatching failed the job before launching it, without reporting it. Report `job`.
+       * Absent: the job was not touched; the caller fails and reports it.
+       */
+      readonly settled?:
+        | { readonly kind: "reported" }
+        | { readonly kind: "refused" }
+        | { readonly kind: "failed"; readonly job: JobRecord }
     }
+
+/**
+ * Applies a failed dispatch's `settled` to the job: fails and reports it,
+ * reports it, or leaves it alone. Never reports a job twice: only a failure
+ * written here, or one dispatching wrote and did not report, is reported.
+ */
+export async function settleFailedDispatch(
+  job: JobRecord,
+  outcome: Extract<OpencodeDispatchOutcome, { ok: false }> | { readonly body: { readonly error: string }; readonly settled?: undefined },
+  dependencies: OpencodeDispatchDependencies,
+): Promise<void> {
+  const settled = outcome.settled
+  if (settled?.kind === "reported" || settled?.kind === "refused") return
+  if (settled?.kind === "failed") return await terminalReporter(dependencies)(settled.job)
+  const failed = await dependencies.jobManager.markFailed(job.id, outcome.body.error).catch(() => undefined)
+  if (failed !== undefined) await terminalReporter(dependencies)(failed)
+}
 
 /**
  * Holds the job as `blocked` while its dependencies are unfinished, otherwise
@@ -66,8 +93,13 @@ export async function dispatchOpencodeJob(
     } catch {
       // The job already exists: fail it so it is not left `accepted` forever.
       const error = `Dependency job not found: ${dependencyId}`
-      await dependencies.jobManager.markFailed(job.id, error).catch(() => undefined)
-      return { ok: false, statusCode: 400, body: { error } }
+      const failed = await dependencies.jobManager.markFailed(job.id, error).catch(() => undefined)
+      return {
+        ok: false,
+        statusCode: 400,
+        body: { error },
+        settled: failed !== undefined ? { kind: "failed", job: failed } : { kind: "refused" },
+      }
     }
     if (dependency.status !== "completed") localDependenciesDone = false
   }
@@ -80,8 +112,13 @@ export async function dispatchOpencodeJob(
     if (options.recordInKernel) {
       const acceptance = dependencies.orchestration?.translation?.acceptTrigger(blocked)
       if (acceptance !== undefined && !acceptance.ok) {
-        await dependencies.jobManager.markFailed(job.id, acceptance.error.message)
-        return { ok: false, statusCode: 500, body: { error: acceptance.error.message, code: acceptance.error.code } }
+        const failed = await dependencies.jobManager.markFailed(job.id, acceptance.error.message)
+        return {
+          ok: false,
+          statusCode: 500,
+          body: { error: acceptance.error.message, code: acceptance.error.code },
+          settled: { kind: "failed", job: failed },
+        }
       }
     }
     await dependencies.taskGraphSyncer.syncJobToTask(taskId, "blocked", { Job: job.id })
@@ -97,8 +134,13 @@ export async function dispatchOpencodeJob(
   if (options.recordInKernel) {
     const acceptance = dependencies.orchestration?.translation?.acceptTrigger(job)
     if (acceptance !== undefined && !acceptance.ok) {
-      await dependencies.jobManager.markFailed(job.id, acceptance.error.message)
-      return { ok: false, statusCode: 500, body: { error: acceptance.error.message, code: acceptance.error.code } }
+      const failed = await dependencies.jobManager.markFailed(job.id, acceptance.error.message)
+      return {
+        ok: false,
+        statusCode: 500,
+        body: { error: acceptance.error.message, code: acceptance.error.code },
+        settled: { kind: "failed", job: failed },
+      }
     }
   }
 
@@ -106,15 +148,21 @@ export async function dispatchOpencodeJob(
   try {
     launched = await startOpencodeSession(job, { ...dependencies, reportTerminalJob: terminalReporter(dependencies) })
   } catch (error) {
+    if (error instanceof LaunchRefusedError) {
+      return { ok: false, statusCode: 409, body: { error: error.message, code: error.code }, settled: { kind: "refused" } }
+    }
     if (!(error instanceof OpencodeLaunchError)) throw error
-    return { ok: false, statusCode: 500, body: { error: error.message, code: error.code }, reported: true }
+    return { ok: false, statusCode: 500, body: { error: error.message, code: error.code }, settled: { kind: "reported" } }
   }
   const { sessionId, running } = launched
 
   await dependencies.taskGraphSyncer.syncJobToTask(taskId, "running", { Job: job.id, Session: sessionId })
 
   void dependencies.monitorSession(running).catch(async (error: unknown) => {
-    await dependencies.jobManager.markFailed(job.id, error instanceof Error ? error.message : "Session monitor failed")
+    const failed = await dependencies.jobManager
+      .markFailed(job.id, error instanceof Error ? error.message : "Session monitor failed")
+      .catch(() => undefined)
+    if (failed !== undefined) await terminalReporter(dependencies)(failed)
   })
 
   return { ok: true, job: running, status: "accepted", sessionId }
@@ -132,11 +180,9 @@ export async function relaunchOpencodeJob(
   dependencies: OpencodeDispatchDependencies,
   options: { readonly healthWaitMs?: number; readonly healthPollMs?: number } = {},
 ): Promise<void> {
-  const fail = async (error: string): Promise<void> => {
-    await dependencies.jobManager.markFailed(job.id, error).catch(() => undefined)
-    const failed = await dependencies.jobManager.getJob(job.id).catch(() => undefined)
-    if (failed?.status === "failed") await terminalReporter(dependencies)(failed)
-  }
+  // Reports only a failure written here: a job another path already ended
+  // (and reported) makes `markFailed` throw.
+  const fail = async (error: string): Promise<void> => settleFailedDispatch(job, { body: { error } }, dependencies)
   const healthy = await waitUntil(() => dependencies.opencodeClient.health(), {
     timeoutMs: options.healthWaitMs ?? 60_000,
     intervalMs: options.healthPollMs ?? 2_000,
@@ -144,7 +190,7 @@ export async function relaunchOpencodeJob(
   if (!healthy) return await fail("OpenCode server unhealthy: the job could not be relaunched after a bridge restart")
   try {
     const dispatched = await dispatchOpencodeJob(job, dependencies, { recordInKernel: false })
-    if (!dispatched.ok && dispatched.reported !== true) await fail(dispatched.body.error)
+    if (!dispatched.ok) await settleFailedDispatch(job, dispatched, dependencies)
   } catch (error) {
     await fail(error instanceof Error ? error.message : "OpenCode launch failed")
   }

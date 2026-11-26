@@ -26,6 +26,9 @@ import { OpencodeLaunchError, startOpencodeSession } from "../../src/opencode/la
 import { createSqliteDriver } from "../../src/orchestration/event-store/sqlite-driver.js"
 import type { ProcessHandle } from "../../src/runtime/claude-adapter.js"
 import { ClaudeJobRunner } from "../../src/runtime/claude-job-runner.js"
+import type { AppDependencies } from "../../src/server/app.js"
+import { launchClaudeJob } from "../../src/server/routes/claude-dispatch.js"
+import { relaunchOpencodeJob } from "../../src/server/routes/opencode-dispatch.js"
 import { buildTestApp, FakeOpencodeClient, FakeTaskGraphSyncer, InMemoryJobStore, testConfig, validTrigger } from "./fixtures.js"
 
 const OPERATOR = "operator-token-value-123"
@@ -256,8 +259,29 @@ describe("Claude runner launch failure after the marker", () => {
       reportTerminalJob,
       claudeJobRunner: runner,
     })
-    return { app, jobManager, reports, spawns: () => spawns }
+    const deps: AppDependencies = {
+      config,
+      bearerToken: "secret",
+      jobManager,
+      opencodeClient: new FakeOpencodeClient(),
+      callbackReporter,
+      monitorSession: async () => undefined,
+      taskGraphSyncer: new FakeTaskGraphSyncer(),
+      claudeJobRunner: runner,
+      reportTerminalJob,
+    }
+    return { app, jobManager, reports, deps, spawns: () => spawns }
   }
+
+  it("a refused marker (job held for approval) leaves the job untouched and reports nothing", async () => {
+    const h = await claudeHarness()
+    const held = await h.jobManager.createJob(validTrigger({ capability: "fix-on-branch" }) as never, undefined, { awaitingApproval: true })
+    const outcome = await launchClaudeJob(held, h.deps, { reportFailure: true })
+    expect(outcome).toMatchObject({ ok: false, statusCode: 409, body: { code: "launch_refused" } })
+    expect(await h.jobManager.getJob(held.id)).toEqual(held)
+    expect(h.spawns()).toBe(0)
+    expect(h.reports).toEqual([])
+  })
 
   it("/trigger: the job is failed at once and reported once", async () => {
     const h = await claudeHarness()
@@ -293,6 +317,39 @@ describe("Claude runner launch failure after the marker", () => {
     expect(approved.statusCode).toBe(500)
     expect((await h.jobManager.getJob("job_1")).status).toBe("failed")
     expect(h.reports.map((report) => `${report.job_id}:${report.status}`)).toEqual(["job_1:failed"])
+  })
+})
+
+describe("relaunchOpencodeJob never reports a job twice", () => {
+  it("leaves alone a job another path already ended (and reported)", async () => {
+    const reported: string[] = []
+    const jobManager = new JobManager(new InMemoryJobStore())
+    const job = await jobManager.createJob(validTrigger() as never)
+    await jobManager.markFailed(job.id, "ended elsewhere")
+    const opencode = new FakeOpencodeClient()
+    const deps = {
+      config: testConfig(),
+      bearerToken: "secret",
+      jobManager,
+      opencodeClient: opencode,
+      callbackReporter: new CallbackReporter({ attempts: 1, baseDelayMs: 1, fetcher: async () => new Response(null, { status: 200 }) }),
+      monitorSession: async () => undefined,
+      taskGraphSyncer: new FakeTaskGraphSyncer(),
+      reportTerminalJob: async (failed: JobRecord) => void reported.push(failed.id),
+    }
+    await relaunchOpencodeJob(job, deps)
+    expect(reported).toEqual([])
+    expect(opencode.createdSessions).toBe(0)
+    expect((await jobManager.getJob(job.id)).error).toBe("ended elsewhere")
+
+    // Unhealthy OpenCode: still no second report for an ended job.
+    const unhealthy = new (class extends FakeOpencodeClient {
+      override async health(): Promise<boolean> {
+        return false
+      }
+    })()
+    await relaunchOpencodeJob(job, { ...deps, opencodeClient: unhealthy }, { healthWaitMs: 0, healthPollMs: 1 })
+    expect(reported).toEqual([])
   })
 })
 

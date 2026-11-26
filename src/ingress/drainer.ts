@@ -450,7 +450,10 @@ export class IngressDrainer {
     })
 
     void this.#monitorSession(running).catch(async (error: unknown) => {
-      await this.#jobManager.markFailed(job.id, error instanceof Error ? error.message : "Session monitor failed")
+      const failed = await this.#jobManager
+        .markFailed(job.id, error instanceof Error ? error.message : "Session monitor failed")
+        .catch(() => undefined)
+      if (failed !== undefined) await this.#reportTerminalJob?.(failed)
     })
 
     // Second durable write: acknowledge upon successful dispatch

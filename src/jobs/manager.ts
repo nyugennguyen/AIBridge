@@ -46,6 +46,15 @@ export interface SweepOptions {
   readonly isActive?: (jobId: string) => boolean
 }
 
+/**
+ * Thrown by `markLaunchStarted` (and the runner) when a job may not be
+ * launched: it is not `accepted`, it was launched before, or another launch
+ * of it is in progress. Callers leave the job untouched and report nothing.
+ */
+export class LaunchRefusedError extends Error {
+  readonly code = "launch_refused"
+}
+
 export interface JobManagerOptions {
   /**
    * Applied to every error string before it is stored on a job. A job's
@@ -57,9 +66,15 @@ export interface JobManagerOptions {
   readonly redactError?: (text: string) => string
 }
 
+type TransitionGuard = (current: JobRecord) => boolean
+
 export class JobManager {
-  /** Job ids whose `markLaunchStarted` is in progress. */
-  private readonly launchClaims = new Set<string>()
+  /**
+   * Per-job queue: every read-modify-write of a job runs alone, so two paths
+   * (a monitor and the sweep, two launches) cannot both read the same state
+   * and both write over it.
+   */
+  private readonly jobLocks = new Map<string, Promise<unknown>>()
   private readonly redactError: (text: string) => string
 
   constructor(
@@ -99,29 +114,33 @@ export class JobManager {
    * is awaiting approval, so a second approval of the same job cannot succeed.
    */
   async approve(id: string, now = new Date().toISOString()): Promise<JobRecord> {
-    const current = await this.getJob(id)
-    if (current.status !== "awaiting_approval") throw new Error(`Job ${id} is not awaiting approval (status ${current.status})`)
-    const approval = {
-      ...(current.approval ?? { requestedAt: current.createdAt }),
-      status: "approved" as const,
-      decidedAt: now,
-      decidedBy: "operator" as const,
-    }
-    return this.transition(id, "accepted", now, { approval })
+    return this.withJobLock(id, async () => {
+      const current = await this.getJob(id)
+      if (current.status !== "awaiting_approval") throw new Error(`Job ${id} is not awaiting approval (status ${current.status})`)
+      const approval = {
+        ...(current.approval ?? { requestedAt: current.createdAt }),
+        status: "approved" as const,
+        decidedAt: now,
+        decidedBy: "operator" as const,
+      }
+      return this.write(current, "accepted", now, { approval })
+    })
   }
 
   /** Operator rejection: `awaiting_approval` -> `failed`, recording the operator's reason as the error. */
   async reject(id: string, reason: string, now = new Date().toISOString()): Promise<JobRecord> {
-    const current = await this.getJob(id)
-    if (current.status !== "awaiting_approval") throw new Error(`Job ${id} is not awaiting approval (status ${current.status})`)
-    const approval = {
-      ...(current.approval ?? { requestedAt: current.createdAt }),
-      status: "rejected" as const,
-      decidedAt: now,
-      decidedBy: "operator" as const,
-      reason,
-    }
-    return this.transition(id, "failed", now, { approval, error: reason })
+    return this.withJobLock(id, async () => {
+      const current = await this.getJob(id)
+      if (current.status !== "awaiting_approval") throw new Error(`Job ${id} is not awaiting approval (status ${current.status})`)
+      const approval = {
+        ...(current.approval ?? { requestedAt: current.createdAt }),
+        status: "rejected" as const,
+        decidedAt: now,
+        decidedBy: "operator" as const,
+        reason,
+      }
+      return this.write(current, "failed", now, { approval, error: reason })
+    })
   }
 
   async attachSession(id: string, opencodeSessionId: string, now = new Date().toISOString()): Promise<JobRecord> {
@@ -148,10 +167,13 @@ export class JobManager {
    * summary and findings the report callback is built from.
    */
   async recordRuntimeResult(id: string, runtimeResult: RuntimeJobResult, now = new Date().toISOString()): Promise<JobRecord> {
-    const current = await this.getJob(id)
-    const next: JobRecord = { ...current, runtimeResult, updatedAt: now }
-    await this.store.save(next)
-    return next
+    return this.withJobLock(id, async () => {
+      const current = await this.getJob(id)
+      if (TERMINAL_STATUSES.includes(current.status)) throw new Error(`Job ${id} is already ${current.status}`)
+      const next: JobRecord = { ...current, runtimeResult, updatedAt: now }
+      await this.store.save(next)
+      return next
+    })
   }
 
   /**
@@ -163,18 +185,16 @@ export class JobManager {
    * second launch of the same job never gets past this point.
    */
   async markLaunchStarted(id: string, now = new Date().toISOString()): Promise<JobRecord> {
-    // Claimed synchronously, before the first await: two launch paths racing
-    // on the same job in this process cannot both read "not launched yet".
-    if (this.launchClaims.has(id)) throw new Error(`Job ${id} is already being launched`)
-    this.launchClaims.add(id)
-    try {
+    // Checked and written under the job's lock: two launch paths racing on
+    // the same job in this process cannot both read "not launched yet".
+    return this.withJobLock(id, async () => {
       const current = await this.getJob(id)
-      if (current.status !== "accepted") throw new Error(`Job ${id} cannot be launched from status ${current.status}`)
-      if (current.launchStartedAt !== undefined) throw new Error(`Job ${id} was already launched at ${current.launchStartedAt}`)
-      return await this.transition(id, "accepted", now, { launchStartedAt: now })
-    } finally {
-      this.launchClaims.delete(id)
-    }
+      if (current.status !== "accepted") throw new LaunchRefusedError(`Job ${id} cannot be launched from status ${current.status}`)
+      if (current.launchStartedAt !== undefined) {
+        throw new LaunchRefusedError(`Job ${id} was already launched at ${current.launchStartedAt}`)
+      }
+      return this.write(current, "accepted", now, { launchStartedAt: now })
+    })
   }
 
   async markRunning(id: string, now = new Date().toISOString()): Promise<JobRecord> {
@@ -193,8 +213,22 @@ export class JobManager {
     })
   }
 
-  async markFailed(id: string, error: string, now = new Date().toISOString()): Promise<JobRecord> {
-    return this.transition(id, "failed", now, { error: this.redactError(error) })
+  /**
+   * Fails the job. `options.maxLength` truncates the error AFTER redaction,
+   * so a secret cut by the limit cannot leave its prefix behind.
+   */
+  async markFailed(
+    id: string,
+    error: string,
+    now = new Date().toISOString(),
+    options: { readonly maxLength?: number } = {},
+  ): Promise<JobRecord> {
+    const redacted = this.redactError(error)
+    const stored =
+      options.maxLength !== undefined && redacted.length > options.maxLength
+        ? `${redacted.slice(0, Math.max(0, options.maxLength - 1))}…`
+        : redacted
+    return this.transition(id, "failed", now, { error: stored })
   }
 
   async markTimedOut(id: string, now = new Date().toISOString()): Promise<JobRecord> {
@@ -207,11 +241,13 @@ export class JobManager {
     error?: string,
     now = new Date().toISOString(),
   ): Promise<JobRecord> {
-    const current = await this.getJob(id)
-    const callbackDelivery = error ? { status, attemptedAt: now, error } : { status, attemptedAt: now }
-    const next: JobRecord = { ...current, callbackDelivery, updatedAt: now }
-    await this.store.save(next)
-    return next
+    return this.withJobLock(id, async () => {
+      const current = await this.getJob(id)
+      const callbackDelivery = error ? { status, attemptedAt: now, error } : { status, attemptedAt: now }
+      const next: JobRecord = { ...current, callbackDelivery, updatedAt: now }
+      await this.store.save(next)
+      return next
+    })
   }
 
   async markBlocked(id: string, dependencies: readonly (string | RemoteDependency)[], now = new Date().toISOString()): Promise<JobRecord> {
@@ -298,11 +334,20 @@ export class JobManager {
       for (const job of await this.store.list()) {
         if (TERMINAL_STATUSES.includes(job.status)) continue
         if (options.isActive?.(job.id) === true) continue
+        // Re-checked under the job's lock right before the write: the job may
+        // have ended, or a monitor may have picked it up, since the list.
+        const stillSweepable = (current: JobRecord): boolean => options.isActive?.(current.id) !== true
 
         if (job.status === "blocked") {
           const outcome = await this.dependencyOutcome(job, now)
           if (outcome.kind === "failed") {
-            const failed = await this.markFailed(job.id, outcome.error, now).catch(() => undefined)
+            const failed = await this.transitionIf(
+              job.id,
+              "failed",
+              now,
+              { error: this.redactError(outcome.error) },
+              (current) => stillSweepable(current) && current.status === "blocked",
+            ).catch(() => undefined)
             if (failed !== undefined) {
               expired.push(failed)
               transitionedInPass++
@@ -312,7 +357,13 @@ export class JobManager {
         }
 
         if (currentTime <= jobDeadlineMs(job)) continue
-        const timedOut = await this.markTimedOut(job.id, now).catch(() => undefined)
+        const timedOut = await this.transitionIf(
+          job.id,
+          "timed_out",
+          now,
+          { error: "Job timed out" },
+          (current) => stillSweepable(current) && currentTime > jobDeadlineMs(current),
+        ).catch(() => undefined)
         if (timedOut === undefined) continue
         expired.push(timedOut)
         transitionedInPass++
@@ -325,13 +376,50 @@ export class JobManager {
   }
 
   private async transition(id: string, status: JobStatus, now: string, patch: Partial<JobRecord> = {}): Promise<JobRecord> {
-    const current = await this.getJob(id)
-    if (TERMINAL_STATUSES.includes(current.status) && current.status !== status) {
-      throw new Error(`Cannot transition terminal job ${id} from ${current.status} to ${status}`)
+    return this.withJobLock(id, async () => this.write(await this.getJob(id), status, now, patch))
+  }
+
+  /** `transition` when `guard` accepts the fresh record (read under the lock); `undefined` otherwise. */
+  private async transitionIf(
+    id: string,
+    status: JobStatus,
+    now: string,
+    patch: Partial<JobRecord>,
+    guard: TransitionGuard,
+  ): Promise<JobRecord | undefined> {
+    return this.withJobLock(id, async () => {
+      const current = await this.getJob(id)
+      if (TERMINAL_STATUSES.includes(current.status) || !guard(current)) return undefined
+      return this.write(current, status, now, patch)
+    })
+  }
+
+  /**
+   * Writes `current` moved to `status`. Call under the job's lock. A terminal
+   * job is never written again, not even with the same status: whoever ended
+   * it owns its report, so a second ending must fail loudly.
+   */
+  private async write(current: JobRecord, status: JobStatus, now: string, patch: Partial<JobRecord>): Promise<JobRecord> {
+    if (TERMINAL_STATUSES.includes(current.status)) {
+      throw new Error(`Cannot transition terminal job ${current.id} from ${current.status} to ${status}`)
     }
     const next: JobRecord = { ...current, ...patch, status, updatedAt: now }
     await this.store.save(next)
     return next
+  }
+
+  private async withJobLock<T>(id: string, work: () => Promise<T>): Promise<T> {
+    const previous = this.jobLocks.get(id) ?? Promise.resolve()
+    const run = previous.then(work, work)
+    const settled = run.then(
+      () => undefined,
+      () => undefined,
+    )
+    this.jobLocks.set(id, settled)
+    void settled.then(() => {
+      if (this.jobLocks.get(id) === settled) this.jobLocks.delete(id)
+    })
+    return run
   }
 
   private async dependencyOutcome(

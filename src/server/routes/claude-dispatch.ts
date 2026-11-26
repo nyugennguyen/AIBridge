@@ -2,8 +2,8 @@
  * Launching an accepted Claude-runtime job, shared by `/trigger` (jobs that
  * need no approval) and `POST /jobs/:id/approve` (jobs an operator approved).
  */
-import { jobDeadlineMs } from "../../jobs/manager.js"
-import { waitUntil } from "../../jobs/reconcile.js"
+import { LaunchRefusedError } from "../../jobs/manager.js"
+import { INTERRUPTED_BY_RESTART } from "../../jobs/reconcile.js"
 import { createTerminalJobReporter } from "../../jobs/report.js"
 import type { JobRecord } from "../../jobs/types.js"
 import { ClaudeLaunchError, RunnerAtCapacityError, type ClaudeJobLaunch } from "../../runtime/claude-job-runner.js"
@@ -11,7 +11,7 @@ import type { AppDependencies } from "../app.js"
 
 export type ClaudeLaunchOutcome =
   | { readonly ok: true; readonly launch: ClaudeJobLaunch }
-  | { readonly ok: false; readonly statusCode: 429 | 500 | 503; readonly body: { readonly error: string; readonly code?: string } }
+  | { readonly ok: false; readonly statusCode: 409 | 429 | 500 | 503; readonly body: { readonly error: string; readonly code?: string } }
 
 /**
  * Starts the job on the Claude runner, syncs the task graph and hands it to
@@ -37,6 +37,11 @@ export async function launchClaudeJob(
     if (error instanceof ClaudeLaunchError) {
       return { ok: false, statusCode: 500, body: { error: error.message, code: error.code } }
     }
+    // The marker was refused (not `accepted`, already launched or launching):
+    // the job belongs to another path. Leave it untouched; report nothing.
+    if (error instanceof LaunchRefusedError) {
+      return { ok: false, statusCode: 409, body: { error: error.message, code: error.code } }
+    }
     const atCapacity = error instanceof RunnerAtCapacityError
     const message = error instanceof Error ? error.message : "Claude Code launch failed"
     const failed = await dependencies.jobManager.markFailed(job.id, message).catch(() => undefined)
@@ -57,21 +62,19 @@ export async function launchClaudeJob(
 
 /**
  * Launches an `accepted` job that a restart found never launched
- * (`reconcileJobsAfterRestart`). Waits for a free slot rather than failing at
- * capacity, but not past the job's deadline; then launches it as `aibr
- * approve` does, failing and reporting it on error.
+ * (`reconcileJobsAfterRestart`), as `aibr approve` does: failing and reporting
+ * it on error. Startup awaits this before serving, so it never waits for a
+ * slot: when the node is full (more cleared jobs than
+ * `limits.max_concurrent_jobs`) the job ends as interrupted, with the reason,
+ * and the requester decides whether to dispatch it again.
  */
-export async function relaunchClaudeJob(
-  job: JobRecord,
-  dependencies: AppDependencies,
-  options: { readonly capacityPollMs?: number } = {},
-): Promise<void> {
-  const runner = dependencies.claudeJobRunner
-  if (runner?.hasCapacity !== undefined) {
-    await waitUntil(() => runner.hasCapacity?.() ?? true, {
-      timeoutMs: Math.max(0, jobDeadlineMs(job) - Date.now()),
-      intervalMs: options.capacityPollMs ?? 1_000,
-    })
+export async function relaunchClaudeJob(job: JobRecord, dependencies: AppDependencies): Promise<void> {
+  if (dependencies.claudeJobRunner?.hasCapacity?.() === false) {
+    const failed = await dependencies.jobManager
+      .markFailed(job.id, `${INTERRUPTED_BY_RESTART}; not relaunched: this node is at limits.max_concurrent_jobs`)
+      .catch(() => undefined)
+    if (failed !== undefined) await terminalReporter(dependencies)(failed)
+    return
   }
   await launchClaudeJob(job, dependencies, { reportFailure: true })
 }

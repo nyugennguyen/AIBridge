@@ -204,7 +204,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     options.deps?.monitorSession ??
     (async (job) => {
       if (!job.opencodeSessionId) throw new Error(`Job ${job.id} has no opencode session`)
-      let terminalJob: Awaited<ReturnType<typeof jobManager.getJob>>
+      let failure: string | undefined
       try {
         await waitForIdle(opencodeClient, job.opencodeSessionId, {
           directory: job.trigger.project_dir,
@@ -213,25 +213,29 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
           permissionPolicy: new StaticPermissionPolicy(config.permissions),
           operatorApproved: job.approval?.status === "approved",
         })
-        terminalJob = await jobManager.markCompleted(job.id)
-        await taskGraphSyncer.syncJobToTask(job.trigger.task_id ?? `#${job.id}`, "done")
       } catch (error) {
-        terminalJob = await jobManager.markFailed(
-          job.id,
-          error instanceof Error ? error.message : "Session failed",
-        )
-        await taskGraphSyncer.syncJobToTask(job.trigger.task_id ?? `#${job.id}`, "failed")
+        failure = error instanceof Error ? error.message : "Session failed"
       }
+      let terminalJob: JobRecord
+      try {
+        terminalJob = failure === undefined ? await jobManager.markCompleted(job.id) : await jobManager.markFailed(job.id, failure)
+      } catch {
+        // Already terminal: whoever ended it owns its report.
+        return
+      }
+      await taskGraphSyncer
+        .syncJobToTask(job.trigger.task_id ?? `#${job.id}`, failure === undefined ? "done" : "failed")
+        .catch(() => undefined)
 
       const unblockedJobs = await jobManager.unblockDependents(job.id)
       for (const unblocked of unblockedJobs) {
         try {
           const { running } = await startOpencodeSession(unblocked, { jobManager, opencodeClient, reportTerminalJob })
           void monitorSession(running).catch(async (err: unknown) => {
-            await jobManager.markFailed(
-              unblocked.id,
-              err instanceof Error ? err.message : "Session monitor failed",
-            )
+            const failed = await jobManager
+              .markFailed(unblocked.id, err instanceof Error ? err.message : "Session monitor failed")
+              .catch(() => undefined)
+            if (failed !== undefined) await reportTerminalJob(failed)
           })
         } catch {
           // OpenCode refused: the job is already failed and reported. The

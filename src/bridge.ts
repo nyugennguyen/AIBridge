@@ -8,6 +8,7 @@ import type { BridgeConfig } from "./config/types.js"
 import type { JobManager } from "./jobs/manager.js"
 import { reconcileJobsAfterRestart, relaunchJobs, startPeriodicSweep, type RestartReconcileResult } from "./jobs/reconcile.js"
 import { relaunchClaudeJob } from "./server/routes/claude-dispatch.js"
+import { acquireStateLock } from "./host/state-lock.js"
 import { relaunchOpencodeJob } from "./server/routes/opencode-dispatch.js"
 import {
   createNotificationBus,
@@ -49,10 +50,10 @@ export interface BridgeInstance {
   notificationConsumer: OrchestrationNotificationConsumer
   /**
    * What the startup pass did with the job store it found (engine ingress
-   * only; absent in router mode, where `aibr worker` executes jobs). Resolves
-   * once every relaunched job has been handed to its runtime.
+   * only; absent in router mode, where `aibr worker` executes jobs). Every
+   * relaunched job had been handed to its runtime before `startBridge` returned.
    */
-  restartReconcile?: Promise<RestartReconcileResult>
+  restartReconcile?: RestartReconcileResult
 }
 
 /**
@@ -81,7 +82,25 @@ export function attachNotificationConsumerToCommandLog(
 }
 
 
+/**
+ * Builds the bridge. Takes the profile's state lock first (`acquireStateLock`)
+ * and holds it until `app.close()`: a second bridge or worker on the same
+ * profile refuses to start instead of reconciling (and interrupting) the live
+ * one's jobs. Throws `StateLockHeldError` without touching any job.
+ */
 export async function startBridge(options: BridgeOptions): Promise<BridgeInstance> {
+  const lock = acquireStateLock(options.stateDir)
+  try {
+    const bridge = await startBridgeHoldingLock(options)
+    bridge.app.addHook("onClose", async () => lock.release())
+    return bridge
+  } catch (error) {
+    lock.release()
+    throw error
+  }
+}
+
+async function startBridgeHoldingLock(options: BridgeOptions): Promise<BridgeInstance> {
   const runtime = await createRuntime(options)
 
   // `ingress_mode` decides who owns the socket, so it also decides whether this
@@ -160,7 +179,7 @@ export async function startBridge(options: BridgeOptions): Promise<BridgeInstanc
   // Taken before this pass ends any job, so a job it reports is not reported twice.
   const callbackRetries = await runtime.jobManager.listCallbackRetries()
 
-  let restartReconcile: Promise<RestartReconcileResult> | undefined
+  let restartReconcile: RestartReconcileResult | undefined
   if (ingressMode === "engine") {
     // This process executes the jobs, so whatever the store says is in flight
     // was left by a previous process (block K): interrupt what may have run,
@@ -179,7 +198,10 @@ export async function startBridge(options: BridgeOptions): Promise<BridgeInstanc
         ? (job: Parameters<typeof relaunchClaudeJob>[0]) => relaunchClaudeJob(job, appDependencies)
         : (job: Parameters<typeof relaunchOpencodeJob>[0]) =>
             relaunchOpencodeJob(job, { ...appDependencies, reportTerminalJob: runtime.reportTerminalJob })
-    restartReconcile = relaunchJobs(reconciled.relaunch, relaunch).then(() => reconciled)
+    // Awaited: every cleared job is launched (or failed and reported) before
+    // the bridge serves, so a new trigger never races a relaunch for a slot.
+    await relaunchJobs(reconciled.relaunch, relaunch)
+    restartReconcile = reconciled
 
     const stopSweep = startPeriodicSweep({
       jobManager: runtime.jobManager,

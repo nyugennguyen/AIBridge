@@ -28,7 +28,7 @@ import type {
 } from "../config/types.js"
 import { claudeConfigSchema } from "../config/schemas.js"
 import { approvalRequired } from "../planning/approval.js"
-import type { JobManager } from "../jobs/manager.js"
+import { LaunchRefusedError, type JobManager } from "../jobs/manager.js"
 import type { JobRecord, RuntimeJobResult, RuntimeJobUsage } from "../jobs/types.js"
 import type { RepoWorkspaceManager } from "./repo-workspace.js"
 import { CLAUDE_PROVIDER_ENV_KEYS } from "./sanitizer.js"
@@ -571,7 +571,7 @@ export class ClaudeJobRunner {
    * throw the slot and any worktree are released.
    */
   async start(job: JobRecord): Promise<ClaudeJobLaunch> {
-    if (this.#active.has(job.id)) throw new Error(`Job ${job.id} is already running`)
+    if (this.#active.has(job.id)) throw new LaunchRefusedError(`Job ${job.id} is already running`)
     if (!this.hasCapacity()) {
       throw new RunnerAtCapacityError(
         `This node is already running ${this.#active.size} job(s), its limit (limits.max_concurrent_jobs = ${maxConcurrentJobs(this.#config)}). Retry later.`,
@@ -608,11 +608,13 @@ export class ClaudeJobRunner {
         startedAtMs: startedAt,
       }
     } catch (error) {
-      await this.#releaseJob(job, active)
       // Past the marker the job may have done something: fail it now with the
-      // launch error and report it, rather than leave it `accepted`.
+      // launch error and report it, rather than leave it `accepted`. The slot
+      // is released only after the terminal write, so the sweep never sees
+      // the job both inactive and unfinished.
       const message = error instanceof Error ? error.message : "Claude Code launch failed"
-      const failed = await this.#jobManager.markFailed(job.id, truncate(message, MAX_ERROR_LENGTH)).catch(() => undefined)
+      const failed = await this.#jobManager.markFailed(job.id, message, undefined, { maxLength: MAX_ERROR_LENGTH }).catch(() => undefined)
+      await this.#releaseJob(job, active)
       if (failed !== undefined) {
         await this.#taskGraphSyncer?.syncJobToTask(job.trigger.task_id ?? `#${job.id}`, "failed").catch(() => undefined)
         await this.#reportTerminalJob(failed).catch(() => undefined)
@@ -680,8 +682,6 @@ export class ClaudeJobRunner {
         error: stopReason,
       }
     }
-    await this.#releaseJob(launch.job, active)
-
     const result: RuntimeJobResult = {
       summary: outcome.summary,
       findings: outcome.findings,
@@ -689,6 +689,9 @@ export class ClaudeJobRunner {
       ...(scriptResults.length > 0 ? { scriptResults } : {}),
     }
 
+    // The job stays in `#active` until its terminal write, so the periodic
+    // sweep (which skips active jobs) cannot end it in between and report it
+    // a second time. Redaction happens before truncation (`maxLength`).
     let terminal: JobRecord
     try {
       await this.#jobManager.recordRuntimeResult(jobId, result)
@@ -697,11 +700,13 @@ export class ClaudeJobRunner {
           ? await this.#jobManager.markCompleted(jobId)
           : outcome.state === "timed_out"
             ? await this.#jobManager.markTimedOut(jobId)
-            : await this.#jobManager.markFailed(jobId, truncate(outcome.error ?? outcome.summary, MAX_ERROR_LENGTH))
+            : await this.#jobManager.markFailed(jobId, outcome.error ?? outcome.summary, undefined, { maxLength: MAX_ERROR_LENGTH })
     } catch {
       // Already terminal (e.g. swept at startup): its report is owned elsewhere.
+      await this.#releaseJob(launch.job, active)
       return undefined
     }
+    await this.#releaseJob(launch.job, active)
 
     try {
       await this.#taskGraphSyncer?.syncJobToTask(

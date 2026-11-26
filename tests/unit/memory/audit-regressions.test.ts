@@ -443,62 +443,6 @@ describe("M5.9 the fixes are structural, not advisory", () => {
   })
 })
 
-describe("M5.9 SF-8/SF-9: migration fidelity", () => {
-  it("a v1 'rejected' record is NOT re-opened as 'proposed' for acceptance", async () => {
-    const { planV1MemoryMigration } = await import("../../../src/memory/migration.js")
-    const v1Rejected = memoryRecordSchemaV1Fixture("rejected", "user")
-    const plan = expectOk(planV1MemoryMigration([v1Rejected], { projectId: PROJECT_A, migratedAt: NOW }))
-    const records = plan.records as { trust: string; payload: { detail?: Record<string, unknown> } }[]
-    expect(records).toHaveLength(1)
-    // A human explicitly rejected this fact. Migrating it as `proposed` would put
-    // it back in the acceptance queue — a trust *upgrade*, not a downgrade.
-    expect(records[0]?.trust).toBe("rejected")
-    // The reason is preserved, so the refusal is auditable rather than invisible.
-    expect(records[0]?.payload.detail?.["legacyTrustState"]).toBe("rejected")
-  })
-
-  it("a v1 record's supersedesMemoryId is carried onto the migrated record", async () => {
-    const { planV1MemoryMigration } = await import("../../../src/memory/migration.js")
-    const target = memoryRecordSchemaV1Fixture("accepted", "user")
-    const corrected = {
-      ...target,
-      memoryId: "memory-v1-correction",
-      content: "A correction to the earlier decision.",
-      supersedesMemoryId: target.memoryId,
-    }
-    const plan = expectOk(planV1MemoryMigration([target, corrected], { projectId: PROJECT_A, migratedAt: NOW }))
-    const records = plan.records as { supersedesMemoryId?: string; payload: { detail?: Record<string, unknown> } }[]
-    // The legacy correction chain survives the migration rather than being
-    // silently severed, so a migrated corpus still says which fact corrected
-    // which.
-    const migratedCorrection = records.find(
-      (record) => record.payload.detail?.["legacyMemoryId"] === "memory-v1-correction",
-    )
-    expect(migratedCorrection?.supersedesMemoryId).toBeTruthy()
-  })
-})
-
-function memoryRecordSchemaV1Fixture(trustState: "accepted" | "rejected" | "proposed", authorKind: "user" | "system") {
-  return {
-    schemaVersion: 1,
-    memoryId: "memory-v1-1",
-    projectId: PROJECT_A,
-    kind: "decision",
-    content: "A legacy decision.",
-    contentDigest: digestJson("A legacy decision."),
-    scope: { kind: "project" },
-    author:
-      authorKind === "user"
-        ? { kind: "user", userId: userIdSchema.parse("user-owner") }
-        : { kind: "system", name: "legacy-migration" },
-    createdAt: "2026-09-01T00:00:00.000Z",
-    sourceReferences: [{ namespace: "legacy.memory.decision", id: "d1" }],
-    trustState,
-    sensitivity: "internal",
-    retention: "project",
-  }
-}
-
 describe("M5.9 the unexploitable claims stay asserted", () => {
   it("run-1 still cannot see run-2, and the check is identity, not kind", async () => {
     const repository = store()

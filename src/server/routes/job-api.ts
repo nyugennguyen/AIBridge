@@ -426,12 +426,27 @@ async function streamJobEvents(options: {
     closed = true
     notify()
   }
+  // A client that disconnects is seen through whichever of these fires first.
+  // The response's own `close` does not fire on every runtime once the reply
+  // is hijacked (Bun on Linux leaves it pending until a write fails, which
+  // held the stream and its slot until the next heartbeat or the job's end),
+  // so also watch the request the way Fastify's `onRequestAbort` does (`close`
+  // with `aborted` set: a bodyless GET also emits `close` once it is read)
+  // and the socket itself.
+  const request = options.request.raw
+  const socket = request.socket
+  const onRequestClose = (): void => {
+    if (request.aborted || clientGone(options.request, reply)) end()
+  }
   raw.on("close", end)
+  request.on("close", onRequestClose)
+  request.on("aborted", end)
+  socket?.on("close", end)
   options.streams.add(end)
-  // `close` may have fired before the listener existed (the client left
+  // `close` may have fired before the listeners existed (the client left
   // while this request was being authorized): end now, or the stream and
   // its slot would be held until the job ends.
-  if (clientGone(options.request, reply)) end()
+  if (request.aborted || clientGone(options.request, reply)) end()
   const unsubscribe = events.subscribe(jobId, notify)
   const heartbeat = setInterval(() => {
     if (!closed) raw.write(": keep-alive\n\n")
@@ -445,6 +460,9 @@ async function streamJobEvents(options: {
   try {
     let quietAfterTerminal = 0
     while (!closed) {
+      // Belt and braces for a disconnect no listener reported: checked on
+      // every wake (each event and every `pollMs`), not only on a write error.
+      if (request.aborted || clientGone(options.request, reply)) break
       pending = false
       let ended = false
       // Drain everything stored so far.
@@ -482,6 +500,10 @@ async function streamJobEvents(options: {
   } finally {
     clearInterval(heartbeat)
     unsubscribe()
+    raw.off("close", end)
+    request.off("close", onRequestClose)
+    request.off("aborted", end)
+    socket?.off("close", end)
     options.streams.delete(end)
     if (!raw.writableEnded) raw.end()
   }

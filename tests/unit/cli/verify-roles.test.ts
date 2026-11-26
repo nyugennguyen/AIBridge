@@ -4,8 +4,8 @@ import type { PlatformInspector, ProcessRunner } from "../../../src/host/types.j
 
 /**
  * `aibr verify` applies the same per-role prerequisite list as `aibr setup`:
- * worker+opencode → tmux, opencode, tailscale; worker+claude → tmux, claude,
- * tailscale; orchestrator → claude, tailscale. A profile with no `role` key
+ * worker+opencode → opencode, tailscale; worker+claude → claude,
+ * tailscale (tmux is optional and only warns); orchestrator → claude, tailscale. A profile with no `role` key
  * predates roles and is checked as worker + opencode.
  */
 
@@ -89,12 +89,45 @@ describe("runVerify per node role", () => {
   it("checks a profile without a role as worker + opencode, including the OpenCode password", async () => {
     const { report, probed } = await verifyWith(baseConfig, ["tmux", "opencode", "tailscale"])
 
-    expect(probed).toEqual(["which tmux", "which opencode", "which tailscale"])
+    expect(probed).toEqual(["which opencode", "which tailscale", "which tmux"])
     expect(report.checks.find((c) => c.name === "node-role")?.message).toBe(
       "Node role: worker (runtime: opencode)",
     )
     // The password file is absent in this fixture, so the OpenCode worker fails on it.
     expect(report.checks.find((c) => c.name === "secret-opencode-password")?.status).toBe("fail")
+  })
+
+  it("a worker without tmux gets a warning, not a failure", async () => {
+    const { report } = await verifyWith(
+      { ...baseConfig, role: "worker", runtime: { kind: "claude" } },
+      ["claude", "tailscale"],
+    )
+
+    expect(report.ok).toBe(true)
+    expect(report.checks.some((c) => c.name === "prereq-tmux")).toBe(false)
+    const tmux = report.checks.find((c) => c.name === "tmux")
+    expect(tmux?.status).toBe("warn")
+    expect(tmux?.message).toBe('tmux: not found (optional — only "aibr start --foreground" uses it)')
+    expect(tmux?.detail).toBe("Install with: brew install tmux")
+    expect(report.summary).toContain("Status: PASSED")
+  })
+
+  it("a worker with tmux passes the optional check", async () => {
+    const { report } = await verifyWith(
+      { ...baseConfig, role: "worker", runtime: { kind: "claude" } },
+      ["claude", "tailscale", "tmux"],
+    )
+    expect(report.checks.find((c) => c.name === "tmux")).toEqual({
+      name: "tmux",
+      status: "pass",
+      message: "tmux: installed (optional)",
+    })
+  })
+
+  it("an orchestrator never looks for tmux", async () => {
+    const { report, probed } = await verifyWith({ ...baseConfig, role: "orchestrator" }, ["claude", "tailscale"])
+    expect(probed).toEqual(["which claude", "which tailscale"])
+    expect(report.checks.some((c) => c.name === "tmux")).toBe(false)
   })
 
   it("worker + claude: requires claude, not opencode, and does not want an OpenCode password", async () => {
@@ -103,7 +136,7 @@ describe("runVerify per node role", () => {
       ["tmux", "claude", "tailscale"],
     )
 
-    expect(probed).toEqual(["which tmux", "which claude", "which tailscale"])
+    expect(probed).toEqual(["which claude", "which tailscale", "which tmux"])
     expect(report.checks.some((c) => c.name.startsWith("secret-opencode-password"))).toBe(false)
     expect(report.ok).toBe(true)
   })

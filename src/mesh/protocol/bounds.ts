@@ -16,14 +16,6 @@ import { canonicalJson } from "../../orchestration/digest.js"
  */
 export const MAX_ENVELOPE_BYTES = 262_144
 
-export const MAX_TERMINAL_FRAME_BYTES = 65_536
-
-export const MAX_TERMINAL_BUFFER_BYTES = 1_048_576
-
-export const MAX_TERMINAL_FRAMES_PER_SECOND = 512
-
-export const MAX_VIEWERS_PER_TERMINAL = 16
-
 export const MAX_COMMAND_PAYLOAD_BYTES = 131_072
 
 export const MAX_EVENT_PAYLOAD_BYTES = 131_072

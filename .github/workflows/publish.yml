@@ -39,8 +39,8 @@ jobs:
       - name: Install Rust toolchain
         # `bun run release:check` runs `contracts:check`, which regenerates the
         # contract artefacts and refuses to pass while the committed copies
-        # disagree. `router/src/contracts.rs` and `crates/aibr-ipc/src/contracts.rs`
-        # are emitted by `cargo run -p aibr-contract-gen`, so the gate needs
+        # disagree. `router/src/contracts.rs`
+        # is emitted by `cargo run -p aibr-contract-gen`, so the gate needs
         # cargo -- without this step the release either fails on "cargo: command
         # not found" or, worse, the check is dropped to keep the release green.
         #

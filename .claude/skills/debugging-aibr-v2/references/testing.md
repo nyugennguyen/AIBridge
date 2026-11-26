@@ -30,8 +30,6 @@ differ. `bun test` is the gate.
 
 | Test | Gate |
 |---|---|
-| `tests/integration/tmux-terminal-backend.test.ts` | `AIBRIDGE_TMUX_INTEGRATION=1` **and** `tmux` on PATH |
-| `tests/integration/tui-flow.test.ts:493` | `AIBRIDGE_M1_REAL_AGENT_SMOKE=1` (needs `AIBRIDGE_M1_OPENCODE_URL`, `AIBRIDGE_M1_PROJECT_PATH`) |
 | `tests/unit/runtime/{claude,codex}-adapter.test.ts` | `it.skipIf` on the installed binary existing |
 | SQLite backend matrix | driver availability (see above) |
 
@@ -86,20 +84,16 @@ bun run generate:parity-vector    # ONLY writer of router/tests/parity-vector.js
 ```
 
 CI order matters: reproducibility runs *before* Rust parity, so a moved artifact is not
-misreported as parity drift. Since ADR 0010 the diff lists **two** generated outputs:
+misreported as parity drift. The diff covers the generated outputs:
 
 ```bash
-git diff --exit-code contracts/ router/src/contracts.rs crates/aibr-ipc/src/contracts.rs
+git diff --exit-code contracts/ router/src/contracts.rs
 ```
 
-`contracts/v1/` is partitioned across them by `IPC_CONTRACT_FILES` in
-`router/contract-gen/src/main.rs` — the router compiles the ingress/orchestration
-families, `aibr-ipc` compiles the daemon/client bus families. Adding a schema to
-`contracts/v1/` without adding its name to that list is a **generation error**, not
-a silent drop: it lands in the router's compilation unit, which is the wrong place.
-See ADR 0010 section 2.2.
+The router is the only Rust consumer of `contracts/v1/` since 3.1.1 (the `aibr-ipc` crate was
+removed, ADR 0014).
 
-The **Cargo workspace root is the repository root**, not `router/` (also ADR 0010).
+The **Cargo workspace root is the repository root**, not `router/` (ADR 0010, historical).
 So there is no `cd router` before cargo:
 
 ```bash

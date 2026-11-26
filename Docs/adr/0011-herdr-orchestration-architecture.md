@@ -1,6 +1,6 @@
 # ADR 0011: Herdr-Orchestrated Multi-Agent Architecture and Kernel Authority
 
-- **Status:** Accepted (Milestone 8 / Part A, Target Version 3.0.0)
+- **Status:** Superseded by [ADR 0014](./0014-claude-is-the-operator-interface.md) (Herdr/TUI parts removed in 3.1.1; originally Accepted, Milestone 8 / Part A, Target Version 3.0.0)
 - **Date:** 2026-10-14
 - **Authors:** AIBridge Architecture & Hardening Team
 - **Deciders:** Core Engineering Team, Release Gate, Architecture Team
@@ -140,4 +140,4 @@ This decision is rooted in the assumptions of a thin, maintainable fork, control
 - [ADR 0008: Polyglot Ingress Router and Durable Admission](./0008-polyglot-ingress-and-admission.md)
 - [ADR 0007: Rule Language, Evaluation, Budgets, and Simulation](./0007-rule-language-and-evaluation.md)
 - [ADR 0010: Mouse-Native TUI Client and Decoupled Daemon](./0010-tui-daemon-modernization.md)
-- Implementation Plan: `docs/implementation-plans/aibridge-herdr-orchestration.md`
+- Implementation Plan: `docs/archive/aibridge-herdr-orchestration.md`

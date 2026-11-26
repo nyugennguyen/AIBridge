@@ -4,16 +4,15 @@
 #
 # Before this file, `router/Cargo.toml` was BOTH the workspace manifest and the
 # `aibr-router` package manifest, and ADR 0008 §4 amended the polyglot guardrail
-# The root Cargo workspace manages router and crates (crates/aibr-ipc, crates/aibr-pty).
-# The legacy client crate was retired in Phase 6.
+# The root Cargo workspace manages the router and its contract generator. The
+# local IPC crates (aibr-ipc, aibr-pty) and the legacy client crate were retired
+# together with the TUI (3.1.1).
 #
-# THE GUARDRAIL IS NOT LOOSENED. Rust is still confined to `router/` and
-# `crates/`, `src/` remains TypeScript-only, and `crates/` holds no business
-# logic the TypeScript engine would otherwise own -- it holds a wire codec, a
-# process supervisor and a terminal renderer. What is forbidden is unchanged:
-# no upward import edge from `crates/` or `router/` into `src/`, and no
-# dependency of `src/` on any Rust crate. The TUI reaches the engine over the IPC
-# socket precisely so that neither edge exists.
+# THE GUARDRAIL IS NOT LOOSENED. Rust is still confined to `router/` (and
+# `crates/`, should one return), `src/` remains TypeScript-only, and Rust holds
+# no business logic the TypeScript engine would otherwise own. What is forbidden
+# is unchanged: no upward import edge from `router/` into `src/`, and no
+# dependency of `src/` on any Rust crate.
 #
 # `default-members` is what plain `cargo build` / `cargo test` / `cargo fmt`
 # operate on, and it EXCLUDES `router/contract-gen` for the same reason ADR 0008
@@ -26,16 +25,11 @@ resolver = "2"
 members = [
     "router",
     "router/contract-gen",
-    "crates/aibr-ipc",
-    "crates/aibr-pty",
 ]
 # The `contract-gen` exclusion is load-bearing; see the module comment above.
-# The shipped components ARE in here, so `cargo test` at the root is the whole
-# Rust gate (acceptance criterion 1) rather than a router-only subset. `aibr-pty`
-# is in `default-members` for the same reason as the other two: it is the process
-# supervisor Phase 2 puts between the daemon and an agent, and a supervisor that
-# only compiles only when explicitly named is a supervisor nothing builds.
-default-members = ["router", "crates/aibr-ipc", "crates/aibr-pty"]
+# The shipped component IS in here, so `cargo test` at the root is the whole
+# Rust gate (acceptance criterion 1).
+default-members = ["router"]
 
 # Moved verbatim from `router/Cargo.toml`.
 #
@@ -56,9 +50,5 @@ codegen-units = 1
 # ADR 0008 2.1's release profile. `panic = "abort"` also removes the unwinding
 # tables the router never uses; there is no `catch_unwind` in the design, and
 # M7.3 must not add one.
-#
-# Inherited by the TUI, where `abort` is also correct: a panic in the render
-# loop means the terminal is in an unknown state, and the alternative -- unwinding
-# into a partially-restored terminal -- is worse than an exit.
 panic = "abort"
 strip = true

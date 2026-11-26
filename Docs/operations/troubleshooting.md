@@ -1,7 +1,7 @@
 # Operational Troubleshooting Guide
 
 > **Status:** Current  
-> **Applies to:** AIBridge 3.1.0  
+> **Applies to:** AIBridge 3.1.1  
 > **Owner:** Maintainers  
 
 This guide provides an executable triage ladder, root-cause resolutions for HTTP error codes, and practical remediation steps for common operational issues.
@@ -38,7 +38,7 @@ aibr bundle --profile <profile> --preview
 | `aibr preflight` | Use `aibr-router --preflight` (native Rust binary). |
 | `aibr config get` | Inspect `~/.config/aibridge/<profile>/config.json`. |
 | `aibr worker --drain-only` | Run `aibr worker --profile <profile>`. |
-| `aibr logs\|doctor\|tail` | Inspect tmux session output (`tmux attach`) or systemd journal (`journalctl --user`). |
+| `aibr tail` | `aibr logs --profile <profile> -f` (the bridge log, `<state dir>/logs/aibridge.log`). `aibr logs` and `aibr doctor` exist since 3.1.0. |
 
 ---
 

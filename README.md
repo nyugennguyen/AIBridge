@@ -11,17 +11,46 @@
 </p>
 
 [![CI](https://github.com/nyugennguyen/AIBridge/actions/workflows/ci.yml/badge.svg)](https://github.com/nyugennguyen/AIBridge/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/@nyugennguyen/aibridge.svg)](https://www.npmjs.com/package/@nyugennguyen/aibridge)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Bun Version](https://img.shields.io/badge/Bun-%3E%3D1.3.0-black.svg)](https://bun.sh)
 [![Rust MSRV](https://img.shields.io/badge/Rust_MSRV-1.94-orange.svg)](https://www.rust-lang.org)
 
 **AIBridge** is a resilient, polyglot orchestrator and agent mesh connecting OpenCode, Claude Code, and Codex execution daemons securely across machines over private Tailscale networks.
 
-AIBridge replaces traditional monolithic bridge architectures with a **two-tier polyglot architecture**: a native Rust ingress router (`aibr-router`) for low-overhead, fail-closed admission and durable queuing, paired with a TypeScript/Bun worker daemon (`aibr worker`) for semantic task execution, rule evaluation, and distributed orchestration.
+A typical setup: **Claude Code on your laptop is the orchestrator**. Through the AIBridge plugin it hands work (integration tests, bug reproduction, log reading, a fix on a branch) to worker nodes such as a staging VPS, then reads the findings and continues locally. Each worker runs the job with Claude Code or OpenCode, inside a capability profile it controls, pinned to an exact commit.
+
+**New in 3.1.1:** the unused TUI, Herdr, terminal and IPC layer is removed (about 54k lines, two Rust crates); `aibr tui`, `--ipc-publish` and `terminal.backend: "herdr"` are deprecated ([ADR 0014](Docs/adr/0014-claude-is-the-operator-interface.md), [CHANGELOG](CHANGELOG.md#311---2026-11-26)).
+
+**New in 3.1.0:** Claude Code as a worker runtime and as the orchestrator (plugin + MCP server), signed requests and one-code pairing (`aibr enroll`), operator approval with an audit ledger, jobs pinned to `repo@sha`, and a quickstart (`aibr init`, `aibr doctor`, `aibr ping`, `aibr send`). See the [CHANGELOG](CHANGELOG.md#310---2026-11-26), and its **Behaviour changes** before upgrading a running node.
 
 ---
 
 ## Architecture Overview
+
+By default the bridge (`aibr serve`) admits `/trigger` itself and runs each job on the worker's runtime:
+
+```
+   Orchestrator: Claude Code + AIBridge plugin, or `aibr send`
+          │  POST /trigger over Tailscale (bearer token + ed25519 signature)
+          ▼
+   ┌──────────────────────────────────────────────────────────────┐
+   │ aibr serve (Bun / TypeScript) on the worker's Tailscale IP   │
+   │ • Authentication, pinned peer keys, replay protection        │
+   │ • Source authorization & project allowlists                  │
+   │ • Capability profile + frozen safety floor of deny rules     │
+   │ • Operator approval for gated jobs (hash-chained ledger)     │
+   │ • Job pinned to repo@sha, run in its own git worktree        │
+   └───────────────┬──────────────────────────────┬───────────────┘
+                   ▼                              ▼
+     Claude Code (`claude -p`, per job)   OpenCode (127.0.0.1:4096)
+                   │                              │
+                   └──── POST /report to the orchestrator ────────┘
+```
+
+### Optional: Rust ingress router
+
+For OpenCode workers that need a hardened, durable admission tier, `bridge.ingress_mode: "router"` (installer flag `--ingress router`) puts a native Rust router (`aibr-router`) in front of a Bun drain worker (`aibr worker`). Router mode admits on the bearer token only, so it does not support request signing or the Claude Code runtime.
 
 ```
                       Private Tailscale Network (100.64.0.0/10)
@@ -66,7 +95,7 @@ AIBridge replaces traditional monolithic bridge architectures with a **two-tier 
 
 1. **Two-Tier Validation:** The router is a structural gate, never an authorization authority. The worker independently re-parses and enforces all semantic permissions, allowlists, and approvals.
 2. **Commit Before 202 (`SF-08`):** An admission response (`HTTP 202 Accepted`) is emitted **only** after work has been durably committed to SQLite disk storage (`synchronous=FULL`). No in-memory queues or fallback drop-paths exist.
-3. **Decoupled Interactive Interface:** Presentation is delegated to Herdr. Closing or disconnecting the interface never disrupts running background agents.
+3. **Decoupled Interface:** Claude Code with the AIBridge plugin dispatches and follows work; human-only actions (approve, reject, kill switch) stay in the `aibr` CLI on the worker. Closing the interface never disrupts running background agents.
 4. **Append-Only Immutability:** Authoritative event logs are immutable. Repair and maintenance tools never rewrite or delete history.
 5. **Terminal Outbox Rows are Evidence:** Errored or failed outbox records are preserved as permanent audit evidence with error taxonomy codes and attempt counters.
 6. **Automated Secret Redaction:** Prompts, transcripts, raw memory, bearer tokens, and private paths are scrubbed by default across all logs, telemetry, and diagnostics bundles.
@@ -81,8 +110,8 @@ AIBridge is tested and supported on:
 
 Ensure each participating machine has:
 - [Bun](https://bun.sh) `>= 1.3.0` (install from bun.sh)
-- [tmux](https://github.com/tmux/tmux) `>= 3.0` for headless process supervision
-- An agent runtime: [OpenCode](https://opencode.ai) bound strictly to loopback `127.0.0.1:4096` (`bun install -g opencode-ai`) or [Claude Code](https://claude.com/claude-code). An orchestrator-only machine needs Claude Code but not OpenCode or tmux.
+- [tmux](https://github.com/tmux/tmux) `>= 3.0` is optional: only `aibr start --foreground` uses it (the default is a launchd/systemd user service). `aibr verify` and `aibr doctor` warn, not fail, when it is missing
+- An agent runtime on workers: [OpenCode](https://opencode.ai) bound strictly to loopback `127.0.0.1:4096` (`bun install -g opencode-ai`) or [Claude Code](https://claude.com/claude-code) 2.1.x or newer, logged in (`claude` once, or `CLAUDE_CODE_OAUTH_TOKEN` / `ANTHROPIC_API_KEY`). An orchestrator-only machine needs Claude Code but not OpenCode.
 - [Tailscale](https://tailscale.com) installed, logged in, and authenticated (bridge binds to private Tailscale IPv4, never public Internet)
 
 ---
@@ -101,7 +130,7 @@ curl -fsSL https://raw.githubusercontent.com/nyugennguyen/AIBridge/main/scripts/
 curl -fsSL https://raw.githubusercontent.com/nyugennguyen/AIBridge/main/scripts/install.sh | bash -s -- --role orchestrator
 ```
 
-Prompts are read from your terminal (`/dev/tty`), so the one-liner works when piped; without a terminal, pass `--yes`. Flags: `--role worker|orchestrator|both`, `--runtime opencode|claude|auto`, `--with-claude-plugin`, `--ingress router`, `--with-units` (needs a repository checkout). The installer offers to install tmux and Tailscale, never installs OpenCode or Claude Code (it prints the install command), and offers to add Bun's bin directory to your shell `PATH`.
+Prompts are read from your terminal (`/dev/tty`), so the one-liner works when piped; without a terminal, pass `--yes`. Flags: `--role worker|orchestrator|both`, `--runtime opencode|claude|auto`, `--with-claude-plugin`, `--ingress router`, `--with-units` (needs a repository checkout). The installer offers to install Tailscale, never installs OpenCode or Claude Code (it prints the install command), and only prints a note (no prompt) when tmux is absent on a worker, and offers to add Bun's bin directory to your shell `PATH`.
 
 Manual fallback via Bun:
 
@@ -170,7 +199,33 @@ aibr ping staging-vps
 aibr send staging-vps "Run the tests and report failures." --capability run-tests
 ```
 
-`aibr ping` is the proof that two machines work together: it reports the round trip, whether the worker's `/report` reached this machine, and what the peer accepts (capabilities and allowlisted project directories). `aibr send` fills in `source_agent_id`, `target_agent_id`, `callback_url`, `job_id` and the request signature; `--capability` defaults to the peer's read-only `investigate`, and `--project` to the peer's only project (or the one named like your current repository). It waits for the result and prints the summary and findings (`--no-wait` to return after dispatch). From Claude Code, the AIBridge plugin does the same (`aibr plugin install claude`).
+`aibr ping` is the proof that two machines work together: it reports the round trip, whether the worker's `/report` reached this machine, and what the peer accepts (capabilities and allowlisted project directories). `aibr send` fills in `source_agent_id`, `target_agent_id`, `callback_url`, `job_id` and the request signature; `--capability` defaults to the peer's read-only `investigate`, and `--project` to the peer's only project (or the one named like your current repository). It waits for the result and prints the summary and findings (`--no-wait` to return after dispatch). From Claude Code, the AIBridge plugin does the same (see below).
+
+---
+
+## Claude Code
+
+### As the orchestrator (plugin)
+
+```bash
+aibr plugin install claude      # or: install.sh --role orchestrator --with-claude-plugin
+aibr plugin status claude
+```
+
+This registers the plugin bundled in the npm package through the official `claude plugin` CLI; it never edits `~/.claude` files. In Claude Code you then get:
+
+- MCP tools `bridge_peers`, `bridge_dispatch`, `bridge_status`, `bridge_await`, `bridge_result` and `bridge_cancel`. There is deliberately no approve tool: approval stays with the operator.
+- The `aibridge-dispatch` skill, which pushes the branch, dispatches with the commit sha, waits and reads the findings.
+- `/aibridge:bridge-send <peer> <capability> <task>` and `/aibridge:bridge-status`.
+- A short summary of peers and running jobs at session start.
+
+Ask Claude something like *"run the integration tests on staging-vps for this branch and fix what fails"*. Details: [Claude Code as Orchestrator](Docs/guides/claude-code-orchestrator.md).
+
+### As a worker runtime
+
+With `runtime.kind: "claude"` (chosen by `aibr init` when Claude Code is installed), each job runs `claude -p` under a **capability profile** from the worker's own `capability_profiles`: allowed and denied tools, budget, turns, timeout, model and extra instructions. Workers set up by the wizard get a read-only `investigate` profile and a test-only `run-tests` profile. The caller only names the profile; an unknown name gets `403 unknown_capability_profile`.
+
+Every launch also carries a frozen **safety floor** of deny rules (secrets, SSH and cloud credentials, AIBridge state, `curl`/`wget`/`ssh`/`sudo`) that no profile can remove. A job may name a configured repository and ref (`repo` + `ref`): the ref is resolved to a sha on acceptance and the job runs in its own detached git worktree, so the result belongs to an exact commit. `limits.max_concurrent_jobs` (default 2) caps parallel jobs. A step-by-step dev → staging walkthrough is in the [runbook](Docs/runbooks/claude-dev-staging.md).
 
 ---
 
@@ -218,6 +273,19 @@ The bearer-token secret is write-once from setup's point of view: re-running `ai
 3. Run `aibr setup --profile <name>` again on both machines with one new shared token.
 4. Restart both profiles (`aibr start --profile <profile>`) and check with `aibr doctor`.
 
+### Approve Held Jobs (Operator)
+
+A job is approval-gated when its capability profile has `"requires_approval": true` or the capability is listed in `planning.require_approval_for`; the worker decides from its own config, never from the caller's metadata. A gated job waits as `awaiting_approval`, with its ref already resolved to a sha, so you approve an exact commit. Only the operator can release them, on the worker itself, with the **operator token** (`AIBRIDGE_OPERATOR_TOKEN` or `<data>/aibridge/<profile>/secrets/operator_token`). A peer's bearer token gets 403, so a peer can never approve its own work.
+
+```bash
+aibr jobs pending --profile staging          # what is waiting
+aibr approve <job_id> --profile staging      # shows capability, source, repo@sha, prompt; asks first
+aibr reject <job_id> --reason "..." --profile staging
+aibr stop --all-jobs --profile staging       # kill switch: stop every running job
+```
+
+Every decision is appended to a hash-chained `approvals.jsonl` ledger (ADR 0013). Creating the token is covered in the [runbook](Docs/runbooks/claude-dev-staging.md#create-the-operator-token).
+
 ### Update & Uninstall
 
 To update AIBridge globally:
@@ -254,8 +322,11 @@ bun remove -g @nyugennguyen/aibridge
 | `aibr status` | Reports what runs the bridge and probes `/health`. | **Yes** |
 | `aibr verify` | Validates the role's dependencies, Tailscale, bearer token, and schema. | Optional |
 | `aibr enroll` | Pairs nodes with one-time codes (issue, join, list, revoke). | Optional |
+| `aibr approve` / `aibr reject` | Decides a job held for operator approval (on the worker). | Optional |
+| `aibr jobs pending` | Lists jobs awaiting operator approval. | Optional |
+| `aibr plugin` | Installs, removes or reports the Claude Code plugin (`install\|uninstall\|status claude`). | No |
+| `aibr mcp` | MCP server used by the Claude Code plugin (`serve`, `summary`). | Optional |
 | `aibr update` | Checks for and installs latest version. | Optional |
-| `aibr tui` | Links and launches the `aibr-manager` plugin in Herdr. | **Yes** |
 | `aibr bundle` | Generates a redacted diagnostic support bundle. | **Yes** |
 | `aibr discover` | Lists tailnet peers and probes each peer's `/health`. | Optional |
 
@@ -270,10 +341,13 @@ Comprehensive documentation is organized around clear user needs in [`Docs/`](Do
 - [**Documentation Index**](Docs/README.md) — Documentation map and navigation hub.
 - [**Getting Started**](Docs/getting-started.md) — Step-by-step installation, profile setup, and first task dispatch.
 - [**Current Architecture**](Docs/architecture/current-state.md) — Authoritative guide to components, trust boundaries, and persistence.
-- [**Architecture Decisions (ADRs)**](Docs/adr/README.md) — Index of all 11 architectural decision records.
+- [**Architecture Decisions (ADRs)**](Docs/adr/README.md) — Index of all 13 architectural decision records.
+- [**Claude Code as Orchestrator**](Docs/guides/claude-code-orchestrator.md) — Installing and using the AIBridge Claude Code plugin.
+- [**Pairing Guide**](Docs/guides/pairing.md) — Signed requests and `aibr enroll`.
+- [**Claude Dev → Staging Runbook**](Docs/runbooks/claude-dev-staging.md) — End-to-end setup of a Claude Code orchestrator and a staging worker.
 - [**Configuration Guide**](Docs/guides/configuration.md) — Complete `config.json` schema, XDG directories, and token rotation.
 - [**Developer Guide**](Docs/guides/development.md) — Local development, test suites, contract parity, and release gates.
-- [**Integrations Guide**](Docs/guides/integrations.md) — OpenCode, Claude Code, Codex, Herdr presentation, and Tailscale mesh.
+- [**Integrations Guide**](Docs/guides/integrations.md) — OpenCode, Claude Code, Codex, and Tailscale mesh.
 - [**Deployment & Operations**](Docs/operations/deployment.md) — Headless tmux, macOS launchd, Linux systemd, and multi-node federation.
 - [**Monitoring & Diagnostics**](Docs/operations/monitoring.md) — Health checks, diagnostic bundles, and queue monitoring.
 - [**Operational Troubleshooting**](Docs/operations/troubleshooting.md) — Executable triage ladder, HTTP status codes, and recovery.

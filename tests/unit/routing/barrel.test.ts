@@ -43,7 +43,6 @@ const FORBIDDEN_IMPORTERS: readonly { readonly directory: string; readonly label
   { directory: join(REPOSITORY_ROOT, "src/rules"), label: "src/rules" },
   { directory: join(REPOSITORY_ROOT, "src/budgets"), label: "src/budgets" },
   { directory: join(REPOSITORY_ROOT, "src/workflows"), label: "src/workflows" },
-  { directory: join(REPOSITORY_ROOT, "src/application"), label: "src/application" },
 ]
 
 /**

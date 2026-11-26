@@ -36,6 +36,7 @@ export type StartProfileResult =
   | { readonly kind: "started"; readonly sessionName: string }
   | { readonly kind: "already_running"; readonly sessionName: string }
   | { readonly kind: "tmux_error"; readonly sessionName: string; readonly stderr: string }
+  | { readonly kind: "tmux_missing"; readonly sessionName: string; readonly installHint: string }
 
 export type StatusProfileResult =
   | { readonly kind: "healthy"; readonly sessionName: string; readonly body: string }
@@ -115,6 +116,11 @@ function buildBridgeEnv(
   return result
 }
 
+/** The install command for tmux on this platform. */
+export function tmuxInstallHint(platform: string): string {
+  return platform === "darwin" ? "brew install tmux" : "sudo apt-get install -y tmux"
+}
+
 // ── startProfile ────────────────────────────────────────────────────────
 
 /** Secrets via env only — never in argv. OpenCode binds 127.0.0.1. */
@@ -124,6 +130,16 @@ export async function startProfile(
 ): Promise<StartProfileResult> {
   if (await sessionExists(deps.processRunner, profile.sessionName)) {
     return { kind: "already_running", sessionName: profile.sessionName }
+  }
+
+  // tmux is optional for the product (the bridge normally runs as a user
+  // service); only this path needs it. Spawn nothing when it is absent.
+  if ((await deps.processRunner.exec(["which", "tmux"])).exitCode !== 0) {
+    return {
+      kind: "tmux_missing",
+      sessionName: profile.sessionName,
+      installHint: tmuxInstallHint(process.platform),
+    }
   }
 
   if (profile.runtimeKind === "claude") {

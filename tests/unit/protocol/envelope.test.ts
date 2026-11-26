@@ -24,7 +24,6 @@ import {
   heartbeatPayload,
   rawEnvelope,
   sampleEnvelope,
-  terminalDataPayload,
 } from "./fixtures.js"
 
 /**
@@ -32,7 +31,7 @@ import {
  * invariants that make it safe to hand to a reader.
  *
  * `.strict()` is asserted per family rather than once, because strictness is a
- * property of the SCHEMA and the nine families each build their own. The reason
+ * property of the SCHEMA and the seven families each build their own. The reason
  * it matters is stated once here so the per-family tests can be terse: an unknown
  * field that is ignored rather than rejected is how a future field that changes
  * the meaning of an existing one gets silently dropped by an old reader — the
@@ -62,9 +61,6 @@ describe("envelope strictness", () => {
       recipientNodeId: null,
     })
     expect(safeParseMeshEnvelope(envelope).ok).toBe(false)
-
-    const payload = { ...terminalDataPayload(), kind: "control" }
-    expect(safeParseMeshEnvelope(rawEnvelope("mesh.terminal.data", payload, { correlationId: "client-1" })).ok).toBe(false)
   })
 
   it("refuses an envelope that omits a required header", () => {
@@ -300,8 +296,6 @@ describe("registry reachability", () => {
     // name a direction is what lets a receiver refuse an inbound `mesh.command`
     // where an outbound one was expected.
     expect(new Set(MESH_RECORD_TYPES).size).toBe(MESH_RECORD_TYPES.length)
-    expect(MESH_RECORD_TYPES).toContain("mesh.terminal.control")
-    expect(MESH_RECORD_TYPES).toContain("mesh.terminal.data")
     expect(MESH_RECORD_TYPES).toContain("mesh.reconciliation.request")
     expect(MESH_RECORD_TYPES).toContain("mesh.reconciliation.response")
   })

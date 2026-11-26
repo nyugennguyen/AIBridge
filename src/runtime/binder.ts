@@ -1,7 +1,7 @@
 /**
  * RoleBinder: Deterministic Prompt Compilation and Tool Policy Binding
  *
- * Implements docs/implementation-plans/aibridge-herdr-orchestration.md:
+ * Implements docs/archive/aibridge-herdr-orchestration.md:
  * - §7.1: Deterministic compilation
  *     `system = Charter(v).globalRules + primaryRole.instructions + Σ secondaryRole.addendum + Charter(v).communicationPolicy + taskPrompt`
  *     Stamped with `charterDigest + roleDigests + ruleDigests`.

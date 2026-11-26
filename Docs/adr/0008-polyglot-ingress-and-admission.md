@@ -143,7 +143,7 @@ to change before a broker could be reconsidered.
  +----------------+---------------+
                   | projections
  +----------------v---------------+
- |  aibr tui (Bun + opentui)      | SEPARATE PROCESS — never coupled (§7)
+ |  TUI client (retired, 3.1.1)   | SEPARATE PROCESS — never coupled (§7)
  +--------------------------------+
 ```
 
@@ -449,7 +449,7 @@ the invariant to preserve is that there is exactly one.
 ## 6. Statefulness boundary: two routes do not migrate
 
 `GET /v1/mesh/terminal`
-([`src/mesh/gateway/terminal/route.ts:216`](../../src/mesh/gateway/terminal/route.ts))
+(`src/mesh/gateway/terminal/route.ts:216`, removed in 3.1.1)
 is a WebSocket with single-input-owner semantics (`SF-10`) and a manual takeover
 protocol. `GET /v1/mesh/events`
 ([`src/mesh/gateway/events/route.ts:66`](../../src/mesh/gateway/events/route.ts))

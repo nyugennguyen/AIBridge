@@ -96,6 +96,7 @@ export function fixForVerifyCheck(check: VerifyCheck, profile: string, platform:
     const table = PREREQ_FIX[platform] ?? PREREQ_FIX.linux!
     return table[bin] ?? (check.detail?.startsWith("Install with: ") ? check.detail.slice("Install with: ".length) : `install ${bin}`)
   }
+  if (name === "tmux") return PREREQ_FIX[platform]?.tmux ?? PREREQ_FIX.linux!.tmux   // optional: only "aibr start --foreground"
   if (name === "tailscale-active") return platform === "darwin" ? "tailscale up   # or open the Tailscale app and sign in" : "sudo tailscale up"
   if (name === "profile-paths") return "export HOME=/absolute/path/to/your/home"
   if (name === "config-exists" || name === "config-readable") return `aibr init ${p}`

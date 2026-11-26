@@ -22,7 +22,6 @@ import {
   reconciliationRequestFamily,
   reconciliationResponseFamily,
 } from "./reconciliation.js"
-import { terminalControlFamily, terminalDataFamily } from "./terminal.js"
 import type { MeshEnvelope } from "./types.js"
 
 /**
@@ -50,8 +49,6 @@ const FAMILIES: Readonly<Record<MeshRecordType, VersionedShapes>> = Object.freez
   "mesh.lease": leaseFamily.shapes,
   "mesh.reconciliation.request": reconciliationRequestFamily.shapes,
   "mesh.reconciliation.response": reconciliationResponseFamily.shapes,
-  "mesh.terminal.control": terminalControlFamily.shapes,
-  "mesh.terminal.data": terminalDataFamily.shapes,
 })
 
 /** The exhaustive `recordType` union. See `./envelope.js` for the 9/11 note. */

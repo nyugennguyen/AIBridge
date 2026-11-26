@@ -8,7 +8,7 @@
  *
  * Design constraints:
  * - `_opencode` is hidden from `--help` output.
- * - `--profile` is required for `start`, `serve`, `status`, `tui`, `_opencode`;
+ * - `--profile` is required for `start`, `serve`, `status`, `_opencode`;
  *   optional for `setup`, `verify`, and `discover`.
  * - Help and version output are deterministic (no timestamps, no random).
  * - Error messages never leak internal paths, stack traces, or env values.
@@ -19,7 +19,6 @@ import { existsSync } from "node:fs"
 import { access, rm } from "node:fs/promises"
 import { validateProfileName, resolveProfilePaths } from "./host/paths.js"
 import { readSecret, readConfig } from "./host/profile-store.js"
-import type { IpcBusHandle } from "./ipc/bridge.js"
 import type { ProcessRunner } from "./host/types.js"
 // Type-only, so the discovery command costs nothing at import time and `aibr
 // --help` on a machine with no Tailscale still runs. The module that defines
@@ -93,7 +92,6 @@ export interface CliDeps {
     readonly configPath?: string
     readonly reason?: string
     readonly preflight?: unknown
-    readonly launchTui?: boolean
     /** Node role written to the profile; selects the "next steps" printed. */
     readonly role?: string
     readonly runtime?: string | null
@@ -110,9 +108,10 @@ export interface CliDeps {
   }>
   /** Start a tmux profile (opencode + bridge windows): `aibr start --foreground`. */
   readonly startProfile: (profile: string) => Promise<{
-    readonly kind: "started" | "already_running" | "tmux_error"
+    readonly kind: "started" | "already_running" | "tmux_error" | "tmux_missing"
     readonly sessionName: string
     readonly stderr?: string
+    readonly installHint?: string
   }>
   /** Serve the bridge for a given profile (`withOpencode`: also supervise `opencode serve`). */
   readonly serveBridge: (profile: string, options?: { readonly shadowMode?: boolean; readonly withOpencode?: boolean }) => Promise<void>
@@ -122,13 +121,8 @@ export interface CliDeps {
    * Resolves on `SIGINT`/`SIGTERM`. Binds no socket: ingress belongs to the
    * router once cut over, and a worker that could accept requests would be a
    * second authority (ADR 0008 §2.2).
-   *
-   * `publishIpc` adds ONE socket, for local clients only, and it is opt-in. That
-   * socket is the local bus and not ingress: its listener cannot admit a trigger,
-   * and it lives in a `0700` user-scoped directory for the same reason the Rust
-   * listener's does.
    */
-  readonly runWorker: (profile: string, options?: { readonly publishIpc?: boolean }) => Promise<void>
+  readonly runWorker: (profile: string) => Promise<void>
   /**
    * Query a profile: whichever of the user service and the tmux session runs
    * it, and `/health`. `session_missing` is the tmux-only answer older
@@ -146,8 +140,6 @@ export interface CliDeps {
   }>
   /** Run `opencode serve` for a given profile. */
   readonly runOpencode: (profile: string) => Promise<void>
-  /** Run the interactive TUI or link the Herdr manager plugin for a validated profile. */
-  readonly runTui?: (profile: string) => Promise<CliExitCode>
   /** Process runner for executing system commands (Herdr, etc.). */
   readonly processRunner?: ProcessRunner
   /** Generate diagnostic support bundle. */
@@ -301,7 +293,6 @@ function helpText(): string {
     "  status   Check the service or tmux session and bridge health",
     "  verify   Validate role-specific dependencies, bearer token, and config",
     "  update   Check and update to the latest version",
-    "  tui      Open the interactive manager (Herdr plugin)",
     "  bundle   Generate diagnostic support bundle",
     "  plugin   Install/remove the AIBridge plugin for Claude Code",
     "  mcp      MCP server used by the Claude Code plugin (serve, summary)",
@@ -313,7 +304,7 @@ function helpText(): string {
     "  stop     Stop a profile's service and tmux session, or every running job (--all-jobs)",
     "",
     "Options:",
-    "  --profile, -p <name>   Profile name (required for start/serve/worker/status/tui)",
+    "  --profile, -p <name>   Profile name (required for start/serve/worker/status)",
     "  --config <path>        Config file to write instead of the standard path (for setup)",
     "  --advanced             Also ask for bridge and OpenCode ports (for setup)",
     "  --foreground, --tmux   Run in the tmux session aibridge-<profile> (for start)",
@@ -323,7 +314,7 @@ function helpText(): string {
     "  --help, -h             Show this help",
     "  --version, -v          Show version",
     "  --shadow-mode          Run in shadow mode (mirroring ingress to router)",
-    "  --ipc-publish          Serve the local IPC bus (worker only)",
+    "  --ipc-publish          Deprecated and ignored since 3.1.1 (the IPC bus was removed)",
     "",
     `Run "${PROG} <command> --help" for help on one command.`,
     "",
@@ -393,9 +384,9 @@ const COMMAND_HELP: Readonly<Record<string, readonly string[]>> = {
     "Usage:",
     `  ${PROG} verify [--profile <name>]`,
     "",
-    "Checks the binaries the profile's role needs (worker+opencode: tmux, opencode,",
-    "tailscale; worker+claude: tmux, claude, tailscale; orchestrator: claude,",
-    "tailscale), Tailscale state, the config schema, project directories, the",
+    "Checks the binaries the profile's role needs (worker+opencode: opencode,",
+    "tailscale; worker+claude: claude, tailscale; orchestrator: claude,",
+    "tailscale; tmux is optional and only warns), Tailscale state, the config schema, project directories, the",
     "bearer-token secret, and (for OpenCode workers) the OpenCode password.",
     "The profile defaults to \"default\".",
     "",
@@ -901,9 +892,6 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<Cl
             }
           }
           deps.writer(nextStepsText(profileName, outcome.role, outcome.daemon?.started === true))
-          if (outcome.launchTui && deps.runTui) {
-            return await deps.runTui(profileName)
-          }
           return 0
         }
         case "blocked":
@@ -1024,6 +1012,18 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<Cl
     }
   }
 
+  // ── tui (removed in 3.1.1) ─────────────────────────────────────────
+  // The Herdr manager launcher is gone; the command stays one release so a
+  // script or habit gets a pointer instead of "unknown command".
+  if (command === "tui") {
+    deps.writer(
+      "aibr tui was removed in 3.1.1 (the Herdr manager is no longer supported).\n" +
+        "Use Claude Code with the AIBridge plugin to dispatch and follow jobs, and on the worker:\n" +
+        "  aibr jobs pending   aibr approve <job_id>   aibr logs -f   aibr stop --all-jobs\n",
+    )
+    return 1
+  }
+
   // ── Commands that require --profile ────────────────────────────────
   const profileErr = validateProfileArg(args.profile)
   if (profileErr !== null) {
@@ -1032,27 +1032,6 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<Cl
   }
 
   const profile = args.profile!
-
-  // ── tui ────────────────────────────────────────────────────────────
-  if (command === "tui") {
-    if (deps.runTui !== undefined) {
-      try {
-        return await deps.runTui(profile)
-      } catch (err) {
-        deps.writer(`Error: ${err instanceof Error ? err.message : "tui failed"}\n`)
-        return 1
-      }
-    }
-    const { runTuiCommand } = await import("./cli/tui.js")
-    const { BunProcessRunner } = await import("./host/runtime.js")
-    const runner = deps.processRunner ?? new BunProcessRunner()
-    return await runTuiCommand({
-      profile,
-      runner,
-      writer: deps.writer,
-      env: process.env,
-    })
-  }
 
   // ── start ──────────────────────────────────────────────────────────
   if (command === "start") {
@@ -1090,6 +1069,13 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<Cl
         case "tmux_error":
           deps.writer(`tmux_error: ${result.stderr ?? "unknown error"}\n`)
           return 1
+        case "tmux_missing":
+          deps.writer(
+            `Error: tmux is not installed, and "${PROG} start --foreground" runs the bridge in a tmux session.\n` +
+              `Install it: ${result.installHint ?? "install tmux with your package manager"}\n` +
+              `Or run "${PROG} start --profile ${profile}" (without --foreground): the user service does not need tmux.\n`,
+          )
+          return 1
       }
     } catch (err) {
       deps.writer(`Error: ${err instanceof Error ? err.message : "start failed"}\n`)
@@ -1114,7 +1100,11 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<Cl
   // ── worker ─────────────────────────────────────────────────────────
   if (command === "worker") {
     try {
-      await deps.runWorker(profile, { publishIpc: args.hasFlag("--ipc-publish") })
+      if (args.hasFlag("--ipc-publish")) {
+        // Accepted so a service unit written by an earlier release keeps starting.
+        deps.writer("warning: --ipc-publish is deprecated and ignored since 3.1.1 (the IPC bus was removed)\n")
+      }
+      await deps.runWorker(profile)
       return 0
     } catch (err) {
       deps.writer(`Error: ${err instanceof Error ? err.message : "worker failed"}\n`)
@@ -1218,15 +1208,6 @@ async function createRealDeps(): Promise<CliDeps> {
     writer,
     isTTY: Boolean(process.stdout?.isTTY),
     isInputTTY: Boolean(process.stdin?.isTTY),
-    runTui: async (profile: string) => {
-      const { runTuiCommand } = await import("./cli/tui.js")
-      return await runTuiCommand({
-        profile,
-        runner: processRunner,
-        writer,
-        env: process.env,
-      })
-    },
 
     runSetup: async (profile?: string, setupOptions?: SetupCommandOptions) => {
       const stdin = process.stdin as NodeJS.ReadStream | undefined
@@ -1407,24 +1388,6 @@ async function createRealDeps(): Promise<CliDeps> {
         logger.info(formatRequestLine({ method: request.method, url: request.url, status: reply.statusCode, durationMs: reply.elapsedTime }))
       })
 
-      let bus: IpcBusHandle | undefined
-      try {
-        const { QueueBridge, startIpcBus } = await import("./ipc/bridge.js")
-        const queueBridge = new QueueBridge()
-        bus = await startIpcBus({
-          config: bridge.config,
-          jobManager: bridge.jobManager,
-          bridge: queueBridge,
-          outboxPendingCount: () => 0,
-          // Only a secret that exists is a secret worth scrubbing: a null bearer
-          // token handed to the redactor would become a pattern matching every
-          // empty string, which redacts nothing and costs a pass per client.
-          customSecrets: bearerToken === null ? [] : [bearerToken],
-        })
-      } catch {
-        // IPC bus is optional; bridge continues if socket cannot be bound
-      }
-
       try {
         await bridge.app.listen({ host: bridge.config.bridge.host, port: bridge.config.bridge.port })
       } catch (error) {
@@ -1445,9 +1408,6 @@ async function createRealDeps(): Promise<CliDeps> {
           stopping = true
           logger.info("stopping (signal)")
           opencodeChild?.kill("SIGTERM")
-          if (bus !== undefined) {
-            void bus.stop().catch(() => {})
-          }
           void bridge.app.close().then(() => resolve(), () => resolve())
         }
         process.once("SIGINT", onSignal)
@@ -1457,51 +1417,17 @@ async function createRealDeps(): Promise<CliDeps> {
       logger.close()
     },
 
-    runWorker: async (profile: string, workerOptions?: { readonly publishIpc?: boolean }) => {
+    runWorker: async (profile: string) => {
       const { startIngressWorker } = await import("./ingress/worker.js")
       const paths = resolveProfilePaths(profile)
       const bearerToken = await readOptionalSecret(`${paths.secretsDir}/bearer_token`)
-      const publishIpc = workerOptions?.publishIpc === true
-
-      // Created before the worker and attached after, because the drainer needs its
-      // observer at construction and the publisher needs the drainer to exist. See
-      // `QueueBridge`'s header in src/ipc/bridge.ts.
-      const { QueueBridge, startIpcBus } = await import("./ipc/bridge.js")
-      const bridge = new QueueBridge()
 
       const worker = await startIngressWorker({
         configPath: `${paths.configDir}/config.json`,
         stateDir: paths.stateDir,
         bearerToken,
         environment: process.env as Record<string, string>,
-        // Supplied here rather than inside `startIngressWorker` so that module keeps
-        // no dependency on the IPC surface, and so this flag is the single place
-        // that decides whether a socket exists at all.
-        ingressObserver: publishIpc ? bridge : undefined,
       })
-      let bus: IpcBusHandle | undefined
-      if (publishIpc) {
-        bus = await startIpcBus({
-          config: worker.config,
-          jobManager: worker.jobManager,
-          bridge,
-          // Read through the drainer's own connection, as a `COUNT` against the
-          // table rather than a maintained counter: a counter and the table disagree
-          // the moment a drainer is killed mid-cycle, and the number a client is
-          // shown must not be the optimistic one.
-          outboxPendingCount: () => worker.pendingIngressCount(),
-          // The node's own bearer token, so a token an agent echoed into a job detail
-          // is scrubbed on the way to a client rather than merely on the way to a log.
-          // Dropped when there is none: a null in this list would reach the redactor
-          // as an empty-string pattern that matches everything and redacts nothing.
-          customSecrets: bearerToken === null ? [] : [bearerToken],
-        })
-      }
-
-      // Announced rather than silent: a socket that appears without a word about it
-      // is a socket an operator cannot account for, and this one is reachable by
-      // anything running as this user.
-      writer(`IPC bus: ${bus === undefined ? "off" : `serving on ${bus.publisher.socketPath}`}\n`)
 
       // `Restart=always` sends SIGTERM; a drain loop that ignored it would be killed
       // mid-claim on every deploy, and the row would sit in 'sending' until
@@ -1509,15 +1435,7 @@ async function createRealDeps(): Promise<CliDeps> {
       await new Promise<void>((resolve) => {
         const onSignal = (): void => {
           worker.stop()
-          // Closing the LISTENER is the whole shutdown path: it closes client
-          // connections and nothing else. No pane is signalled and no job is
-          // cancelled, which is the same rule `ControlCommand::detach` follows for
-          // one client -- a socket dying is never a signal.
-          if (bus === undefined) {
-            resolve()
-            return
-          }
-          void bus.stop().then(() => resolve(), () => resolve())
+          resolve()
         }
         process.once("SIGINT", onSignal)
         process.once("SIGTERM", onSignal)

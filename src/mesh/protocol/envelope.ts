@@ -16,8 +16,9 @@ import { enrollmentIdSchema, messageIdSchema, protocolVersionSchema } from "./id
 /**
  * The record families, as wire strings.
  *
- * There are NINE families (§4.1–§4.9) but ELEVEN `recordType` values, because
- * three of the families are inherently bidirectional and a `recordType` that
+ * There are SEVEN families (the terminal frames were removed in 3.1.1) but
+ * NINE `recordType` values, because
+ * two of the families are inherently bidirectional and a `recordType` that
  * names a direction is what lets a receiver refuse an inbound `mesh.command`
  * where an outbound one was expected. Collapsing each pair back to one type
  * with a `direction` member would recreate the "union with an ambiguous
@@ -38,8 +39,6 @@ export const MESH_RECORD_TYPES = [
   "mesh.lease",
   "mesh.reconciliation.request",
   "mesh.reconciliation.response",
-  "mesh.terminal.control",
-  "mesh.terminal.data",
 ] as const
 
 export type MeshRecordType = (typeof MESH_RECORD_TYPES)[number]

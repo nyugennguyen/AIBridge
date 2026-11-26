@@ -1,7 +1,7 @@
 # Deployment & Operations Guide
 
 > **Status:** Current  
-> **Applies to:** AIBridge 3.1.0  
+> **Applies to:** AIBridge 3.1.1  
 > **Owner:** Maintainers  
 
 This guide covers deployment topologies, platform supervisor configurations (systemd and launchd), headless tmux management, and two-tier service operation.
@@ -13,7 +13,7 @@ This guide covers deployment topologies, platform supervisor configurations (sys
 ### Two-Machine Starter Topology
 A common configuration pairs a local developer workstation (`dev-main`) with a dedicated remote test runner or VPS (`test-vps`):
 
-- **`dev-main` (Workstation):** Initiates task dispatches, hosts the Herdr presentation manager, and monitors test feedback.
+- **`dev-main` (Workstation):** Initiates task dispatches, runs Claude Code with the AIBridge plugin, and monitors test feedback.
 - **`test-vps` (Execution Runner):** Runs the admission router, background worker, and OpenCode daemon inside allowlisted repository checkouts.
 
 ### Multi-Node Mesh Federation
@@ -48,9 +48,11 @@ The service restarts the bridge on failure and at login. Its stdout and stderr g
 sudo loginctl enable-linger "$USER"
 ```
 
-`aibr doctor` warns when it is off. Without a user bus (a container, `su` without a login session) `aibr start` fails with the systemd error; use `aibr start --foreground` there.
+`aibr doctor` warns when it is off. Without a user bus (a container, `su` without a login session) `aibr start` fails with the systemd error; use `aibr start --foreground` there (it needs tmux).
 
 ### 2.3 tmux (`--foreground`)
+
+tmux is optional: only this mode needs it, and `aibr start --foreground` exits 1 with the install command when it is absent. The user service does not use tmux.
 
 ```bash
 aibr start --profile <name> --foreground
@@ -88,11 +90,7 @@ The worker daemon drains admitted requests from `ingress_outbox.db` and delegate
 aibr worker --profile <profile>
 ```
 
-To expose the local Unix domain socket IPC bus for presentation tools:
-
-```bash
-aibr worker --profile <profile> --ipc-publish
-```
+The `--ipc-publish` flag is deprecated and ignored since 3.1.1 (the local IPC bus was removed); it is still accepted so existing service units keep starting.
 
 ---
 

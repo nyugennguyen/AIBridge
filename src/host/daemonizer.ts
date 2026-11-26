@@ -17,7 +17,7 @@
  * - `engine` (the default) → `aibr serve --profile <p>`; for an OpenCode
  *   worker `--with-opencode` as well, so the bridge supervises `opencode serve`
  *   as its child (the tmux path gives it its own window instead).
- * - `router` → `aibr worker --profile <p> --ipc-publish`, the drain loop behind
+ * - `router` → `aibr worker --profile <p>`, the drain loop behind
  *   the Rust `aibr-router`, which is an advanced, opt-in mode.
  *
  * `aibr` is invoked by absolute path (the Bun binary plus the CLI script, or
@@ -159,7 +159,7 @@ export function daemonCommandArgs(
   options: DaemonCommandOptions = {},
 ): readonly string[] {
   const safe = assertSafeProfile(profile)
-  if (ingressMode === "router") return ["worker", "--profile", safe, "--ipc-publish"]
+  if (ingressMode === "router") return ["worker", "--profile", safe]
   return options.withOpencode === true ? ["serve", "--profile", safe, "--with-opencode"] : ["serve", "--profile", safe]
 }
 

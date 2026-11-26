@@ -2,8 +2,9 @@ import type { PlatformInspector, ProcessRunner } from "../host/types.js"
 import type { AgentDiscoveryDeps, AgentDiscoveryResult } from "./setup-step-widgets.js"
 import { resolveProfilePaths, type ProfilePaths } from "../host/paths.js"
 import { readConfig } from "../host/profile-store.js"
+import { tmuxInstallHint } from "../host/tmux.js"
 import { planPreflight } from "../host/preflight.js"
-import { nodeRoleFromConfig, parseNodeRole, prereqsFor } from "../host/node-role.js"
+import { nodeRoleFromConfig, optionalPrereqsFor, parseNodeRole, prereqsFor } from "../host/node-role.js"
 import { bridgeConfigSchema } from "../config/schemas.js"
 import type { BridgeConfig } from "../config/types.js"
 import { lstat, readFile, access } from "node:fs/promises"
@@ -131,7 +132,7 @@ export async function runVerify(profileName: string, deps?: VerifyDeps): Promise
   // ── Config, read once up front ──────────────────────────────────────
   //
   // Read before the prerequisite check because what is required depends on the
-  // profile's role: an orchestrator needs neither tmux nor opencode, a Claude
+  // profile's role: an orchestrator needs no opencode, a Claude
   // Code worker needs `claude` instead of `opencode`. The config checks are still
   // reported in their usual place below.
   const fileOps: VerifyFileOps = deps?.fileOps ?? {
@@ -194,6 +195,22 @@ export async function runVerify(profileName: string, deps?: VerifyDeps): Promise
     }
   }
 
+  // Optional binaries: reported, never failing. A missing one is a `warn` so the
+  // operator learns what a feature needs without the install reading as broken.
+  for (const name of optionalPrereqsFor(role)) {
+    const found = (await processRunner.exec(["which", name])).exitCode === 0
+    if (found) {
+      checks.push({ name, status: "pass", message: `${name}: installed (optional)` })
+    } else {
+      checks.push({
+        name,
+        status: "warn",
+        message: `${name}: not found (optional — only "aibr start --foreground" uses it)`,
+        detail: `Install with: ${tmuxInstallHint(platformInspector.inspect().platform)}`,
+      })
+    }
+  }
+
   // ── 3. Check Tailscale connection ──────────────────────────────────
   if (preflight.tailscale.ip !== null && preflight.tailscale.backendState === "Running") {
     checks.push({
@@ -216,42 +233,6 @@ export async function runVerify(profileName: string, deps?: VerifyDeps): Promise
       detail: preflight.tailscale.error ?? undefined,
     })
   }
-  // ── 3b. Check Herdr workspace orchestrator (informational) ──────────
-  //
-  // Per ADR 0009 / ADR 0011 / docs/implementation-plans/aibridge-herdr-orchestration.md §8:
-  // Herdr is an optional user-installed terminal backend (`brew install herdr`), never
-  // an npm dependency. Headless nodes continue using tmux by default.
-  // The AIBridge orchestration fork exposes two capability flags:
-  // - F1: input-ownership fencing (`pane.claim_input` / `pane.release_input`)
-  // - F2: first-class `role` on pane/agent records
-  // Absence of Herdr or absence of fork flags is informational, never a hard failure.
-  const herdrFacts = preflight.herdr ?? {
-    installed: false,
-    path: null,
-    capabilities: { inputFencing: "no", firstClassRole: "no" },
-    error: null,
-  }
-  if (herdrFacts.installed) {
-    const { inputFencing, firstClassRole } = herdrFacts.capabilities
-    const detailParts: string[] = []
-    if (herdrFacts.path) detailParts.push(`Binary: ${herdrFacts.path}`)
-    if (herdrFacts.error) detailParts.push(`Schema probe note: ${herdrFacts.error}`)
-    checks.push({
-      name: "herdr",
-      status: "pass",
-      message: `herdr: found (fork capabilities: input-fencing=${inputFencing}, first-class-role=${firstClassRole})`,
-      detail: detailParts.length > 0 ? detailParts.join("; ") : undefined,
-    })
-  } else {
-    checks.push({
-      name: "herdr",
-      status: "pass",
-      message: "herdr: not found",
-      detail:
-        "Informational: tmux remains the default terminal backend. Install Herdr (e.g. brew install herdr) for GUI workspace orchestration.",
-    })
-  }
-
   // ── 4. Check Config File & Schema ───────────────────────────────────
   //
   // The parsed profile, carried forward so the secret checks below can read

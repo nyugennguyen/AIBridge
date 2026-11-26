@@ -4,7 +4,7 @@
  * - `worker`       receives jobs and runs them with a local agent runtime
  *                  (`opencode` or `claude`). The released behaviour.
  * - `orchestrator` dispatches work from Claude Code; it runs no runtime of its
- *                  own, so it needs neither tmux nor opencode nor a supervisor unit.
+ *                  own, so it needs neither opencode nor a supervisor unit.
  * - `both`         the union of the two.
  *
  * Written into the profile as top-level `role` and `runtime: { kind }` keys.
@@ -67,14 +67,26 @@ export function nodeRoleFromConfig(config: Record<string, unknown> | null | unde
 /**
  * Host binaries a node of this role needs, in check order.
  *
- * worker + opencode → tmux, opencode, tailscale (the released list)
- * worker + claude   → tmux, claude, tailscale
+ * tmux is not here: the bridge runs as a launchd/systemd user service, and only
+ * `aibr start --foreground` uses tmux (see `optionalPrereqsFor`).
+ *
+ * worker + opencode → opencode, tailscale
+ * worker + claude   → claude, tailscale
  * orchestrator      → claude, tailscale
- * both              → the union, de-duplicated
+ * both              → runtime, claude, tailscale (de-duplicated)
  */
 export function prereqsFor(role: NodeRole, runtime: RuntimeKind | null): readonly string[] {
-  const worker = ["tmux", runtime ?? DEFAULT_RUNTIME_KIND, "tailscale"]
+  const worker = [runtime ?? DEFAULT_RUNTIME_KIND, "tailscale"]
   if (role === "worker") return worker
   if (role === "orchestrator") return ["claude", "tailscale"]
-  return [...new Set(["tmux", runtime ?? DEFAULT_RUNTIME_KIND, "claude", "tailscale"])]
+  return [...new Set([runtime ?? DEFAULT_RUNTIME_KIND, "claude", "tailscale"])]
+}
+
+/**
+ * Host binaries that are useful but never required: reported as a warning when
+ * absent. `tmux` only backs `aibr start --foreground`, so only a role that runs
+ * jobs (and so has a bridge to start that way) lists it.
+ */
+export function optionalPrereqsFor(role: NodeRole): readonly string[] {
+  return roleRunsJobs(role) ? ["tmux"] : []
 }

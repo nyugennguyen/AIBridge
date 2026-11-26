@@ -223,12 +223,13 @@ function stoppedBackendRunner(): SequenceProcessRunner {
 }
 
 /**
- * Build a runner where prereqs are missing (tmux not found).
+ * Build a runner where a required prereq is missing (opencode not found; tmux
+ * is optional since 3.1.1 and would not block).
  */
 function missingPrereqRunner(): SequenceProcessRunner {
   return new SequenceProcessRunner(resultMap(
-    ["which tmux", failureResult()],
-    ["which opencode", successResult("/usr/local/bin/opencode")],
+    ["which tmux", successResult("/opt/homebrew/bin/tmux")],
+    ["which opencode", failureResult()],
     ["which tailscale", successResult("/usr/local/bin/tailscale")],
     ["tailscale status", successResult([
       "100.64.0.1  my-machine user@  darwin   active",

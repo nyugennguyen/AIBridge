@@ -24,4 +24,3 @@
 
 export * from "./events/index.js"
 export * from "./reconcile/index.js"
-export * from "./terminal/index.js"

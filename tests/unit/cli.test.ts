@@ -1,7 +1,3 @@
-import { mkdtempSync, rmSync } from "node:fs"
-import { tmpdir } from "node:os"
-import { join } from "node:path"
-
 import { describe, expect, it } from "vitest"
 import {
   runCli,
@@ -36,7 +32,6 @@ function fakeDeps(overrides?: {
   verifyRunner?: CliDeps["verifyProfile"]
   updateRunner?: CliDeps["runUpdate"]
   opencodeRunner?: CliDeps["runOpencode"]
-  tuiRunner?: NonNullable<CliDeps["runTui"]>
   processRunner?: CliDeps["processRunner"]
   version?: string
 }): {
@@ -75,7 +70,6 @@ function fakeDeps(overrides?: {
         message: "AIBridge is up to date",
       })),
       runOpencode: overrides?.opencodeRunner ?? (async () => {}),
-      runTui: overrides?.tuiRunner,
       processRunner: overrides?.processRunner,
       version: overrides?.version ?? "1.0.0",
     },
@@ -104,7 +98,8 @@ describe("cli --help", () => {
     expect(output).toContain("start")
     expect(output).toContain("serve")
     expect(output).toContain("status")
-    expect(output).toContain("tui")
+    // `tui` was removed in 3.1.1; the stub is not advertised.
+    expect(output).not.toMatch(/^\s+tui\s/m)
   })
 
   it("does NOT show hidden _opencode command", async () => {
@@ -489,6 +484,19 @@ describe("cli start", () => {
     expect(exitCode).not.toBe(0)
     expect(output).toContain("tmux_error")
   })
+
+  it("--foreground without tmux exits 1, names the install command and the service alternative", async () => {
+    const { exitCode, output } = await captureRun(["start", "--profile", "dev", "--foreground"], {
+      startRunner: async () => ({ kind: "tmux_missing" as const, sessionName: "aibridge-dev", installHint: "brew install tmux" }),
+    })
+
+    expect(exitCode).toBe(1)
+    expect(output).toContain("tmux is not installed")
+    expect(output).toContain("--foreground")
+    expect(output).toContain("brew install tmux")
+    expect(output).toContain("aibr start --profile dev")
+    expect(output).toContain("does not need tmux")
+  })
 })
 
 // ── serve command ──────────────────────────────────────────────────────
@@ -561,6 +569,25 @@ describe("cli worker", () => {
 
     expect(receivedProfile).toBe("dev-main")
     expect(exitCode).toBe(0)
+  })
+
+  it("accepts --ipc-publish, warns that it is ignored, and still runs the worker", async () => {
+    let receivedProfile: string | undefined
+    const { exitCode, output } = await captureRun(["worker", "--profile", "dev-main", "--ipc-publish"], {
+      workerRunner: async (profile) => {
+        receivedProfile = profile
+      },
+    })
+
+    expect(exitCode).toBe(0)
+    expect(receivedProfile).toBe("dev-main")
+    expect(output).toContain("warning: --ipc-publish is deprecated and ignored since 3.1.1")
+  })
+
+  it("does not warn about --ipc-publish when the flag is absent", async () => {
+    const { output } = await captureRun(["worker", "--profile", "dev-main"])
+
+    expect(output).not.toContain("--ipc-publish")
   })
 
   it("returns nonzero and explains when the store cannot be opened", async () => {
@@ -804,79 +831,29 @@ describe("cli _opencode (hidden)", () => {
 
 // ── Non-TTY ────────────────────────────────────────────────────────────
 
-describe("cli tui", () => {
-  it("requires a profile", async () => {
-    const { exitCode, output } = await captureRun(["tui"])
-
-    expect(exitCode).toBe(1)
-    expect(output).toContain("--profile")
-  })
-
-  it("links manager plugin when Herdr is present", async () => {
-    const managerPath = mkdtempSync(join(tmpdir(), "aibr-manager-"))
-    const previous = process.env.AIBRIDGE_MANAGER_PLUGIN_PATH
-    process.env.AIBRIDGE_MANAGER_PLUGIN_PATH = managerPath
-    try {
-      const fakeRunner: ProcessRunner = {
-        exec: async (cmd: readonly string[]) => {
-          if (cmd[0] === "which" && cmd[1] === "herdr") {
-            return { exitCode: 0, stdout: "/usr/local/bin/herdr", stderr: "" }
-          }
-          if (cmd[0] === "herdr" && cmd[1] === "api" && cmd[2] === "schema") {
-            return { exitCode: 0, stdout: JSON.stringify({ capabilities: { input_fencing: true, first_class_role: true } }), stderr: "" }
-          }
-          if (cmd[0] === "herdr" && cmd[1] === "plugin" && cmd[2] === "link") {
-            return { exitCode: 0, stdout: "linked", stderr: "" }
-          }
-          return { exitCode: 0, stdout: "", stderr: "" }
-        },
-      }
-
-      const { exitCode, output } = await captureRun(["tui", "--profile", "dev"], {
-        processRunner: fakeRunner,
-      })
-
-      expect(exitCode).toBe(0)
-      expect(output).toContain("AIBridge Manager plugin linked successfully")
-      expect(output).toContain("To open the manager inside Herdr:")
-    } finally {
-      if (previous === undefined) {
-        delete process.env.AIBRIDGE_MANAGER_PLUGIN_PATH
-      } else {
-        process.env.AIBRIDGE_MANAGER_PLUGIN_PATH = previous
-      }
-      rmSync(managerPath, { recursive: true, force: true })
+describe("cli tui (removed in 3.1.1)", () => {
+  it("points to the replacements and exits 1, with or without a profile", async () => {
+    for (const argv of [["tui"], ["tui", "--profile", "dev"]]) {
+      const { exitCode, output } = await captureRun(argv)
+      expect(exitCode).toBe(1)
+      expect(output).toContain("aibr tui was removed in 3.1.1")
+      expect(output).toContain("aibr jobs pending")
+      expect(output).not.toContain("--profile is required")
     }
   })
 
-  it("fails with a clear actionable error when Herdr is absent", async () => {
+  it("never runs a process (no Herdr probe, no plugin link)", async () => {
+    const calls: string[][] = []
     const fakeRunner: ProcessRunner = {
       exec: async (cmd: readonly string[]) => {
-        if (cmd[0] === "which" && cmd[1] === "herdr") {
-          return { exitCode: 1, stdout: "", stderr: "herdr not found" }
-        }
+        calls.push([...cmd])
         return { exitCode: 0, stdout: "", stderr: "" }
       },
     }
-
-    const { exitCode, output } = await captureRun(["tui", "--profile", "dev"], {
-      processRunner: fakeRunner,
-    })
-
-    expect(exitCode).toBe(1)
-    expect(output).toContain("Error: Herdr is not installed or not found on PATH")
-    expect(output).toContain("brew install herdr")
+    await captureRun(["tui", "--profile", "dev"], { processRunner: fakeRunner })
+    expect(calls).toEqual([])
   })
 
-  it("delegates a validated profile to the separately injected tuiRunner", async () => {
-    let profile: string | undefined
-    const { exitCode } = await captureRun(["tui", "--profile", "dev"], {
-      tuiRunner: async (value) => { profile = value; return 0 },
-    })
-
-    expect(exitCode).toBe(0)
-    expect(profile).toBe("dev")
-  })
   it("keeps help and version usable without TTYs", async () => {
     const help = await captureRun(["tui", "--help"], { isTTY: false, isInputTTY: false })
     const version = await captureRun(["tui", "--version"], { isTTY: false, isInputTTY: false })

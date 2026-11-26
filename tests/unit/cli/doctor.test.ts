@@ -156,6 +156,26 @@ describe("buildDoctorReport", () => {
     expect(text).toContain("3 problems found, 2 warnings.")
   })
 
+  it("shows a missing optional tmux as a warning with its install command, and does not fail", async () => {
+    const checks: VerifyCheck[] = [
+      ...PASSING,
+      {
+        name: "tmux",
+        status: "warn",
+        message: 'tmux: not found (optional — only "aibr start --foreground" uses it)',
+        detail: "Install with: brew install tmux",
+      },
+    ]
+    const report = await buildDoctorReport("dev", deps({ checks }))
+    expect(report.ok).toBe(true)
+    expect(report.lines.find((l) => l.message.startsWith("tmux: not found"))).toMatchObject({
+      status: "warn",
+      fix: "brew install tmux",
+      detail: "Install with: brew install tmux",
+    })
+    expect(fixForVerifyCheck({ name: "tmux", status: "warn", message: "" }, "dev", "linux", ENV)).toBe("sudo apt-get install -y tmux")
+  })
+
   it("skips bridge and peers when the profile has no usable config", async () => {
     const report = await buildDoctorReport(
       "dev",

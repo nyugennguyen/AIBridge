@@ -2,7 +2,7 @@
  * AIBridge Onboarding & Setup Wizard Step Widgets
  *
  * Implements the interactive step widgets for `aibr setup` matching:
- * - Docs/tui/aibridge-setup-wizard.html
+ * - Docs/archive/aibridge-setup-wizard.html
  * - Docs/assets/logos/logo-design-system.html
  * - .agents/skills/aibr-onboarding/SKILL.md
  *
@@ -279,7 +279,7 @@ export interface GenerateBearerTokenOptions {
  *
  * Defaults to producing tokens with `aibr_sec_` prefix and 32 hex chars, which is
  * 16 bytes = 128 bits of entropy. This matches `aibr_sec_<32-hex>` in SKILL.md and
- * Docs/tui/aibridge-setup-wizard.html, both of which previously mislabelled this
+ * Docs/archive/aibridge-setup-wizard.html, both of which previously mislabelled this
  * as "256-bit" -- the byte count is 16, not 32.
  *
  * 128 bits is far past brute force for a bearer token, but it is a deliberate

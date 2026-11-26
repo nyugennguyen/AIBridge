@@ -35,7 +35,7 @@ import type { AppendMemoryInput, MemoryRepository } from "../../src/memory/ports
 import { proposeMemoryRecord, type MemoryRecordV2 } from "../../src/memory/record.js"
 import { RepositoryMemoryWorkflow } from "../../src/memory/workflow.js"
 import { assembleContext, renderContextWithContent, sourceIdOf } from "../../src/context/assembler.js"
-import { buildMemoryTuiView, buildPreview, initialMemoryTuiState, reduceMemoryTui, verifyPreviewMatchesManifest } from "../../src/context/tui/memory-view.js"
+import { buildPreview, verifyPreviewMatchesManifest } from "../../src/context/preview.js"
 import { SEEDED_SECRET_LITERALS, SEEDED_SECRETS } from "../../src/memory/redaction/corpus.js"
 import { DeterministicRedactionPipeline } from "../../src/memory/redaction/pipeline.js"
 import { defaultRedactionPolicy } from "../../src/memory/redaction/index.js"
@@ -613,33 +613,27 @@ describe("M5.9 the TUI preview shows exactly the context, and nothing withheld",
       ),
     )
 
-    const state = reduceMemoryTui(initialMemoryTuiState(), { type: "manifest-loaded", manifest: assembled })
-    const view = buildMemoryTuiView(state)
-    expect(view.preview).not.toBeNull()
-    expect(verifyPreviewMatchesManifest(view.preview!, assembled)).toEqual([])
+    const preview = buildPreview(assembled)
+    expect(verifyPreviewMatchesManifest(preview, assembled)).toEqual([])
 
     // Included, in the manifest's own order: the higher priority first.
-    expect(view.preview!.included.map((item) => item.sourceId)).toEqual(["m-2", "m-1"])
-    expect(view.preview!.excluded.map((item) => `${item.sourceId}:${item.reason}`)).toEqual(["m-secret:prohibited_content"])
+    expect(preview.included.map((item) => item.sourceId)).toEqual(["m-2", "m-1"])
+    expect(preview.excluded.map((item) => `${item.sourceId}:${item.reason}`)).toEqual(["m-secret:prohibited_content"])
+    expect(preview.excluded.find((item) => item.sourceId === "m-secret")?.withheldDetail).toBe(true)
 
-    const rendered = view.lines.join("\n")
-    expect(rendered).toContain("m-2")
-    expect(rendered).toContain("m-1")
-    expect(rendered).toContain("m-secret: prohibited_content (detail withheld)")
-    // The withheld record's own text is nowhere on screen.
-    expect(rendered).not.toContain("withheld\n")
-
-    // The TUI preview is its own egress path, and it is the last of the seven.
-    // Audited here with the *rendered* lines, so a preview that filtered,
-    // re-sorted, or un-redacted would be caught.
+    // The preview is its own egress path, and it is the last of the seven.
+    // Audited with the preview data serialised line by line (the TUI renderer
+    // was removed in 3.1.1), so a preview that carried withheld text or a seeded
+    // secret would be caught.
+    const lines = JSON.stringify(preview, null, 1).split("\n")
     const audit = auditMemoryContext({
       seededSecrets: SEEDED_SECRET_LITERALS,
       forbiddenIdentifiers: [],
       manifest: assembled,
       preview: {
-        lines: view.lines,
-        included: view.preview!.included,
-        excluded: view.preview!.excluded,
+        lines,
+        included: preview.included,
+        excluded: preview.excluded,
       },
     })
     expect(describeAudit(audit)).toContain("PASS")

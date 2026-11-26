@@ -13,10 +13,7 @@ import {
   runPreflight,
   planPreflight,
   checkTailscaleStatus,
-  checkHerdrStatus,
-  formatHerdrCapabilities,
   type PreflightCheck,
-  type HerdrFacts,
 } from "../../../src/host/preflight.js"
 
 // ── SequenceProcessRunner ──────────────────────────────────────────────
@@ -86,6 +83,12 @@ function resultMap(...entries: Array<[string, ProcessResult]>): Map<string, Proc
   return new Map<string, ProcessResult>(entries)
 }
 
+/**
+ * The default list no longer includes tmux (optional since 3.1.1), but the
+ * install-planning logic is still exercised with it: it stays in the table.
+ */
+const WITH_TMUX = ["tmux", "opencode", "tailscale"] as const
+
 // ── planPreflight ──────────────────────────────────────────────────────
 
 describe("planPreflight", () => {
@@ -96,7 +99,7 @@ describe("planPreflight", () => {
       })
       const runner = new SequenceProcessRunner(resultMap())
 
-      const result = await planPreflight({ platformInspector: inspector, processRunner: runner })
+      const result = await planPreflight({ prereqs: WITH_TMUX, platformInspector: inspector, processRunner: runner })
 
       expect(result.ok).toBe(false)
       expect(result.checks).toEqual([])
@@ -109,7 +112,7 @@ describe("planPreflight", () => {
       })
       const runner = new SequenceProcessRunner(resultMap())
 
-      const result = await planPreflight({ platformInspector: inspector, processRunner: runner })
+      const result = await planPreflight({ prereqs: WITH_TMUX, platformInspector: inspector, processRunner: runner })
 
       expect(result.ok).toBe(false)
       expect(result.checks).toEqual([])
@@ -124,7 +127,7 @@ describe("planPreflight", () => {
         ["which tailscale", successResult("/usr/local/bin/tailscale")],
       ))
 
-      const result = await planPreflight({ platformInspector: inspector, processRunner: runner })
+      const result = await planPreflight({ prereqs: WITH_TMUX, platformInspector: inspector, processRunner: runner })
 
       expect(result.ok).toBe(true)
     })
@@ -137,7 +140,7 @@ describe("planPreflight", () => {
         ["which tailscale", successResult("/usr/bin/tailscale")],
       ))
 
-      const result = await planPreflight({ platformInspector: inspector, processRunner: runner })
+      const result = await planPreflight({ prereqs: WITH_TMUX, platformInspector: inspector, processRunner: runner })
 
       expect(result.ok).toBe(true)
     })
@@ -150,7 +153,7 @@ describe("planPreflight", () => {
         ["which tailscale", successResult("/usr/bin/tailscale")],
       ))
 
-      const result = await planPreflight({ platformInspector: inspector, processRunner: runner })
+      const result = await planPreflight({ prereqs: WITH_TMUX, platformInspector: inspector, processRunner: runner })
 
       expect(result.ok).toBe(true)
     })
@@ -165,7 +168,7 @@ describe("planPreflight", () => {
         ["which tailscale", successResult("/usr/local/bin/tailscale")],
       ))
 
-      const result = await planPreflight({ platformInspector: inspector, processRunner: runner })
+      const result = await planPreflight({ prereqs: WITH_TMUX, platformInspector: inspector, processRunner: runner })
 
       expect(result.ok).toBe(true)
       expect(result.checks).toHaveLength(3)
@@ -185,6 +188,7 @@ describe("planPreflight", () => {
       const prompter = new FakePrompter({ confirmValue: "y" })
 
       await runPreflight({
+      prereqs: WITH_TMUX,
         platformInspector: inspector,
         processRunner: runner,
         prompter,
@@ -201,7 +205,7 @@ describe("planPreflight", () => {
         ["which tailscale", successResult("/usr/bin/tailscale")],
       ))
 
-      const result = await planPreflight({ platformInspector: inspector, processRunner: runner })
+      const result = await planPreflight({ prereqs: WITH_TMUX, platformInspector: inspector, processRunner: runner })
 
       expect(result.ok).toBe(true)
       for (const check of result.checks) {
@@ -219,7 +223,7 @@ describe("planPreflight", () => {
         ["which tailscale", successResult("/usr/local/bin/tailscale")],
       ))
 
-      const result = await planPreflight({ platformInspector: inspector, processRunner: runner })
+      const result = await planPreflight({ prereqs: WITH_TMUX, platformInspector: inspector, processRunner: runner })
 
       const tmux = result.checks.find((c: PreflightCheck) => c.name === "tmux")!
       expect(tmux.status).toBe("missing")
@@ -234,7 +238,7 @@ describe("planPreflight", () => {
         ["which tailscale", successResult("/usr/bin/tailscale")],
       ))
 
-      const result = await planPreflight({ platformInspector: inspector, processRunner: runner })
+      const result = await planPreflight({ prereqs: WITH_TMUX, platformInspector: inspector, processRunner: runner })
 
       const tmux = result.checks.find((c: PreflightCheck) => c.name === "tmux")!
       expect(tmux.status).toBe("missing")
@@ -249,7 +253,7 @@ describe("planPreflight", () => {
         ["which tailscale", failureResult()],
       ))
 
-      const result = await planPreflight({ platformInspector: inspector, processRunner: runner })
+      const result = await planPreflight({ prereqs: WITH_TMUX, platformInspector: inspector, processRunner: runner })
 
       const ts = result.checks.find((c: PreflightCheck) => c.name === "tailscale")!
       expect(ts.status).toBe("missing")
@@ -264,7 +268,7 @@ describe("planPreflight", () => {
         ["which tailscale", failureResult()],
       ))
 
-      const result = await planPreflight({ platformInspector: inspector, processRunner: runner })
+      const result = await planPreflight({ prereqs: WITH_TMUX, platformInspector: inspector, processRunner: runner })
 
       const ts = result.checks.find((c: PreflightCheck) => c.name === "tailscale")!
       expect(ts.status).toBe("missing")
@@ -283,7 +287,7 @@ describe("planPreflight", () => {
         ["which tailscale", successResult()],
       ))
 
-      const result = await planPreflight({ platformInspector: inspector, processRunner: runner })
+      const result = await planPreflight({ prereqs: WITH_TMUX, platformInspector: inspector, processRunner: runner })
 
       expect(result.ok).toBe(false)
     })
@@ -296,7 +300,7 @@ describe("planPreflight", () => {
         ["which tailscale", successResult()],
       ))
 
-      const result = await planPreflight({ platformInspector: inspector, processRunner: runner })
+      const result = await planPreflight({ prereqs: WITH_TMUX, platformInspector: inspector, processRunner: runner })
 
       expect(result.missing).toBe(2)
     })
@@ -309,7 +313,7 @@ describe("planPreflight", () => {
         ["which tailscale", failureResult()],
       ))
 
-      const result = await planPreflight({ platformInspector: inspector, processRunner: runner })
+      const result = await planPreflight({ prereqs: WITH_TMUX, platformInspector: inspector, processRunner: runner })
 
       expect(result.missing).toBe(3)
       // tmux and tailscale have install commands; opencode does not
@@ -327,7 +331,7 @@ describe("planPreflight", () => {
         ["which tailscale", successResult()],
       ))
 
-      const result = await planPreflight({ platformInspector: inspector, processRunner: runner })
+      const result = await planPreflight({ prereqs: WITH_TMUX, platformInspector: inspector, processRunner: runner })
 
       const oc = result.checks.find((c: PreflightCheck) => c.name === "opencode")!
       expect(oc.status).toBe("missing")
@@ -344,7 +348,7 @@ describe("planPreflight", () => {
         ["which tailscale", failureResult()],
       ))
 
-      const result = await planPreflight({ platformInspector: inspector, processRunner: runner })
+      const result = await planPreflight({ prereqs: WITH_TMUX, platformInspector: inspector, processRunner: runner })
 
       for (const check of result.checks) {
         if (check.installCmd !== null) {
@@ -367,7 +371,7 @@ describe("planPreflight", () => {
         ["which tailscale", failureResult()],
       ))
 
-      const result = await planPreflight({ platformInspector: inspector, processRunner: runner })
+      const result = await planPreflight({ prereqs: WITH_TMUX, platformInspector: inspector, processRunner: runner })
 
       const tmux = result.checks.find((c: PreflightCheck) => c.name === "tmux")!
       const ts = result.checks.find((c: PreflightCheck) => c.name === "tailscale")!
@@ -383,7 +387,7 @@ describe("planPreflight", () => {
         ["which tailscale", failureResult()],
       ))
 
-      const result = await planPreflight({ platformInspector: inspector, processRunner: runner })
+      const result = await planPreflight({ prereqs: WITH_TMUX, platformInspector: inspector, processRunner: runner })
 
       const tmux = result.checks.find((c: PreflightCheck) => c.name === "tmux")!
       const ts = result.checks.find((c: PreflightCheck) => c.name === "tailscale")!
@@ -399,7 +403,7 @@ describe("planPreflight", () => {
         ["which tailscale", failureResult()],
       ))
 
-      const result = await planPreflight({ platformInspector: inspector, processRunner: runner })
+      const result = await planPreflight({ prereqs: WITH_TMUX, platformInspector: inspector, processRunner: runner })
 
       for (const check of result.checks) {
         if (check.installCmd !== null) {
@@ -423,10 +427,11 @@ describe("planPreflight", () => {
         ["tailscale status", successResult("")],
       ))
 
-      await planPreflight({ platformInspector: inspector, processRunner: runner })
+      await planPreflight({ prereqs: WITH_TMUX, platformInspector: inspector, processRunner: runner })
 
+      // tmux, opencode, tailscale — no herdr probe since 3.1.1.
       const whichCalls = runner.calls.filter((c) => c.argv[0] === "which")
-      expect(whichCalls).toHaveLength(4)
+      expect(whichCalls.map((c) => c.argv[1])).toEqual(["tmux", "opencode", "tailscale"])
       for (const call of whichCalls) {
         expect(call.argv).toHaveLength(2)
       }
@@ -442,7 +447,7 @@ describe("planPreflight", () => {
         ["which tailscale", successResult()],
       ))
 
-      const result = await planPreflight({ platformInspector: inspector, processRunner: runner })
+      const result = await planPreflight({ prereqs: WITH_TMUX, platformInspector: inspector, processRunner: runner })
 
       expect(result.platform).toBe("darwin")
     })
@@ -456,7 +461,7 @@ describe("planPreflight", () => {
         ["tailscale status", successResult(TAILSCALE_STATUS_OUTPUT)],
       ))
 
-      const result = await planPreflight({ platformInspector: inspector, processRunner: runner })
+      const result = await planPreflight({ prereqs: WITH_TMUX, platformInspector: inspector, processRunner: runner })
 
       expect(result.tailscale).toBeDefined()
       expect(typeof result.tailscale).toBe("object")
@@ -470,7 +475,7 @@ describe("planPreflight", () => {
         ["which tailscale", successResult()],
       ))
 
-      const result = await planPreflight({ platformInspector: inspector, processRunner: runner })
+      const result = await planPreflight({ prereqs: WITH_TMUX, platformInspector: inspector, processRunner: runner })
 
       expect(result.checks).toHaveLength(3)
       expect(result.checks.map((c: PreflightCheck) => c.name).sort()).toEqual(["opencode", "tailscale", "tmux"])
@@ -494,6 +499,7 @@ describe("runPreflight", () => {
       const prompter = new FakePrompter({ confirmValue: "y" })
 
       await runPreflight({
+      prereqs: WITH_TMUX,
         platformInspector: inspector,
         processRunner: runner,
         prompter,
@@ -516,6 +522,7 @@ describe("runPreflight", () => {
       const prompter = new FakePrompter({ confirmValue: "y" })
 
       await runPreflight({
+      prereqs: WITH_TMUX,
         platformInspector: inspector,
         processRunner: runner,
         prompter,
@@ -535,6 +542,7 @@ describe("runPreflight", () => {
       const prompter = new FakePrompter({ confirmValue: "y" })
 
       await runPreflight({
+      prereqs: WITH_TMUX,
         platformInspector: inspector,
         processRunner: runner,
         prompter,
@@ -555,6 +563,7 @@ describe("runPreflight", () => {
       const prompter = new FakePrompter({ confirmValue: "n" })
 
       const result = await runPreflight({
+      prereqs: WITH_TMUX,
         platformInspector: inspector,
         processRunner: runner,
         prompter,
@@ -576,6 +585,7 @@ describe("runPreflight", () => {
       const prompter = new FakePrompter({ confirmValue: "n" })
 
       const result = await runPreflight({
+      prereqs: WITH_TMUX,
         platformInspector: inspector,
         processRunner: runner,
         prompter,
@@ -597,6 +607,7 @@ describe("runPreflight", () => {
       const prompter = new FakePrompter({ confirmValue: "y" })
 
       await runPreflight({
+      prereqs: WITH_TMUX,
         platformInspector: inspector,
         processRunner: runner,
         prompter,
@@ -618,6 +629,7 @@ describe("runPreflight", () => {
       const prompter = new FakePrompter({ confirmValue: "y" })
 
       const result = await runPreflight({
+      prereqs: WITH_TMUX,
         platformInspector: inspector,
         processRunner: runner,
         prompter,
@@ -639,6 +651,7 @@ describe("runPreflight", () => {
       const prompter = new FakePrompter({ confirmValue: "y" })
 
       const result = await runPreflight({
+      prereqs: WITH_TMUX,
         platformInspector: inspector,
         processRunner: runner,
         prompter,
@@ -660,6 +673,7 @@ describe("runPreflight", () => {
       const prompter = new FakePrompter({ confirmValue: "y" })
 
       const result = await runPreflight({
+      prereqs: WITH_TMUX,
         platformInspector: inspector,
         processRunner: runner,
         prompter,
@@ -681,6 +695,7 @@ describe("runPreflight", () => {
       const prompter = new FakePrompter({ confirmValue: "y" })
 
       const result = await runPreflight({
+      prereqs: WITH_TMUX,
         platformInspector: inspector,
         processRunner: runner,
         prompter,
@@ -701,6 +716,7 @@ describe("runPreflight", () => {
       const prompter = new FakePrompter({ confirmValue: "y" })
 
       const result = await runPreflight({
+      prereqs: WITH_TMUX,
         platformInspector: inspector,
         processRunner: runner,
         prompter,
@@ -723,6 +739,7 @@ describe("runPreflight", () => {
       const prompter = new FakePrompter({ confirmValue: "y" })
 
       const result = await runPreflight({
+      prereqs: WITH_TMUX,
         platformInspector: inspector,
         processRunner: runner,
         prompter,
@@ -750,6 +767,7 @@ describe("runPreflight", () => {
       }
 
       const result = await runPreflight({
+      prereqs: WITH_TMUX,
         platformInspector: inspector,
         processRunner: runner,
         prompter,
@@ -771,7 +789,7 @@ describe("runPreflight", () => {
         ["which tailscale", failureResult()],
       ))
 
-      const result = await planPreflight({ platformInspector: inspector, processRunner: runner })
+      const result = await planPreflight({ prereqs: WITH_TMUX, platformInspector: inspector, processRunner: runner })
 
       for (const check of result.checks) {
         if (check.installCmd !== null) {
@@ -790,7 +808,7 @@ describe("runPreflight", () => {
         ["which tailscale", successResult()],
       ))
 
-      const result = await planPreflight({ platformInspector: inspector, processRunner: runner })
+      const result = await planPreflight({ prereqs: WITH_TMUX, platformInspector: inspector, processRunner: runner })
 
       const resultStr = JSON.stringify(result)
       expect(resultStr).not.toContain("0.0.0.0")
@@ -805,6 +823,7 @@ describe("runPreflight", () => {
       const prompter = new FakePrompter({ confirmValue: "y" })
 
       const result = await runPreflight({
+      prereqs: WITH_TMUX,
         platformInspector: inspector,
         processRunner: runner,
         prompter,
@@ -823,6 +842,7 @@ describe("runPreflight", () => {
       const prompter = new FakePrompter({ confirmValue: "y" })
 
       const result = await runPreflight({
+      prereqs: WITH_TMUX,
         platformInspector: inspector,
         processRunner: runner,
         prompter,
@@ -1024,245 +1044,5 @@ describe("checkTailscaleStatus", () => {
       expect(runner.calls).toHaveLength(1)
       expect(runner.calls[0].argv).toEqual(["tailscale", "status", "--json"])
     })
-  })
-})
-
-// ── checkHerdrStatus ───────────────────────────────────────────────────
-
-describe("checkHerdrStatus", () => {
-  const forkSchema = {
-    $schema: "http://json-schema.org/draft-07/schema#",
-    title: "Herdr IPC API (fork)",
-    definitions: {
-      "pane.claim_input": {
-        type: "object",
-        properties: {
-          pane_id: { type: "string" },
-          holder: { type: "string" },
-          epoch: { type: "number" },
-        },
-      },
-      "pane.release_input": {
-        type: "object",
-        properties: {
-          pane_id: { type: "string" },
-          holder: { type: "string" },
-          epoch: { type: "number" },
-        },
-      },
-      Pane: {
-        type: "object",
-        properties: {
-          id: { type: "string" },
-          role: { type: "string" },
-        },
-      },
-    },
-  }
-
-  const stockSchema = {
-    $schema: "http://json-schema.org/draft-07/schema#",
-    title: "Herdr IPC API (stock)",
-    definitions: {
-      "pane.split": { type: "object" },
-      "agent.start": { type: "object" },
-      Pane: {
-        type: "object",
-        properties: {
-          id: { type: "string" },
-          title: { type: "string" },
-        },
-      },
-    },
-  }
-
-  it("returns installed=false when herdr binary is absent on PATH", async () => {
-    const runner = new SequenceProcessRunner(resultMap(
-      ["which herdr", failureResult("herdr not found")],
-    ))
-
-    const facts = await checkHerdrStatus(runner)
-
-    expect(facts.installed).toBe(false)
-    expect(facts.path).toBeNull()
-    expect(facts.capabilities.inputFencing).toBe("no")
-    expect(facts.capabilities.firstClassRole).toBe("no")
-    expect(facts.error).toBeNull()
-  })
-
-  it("probes schema and returns both flags yes when fork primitives (F1 + F2) are in schema", async () => {
-    const runner = new SequenceProcessRunner(resultMap(
-      ["which herdr", successResult("/opt/homebrew/bin/herdr")],
-      ["herdr api schema --json", successResult(JSON.stringify(forkSchema))],
-    ))
-
-    const facts = await checkHerdrStatus(runner)
-
-    expect(facts.installed).toBe(true)
-    expect(facts.path).toBe("/opt/homebrew/bin/herdr")
-    expect(facts.capabilities.inputFencing).toBe("yes")
-    expect(facts.capabilities.firstClassRole).toBe("yes")
-    expect(facts.error).toBeNull()
-    expect(formatHerdrCapabilities(facts.capabilities)).toBe("input-fencing=yes, first-class-role=yes")
-  })
-
-  it("probes schema and returns both flags no for stock Herdr missing fork primitives", async () => {
-    const runner = new SequenceProcessRunner(resultMap(
-      ["which herdr", successResult("/usr/local/bin/herdr")],
-      ["herdr api schema --json", successResult(JSON.stringify(stockSchema))],
-    ))
-
-    const facts = await checkHerdrStatus(runner)
-
-    expect(facts.installed).toBe(true)
-    expect(facts.path).toBe("/usr/local/bin/herdr")
-    expect(facts.capabilities.inputFencing).toBe("no")
-    expect(facts.capabilities.firstClassRole).toBe("no")
-    expect(facts.error).toBeNull()
-    expect(formatHerdrCapabilities(facts.capabilities)).toBe("input-fencing=no, first-class-role=no")
-  })
-
-  it("handles malformed JSON schema output gracefully (flags unknown, no throw)", async () => {
-    const runner = new SequenceProcessRunner(resultMap(
-      ["which herdr", successResult("/usr/bin/herdr")],
-      ["herdr api schema --json", successResult("{ not valid json content")],
-    ))
-
-    const facts = await checkHerdrStatus(runner)
-
-    expect(facts.installed).toBe(true)
-    expect(facts.capabilities.inputFencing).toBe("unknown")
-    expect(facts.capabilities.firstClassRole).toBe("unknown")
-    expect(facts.error).toBe("malformed schema JSON")
-  })
-
-  it("handles garbage object schema output gracefully (flags unknown, no throw)", async () => {
-    const runner = new SequenceProcessRunner(resultMap(
-      ["which herdr", successResult("/usr/bin/herdr")],
-      ["herdr api schema --json", successResult(JSON.stringify({ totally: "unrelated", bogus: 123 }))],
-    ))
-
-    const facts = await checkHerdrStatus(runner)
-
-    expect(facts.installed).toBe(true)
-    expect(facts.capabilities.inputFencing).toBe("unknown")
-    expect(facts.capabilities.firstClassRole).toBe("unknown")
-    expect(facts.error).toBe("unrecognized or malformed schema structure")
-  })
-
-  it("handles daemon error payload in schema output gracefully (flags unknown)", async () => {
-    const runner = new SequenceProcessRunner(resultMap(
-      ["which herdr", successResult("/usr/bin/herdr")],
-      ["herdr api schema --json", successResult(JSON.stringify({ error: "daemon offline" }))],
-    ))
-
-    const facts = await checkHerdrStatus(runner)
-
-    expect(facts.installed).toBe(true)
-    expect(facts.capabilities.inputFencing).toBe("unknown")
-    expect(facts.capabilities.firstClassRole).toBe("unknown")
-    expect(facts.error).toBe("daemon offline")
-  })
-
-  it("handles empty schema output gracefully (flags unknown)", async () => {
-    const runner = new SequenceProcessRunner(resultMap(
-      ["which herdr", successResult("/usr/bin/herdr")],
-      ["herdr api schema --json", successResult("   \n")],
-    ))
-
-    const facts = await checkHerdrStatus(runner)
-
-    expect(facts.installed).toBe(true)
-    expect(facts.capabilities.inputFencing).toBe("unknown")
-    expect(facts.capabilities.firstClassRole).toBe("unknown")
-    expect(facts.error).toBe("empty schema output")
-  })
-
-  it("handles herdr api schema non-zero exit code gracefully (flags unknown)", async () => {
-    const runner = new SequenceProcessRunner(resultMap(
-      ["which herdr", successResult("/usr/bin/herdr")],
-      ["herdr api schema --json", failureResult("herdr api schema: command failed with error")],
-    ))
-
-    const facts = await checkHerdrStatus(runner)
-
-    expect(facts.installed).toBe(true)
-    expect(facts.capabilities.inputFencing).toBe("unknown")
-    expect(facts.capabilities.firstClassRole).toBe("unknown")
-    expect(facts.error).toBe("herdr api schema: command failed with error")
-  })
-
-  it("handles partial capabilities (input-fencing=yes, first-class-role=no)", async () => {
-    const partialSchema = {
-      $schema: "http://json-schema.org/draft-07/schema#",
-      title: "Herdr API",
-      definitions: {
-        "pane.claim_input": { type: "object" },
-        "pane.release_input": { type: "object" },
-        Pane: {
-          type: "object",
-          properties: {
-            id: { type: "string" },
-          },
-        },
-      },
-    }
-
-    const runner = new SequenceProcessRunner(resultMap(
-      ["which herdr", successResult("/usr/bin/herdr")],
-      ["herdr api schema --json", successResult(JSON.stringify(partialSchema))],
-    ))
-
-    const facts = await checkHerdrStatus(runner)
-
-    expect(facts.installed).toBe(true)
-    expect(facts.capabilities.inputFencing).toBe("yes")
-    expect(facts.capabilities.firstClassRole).toBe("no")
-    expect(formatHerdrCapabilities(facts.capabilities)).toBe("input-fencing=yes, first-class-role=no")
-  })
-
-  it("executes fixed argv array and passes short timeout to process runner", async () => {
-    const runner = new SequenceProcessRunner(resultMap(
-      ["which herdr", successResult("/usr/bin/herdr")],
-      ["herdr api schema --json", successResult(JSON.stringify(stockSchema))],
-    ))
-
-    await checkHerdrStatus(runner)
-
-    expect(runner.calls).toHaveLength(2)
-    expect(runner.calls[0].argv).toEqual(["which", "herdr"])
-    expect(runner.calls[1].argv).toEqual(["herdr", "api", "schema", "--json"])
-    expect(runner.calls[1].options?.timeoutMs).toBe(2500)
-  })
-
-  it("includes herdr facts in planPreflight and runPreflight results", async () => {
-    const inspector = new FakePlatformInspector(macInfo())
-    const runner = new SequenceProcessRunner(resultMap(
-      ["which tmux", successResult()],
-      ["which opencode", successResult()],
-      ["which tailscale", successResult()],
-      ["tailscale status", successResult(TAILSCALE_STATUS_OUTPUT)],
-      ["which herdr", successResult("/usr/bin/herdr")],
-      ["herdr api schema --json", successResult(JSON.stringify(forkSchema))],
-    ))
-
-    const plan = await planPreflight({ platformInspector: inspector, processRunner: runner })
-    expect(plan.herdr).toBeDefined()
-    expect(plan.herdr.installed).toBe(true)
-    expect(plan.herdr.capabilities.inputFencing).toBe("yes")
-    expect(plan.herdr.capabilities.firstClassRole).toBe("yes")
-  })
-
-  it("passes --json flag to herdr api schema so daemon prints JSON rather than human-readable text", async () => {
-    const runner = new SequenceProcessRunner(resultMap(
-      ["which herdr", successResult("/usr/bin/herdr")],
-      ["herdr api schema --json", successResult(JSON.stringify(forkSchema))],
-    ))
-
-    await checkHerdrStatus(runner)
-
-    const schemaCall = runner.calls.find((c) => c.argv[0] === "herdr")
-    expect(schemaCall).toBeDefined()
-    expect(schemaCall!.argv).toEqual(["herdr", "api", "schema", "--json"])
   })
 })

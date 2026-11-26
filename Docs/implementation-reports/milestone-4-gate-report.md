@@ -442,7 +442,7 @@ hangs under vitest, because it reaches into `ws` internals. The requirement is m
 substance: 116 unit tests drive the gateway through an **injected socket interface** with
 no socket at all, and 20 integration tests cover the transport over a real loopback
 listener. Measurements, the teardown trap (`app.close()` hangs forever after a graceful
-client close) and the reproduction are in `Docs/implementation-plans/websocket-test-harness.md`.
+client close) and the reproduction are in `Docs/archive/websocket-test-harness.md`.
 
 **One place the plan's letter is not met and is not papered over:** a **slow reader cannot
 be provoked through a socket** on the gate's runner, because Bun's `ws` shim is not a TCP

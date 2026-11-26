@@ -29,16 +29,12 @@
  * Everything subsystem-shaped goes through a barrel (`src/rules/index.js`,
  * `src/simulation/index.js`, `src/budgets/index.js`, `src/routing/index.js`,
  * `src/workflows/index.js`, `src/notifications/index.js`, `src/context/index.js`,
- * `src/orchestration/policy/index.js`). Two areas have no usable barrel and are
+ * `src/orchestration/policy/index.js`). One area has no usable barrel and is
  * imported by path, which is the convention every existing test in this
  * repository already follows for them:
  *
  *   - `src/orchestration/{digest,errors,identifiers,schemas,types}.js` — the M0
  *     kernel surface, imported by path in `orchestration-flow.test.ts` too.
- *   - `src/application/{service,types}.js` — `InMemoryLocalApplicationService`,
- *     imported by path in `tests/unit/application/service.test.ts`. The runtime
- *     and terminal types come from `src/runtime/types.js` and
- *     `src/terminal/types.js` for the same reason.
  */
 
 import {
@@ -54,15 +50,10 @@ import {
   type BudgetReservation,
 } from "../../src/budgets/index.js"
 import {
-  buildNotificationTuiView,
   createNotificationBus,
   createNotificationStore,
-  createNotificationTuiAdapter,
-  initialNotificationTuiState,
-  loadNotificationTuiEntries,
   auditNotificationPayload,
   notificationEnvelopeSchema,
-  notificationNoticeLine,
   notificationRequestSchema,
   NOTIFICATION_EGRESS_PATHS,
   type NotificationAdapter,
@@ -116,49 +107,26 @@ import {
   type ResolvedStep,
   type RunTemplateInput,
 } from "../../src/workflows/index.js"
-import { InMemoryLocalApplicationService } from "../../src/application/service.js"
-import { runtimeSessionSchema } from "../../src/runtime/schemas.js"
-import {
-  terminalInputOwnershipSchema,
-  terminalReferenceSchema,
-  terminalSnapshotSchema,
-} from "../../src/terminal/schemas.js"
-import type {
-  LaunchOutcome,
-  LocalApplicationDependencies,
-  LocalProjectDefinition,
-  LocalProjectRegistry,
-  LaunchPathAuthorization,
-  LaunchPathAuthorizationRequest,
-} from "../../src/application/types.js"
+import { createInMemoryAdapter } from "../unit/notifications/fixtures.js";
 import { contextManifestV2Schema, type ContextManifestV2 } from "../../src/context/index.js"
 import { canonicalJson, digestJson } from "../../src/orchestration/digest.js"
 import type { Digest } from "../../src/rules/index.js"
 import type { ContractError, Result } from "../../src/orchestration/errors.js"
 import {
-  commandIdSchema,
   correlationIdSchema,
   dispatchIdSchema,
   projectIdSchema,
   projectPathIdSchema,
   roleIdSchema,
   runIdSchema,
-  sessionIdSchema,
   taskIdSchema,
-  terminalClientIdSchema,
-  terminalIdSchema,
   userIdSchema,
-  type ApprovalId,
-  type CommandId,
-  type DispatchId,
   type NodeId,
   type ProjectId,
   type RunId,
 } from "../../src/orchestration/identifiers.js"
 import { dispatchEnvelopeSchema, roleTemplateSchema, ruleSchema } from "../../src/orchestration/schemas.js"
 import type { DispatchEnvelope, RoleTemplate } from "../../src/orchestration/types.js"
-import type { AgentRuntimeAdapter } from "../../src/runtime/types.js"
-import type { TerminalBackend, TerminalChannel } from "../../src/terminal/types.js"
 
 // ===========================================================================
 // Identity and time
@@ -173,8 +141,6 @@ export const USER_ID = userIdSchema.parse("user-m6");
 export const CORRELATION_ID = correlationIdSchema.parse("corr-m6-1");
 export const INSTALLATION_ID = "inst-m6-1";
 
-/** The session the scripted runtime mints, and the one the terminal is bound to. */
-export const SESSION_ID = sessionIdSchema.parse("session-m6");
 
 /**
  * The injected instant for rules, templates, registry snapshots and manifests.
@@ -1189,41 +1155,6 @@ export function simulatorRuleContext(
   });
 }
 
-/**
- * Launches an approved proposal through the real service.
- *
- * The `ApplicationCommand` union is discriminated on `type` and every member's
- * identifier is branded, so a hand-built command object in a test would need four
- * `as` casts — the unchecked assertion the rest of this file refuses. This builder
- * takes the ids off the proposal the service itself produced, which is both honest
- * and the only way the command can be a valid one.
- */
-export async function launchApprovedProposal(
-  service: InMemoryLocalApplicationService,
-  operationId: CommandId,
-  runId: RunId,
-  proposal: {
-    readonly dispatch: {
-      readonly envelope: { readonly dispatchId: DispatchId };
-      readonly envelopeDigest: Digest;
-    };
-    readonly approval?: { readonly approvalId: ApprovalId };
-  },
-): Promise<Result<LaunchOutcome>> {
-  if (proposal.approval === undefined) {
-    return fail("validation", "fixture.no_approval", "The proposal carries no recorded approval.");
-  }
-  return service.execute({
-    type: "dispatch.launch",
-    operationId,
-    correlationId: CORRELATION_ID,
-    runId,
-    dispatchId: proposal.dispatch.envelope.dispatchId,
-    envelopeDigest: proposal.dispatch.envelopeDigest,
-    approvalId: proposal.approval.approvalId,
-  });
-}
-
 /** The kernel's own policy evaluation. Throws on refusal, by the kernel's design. */
 export function policyFor(envelope: DispatchEnvelope, taskTitle?: string): PolicyEvaluation {
   return evaluatePolicy(taskTitle === undefined ? { envelope } : { envelope, taskTitle });
@@ -1485,464 +1416,33 @@ export interface NotificationHarness {
   readonly clock: ReturnType<typeof notificationClock>;
   readonly store: ReturnType<typeof createNotificationStore>;
   readonly bus: ReturnType<typeof createNotificationBus>;
-  readonly tui: ReturnType<typeof createNotificationTuiAdapter>;
+  readonly tui: NotificationAdapter;
   /** The store's entries at rest, for an audit's `inbox_at_rest` path. */
   readonly entriesAtRest: () => readonly unknown[];
-  /** The rendered view's lines, built through the shipped reducer and view builder. */
-  readonly renderedLines: () => readonly string[];
-  /** The one-line notice the shell would show. */
-  readonly noticeLine: () => string | null;
 }
 
 /**
- * A store, a bus, the shipped in-TUI adapter and a clock, wired the way M6.8
+ * A store, a bus, an in-memory delivery adapter and a clock, wired the way M6.8
  * wires them.
- *
- * The rendered view goes through the REAL reducer and the REAL view builder, so a
- * no-secret assertion is made against text the product would actually show rather
- * than against a hand-written approximation of it.
  */
 export function notificationHarness(
   options: { readonly quieting?: NotificationQuieting; readonly adapters?: readonly NotificationAdapter[] } = {},
 ): NotificationHarness {
   const clock = notificationClock();
   const store = createNotificationStore({ clock });
-  const tui = createNotificationTuiAdapter();
+  const tui = createInMemoryAdapter();
   const bus = createNotificationBus({
     store,
     adapters: options.adapters ?? [tui],
     clock,
     ...(options.quieting === undefined ? {} : { quieting: options.quieting }),
   });
-  const stateAt = () => loadNotificationTuiEntries(store, initialNotificationTuiState(clock.now()), clock.now());
   return {
     clock,
     store,
     bus,
     tui,
     entriesAtRest: () => store.entries(),
-    renderedLines: () => buildNotificationTuiView(stateAt()).lines,
-    noticeLine: () => notificationNoticeLine(stateAt()),
-  };
-}
-
-// ===========================================================================
-// The M3 application service (rule-edit invalidation)
-// ===========================================================================
-
-/**
- * A project definition whose rule snapshots a test controls.
- *
- * `LocalProjectDefinition.ruleSnapshots` is a member of the material fingerprint
- * the service compares, so this is the seam ADR 0007 names: a rule edit is a
- * change to this array, and the service must invalidate rather than silently
- * re-evaluate.
- */
-export function serviceProjectDefinition(
-  overrides: Partial<LocalProjectDefinition> = {},
-): LocalProjectDefinition {
-  const permissionEnvelope = {
-    allowedCapabilities: ["filesystem.read", "filesystem.write"],
-    deniedCapabilities: ["network.external"],
-    approvalRequirements: {
-      destructiveEffects: true,
-      externalEffects: true,
-      capabilities: ["filesystem.write"],
-    },
-  };
-  return {
-    project: {
-      schemaVersion: 1,
-      projectId: PROJECT_ID,
-      meshId: "mesh-m6" as never,
-      name: "M6 fixture project",
-      pathBindings: [
-        {
-          schemaVersion: 1,
-          projectPathId: PROJECT_PATH_ID,
-          projectId: PROJECT_ID,
-          nodeId: NODE_A,
-          configuredPath: "/workspace/m6-fixture",
-          allowedCapabilities: ["filesystem.read", "filesystem.write"],
-        },
-      ],
-    },
-    projectPathId: PROJECT_PATH_ID,
-    nodeContext: {
-      schemaVersion: 1,
-      nodeId: NODE_A,
-      meshId: "mesh-m6" as never,
-      platform: "fixture",
-      architecture: "fixture",
-    },
-    installation: {
-      schemaVersion: 1,
-      installationId: INSTALLATION_ID as never,
-      nodeId: NODE_A,
-      runtimeKind: "scripted-opencode",
-      displayName: "Scripted OpenCode",
-      version: "fixture-1",
-      capabilities: {
-        structuredPermissions: true,
-        nativeSessionRestore: true,
-        reliableCompletion: true,
-        modelSelection: true,
-        usageData: false,
-        hooks: false,
-        transcriptExport: false,
-      },
-    },
-    roleSnapshot: {
-      schemaVersion: 1,
-      roleId: ROLE_ID,
-      templateVersion: 1,
-      projectId: PROJECT_ID,
-      name: "M6 test engineer",
-      purpose: "Exercise the safety floor.",
-      instructions: "Use only the deterministic fixture project.",
-      requiredCapabilities: ["filesystem.read"],
-      preferredRuntimeKinds: ["scripted-opencode"],
-      contextSelectionPolicyReference: { namespace: "m6", id: "m6" },
-      permissionRestrictions: permissionEnvelope,
-      author: { kind: "system", name: "m6-fixture" },
-      createdAt: SERVICE_NOW,
-    },
-    ruleSnapshots: [],
-    contextManifest: { references: [], manifestDigest: digestJson({ references: [] }) },
-    requestedCapabilities: ["filesystem.read", "filesystem.write"],
-    permissionEnvelope,
-    availableModels: ["fixture-model"],
-    controller: { controllerNodeId: NODE_A, controllerEpoch: 1, leaseId: "lease-m6" as never },
-    ...overrides,
-  };
-}
-
-/**
- * An M0 `Rule`, parsed through the kernel's own `ruleSchema`.
- *
- * `LocalProjectDefinition.ruleSnapshots` is a list of the M0 shape, NOT of a
- * compiled M6 rule: the application service binds it into the dispatch envelope's
- * digest and into its material-definition fingerprint, so a test that wants to
- * perform a RULE EDIT has to produce a value this build can read. Parsing rather
- * than writing a literal is what makes the edit a real one — a hand-written
- * snapshot that `ruleSchema` refused would be refused by
- * `ProfileLocalProjectRegistry` as an invalid project configuration before the
- * service ever compared the fingerprint, and the test would be asserting a refusal
- * it thinks is a policy decision.
- */
-export function kernelRuleSnapshot(
-  overrides: Partial<Record<string, unknown>> = {},
-): LocalProjectDefinition["ruleSnapshots"][number] {
-  return ruleSchema.parse({
-    schemaVersion: 1,
-    ruleId: "rule-m6-kernel",
-    templateVersion: 1,
-    projectId: PROJECT_ID,
-    enabled: true,
-    match: { requestedCapabilitiesAny: ["filesystem.read"] },
-    effect: {
-      kind: "restrict",
-      deniedCapabilities: [],
-      requireApprovalForDestructiveEffects: true,
-      requireApprovalForExternalEffects: true,
-    },
-    author: { kind: "user", userId: USER_ID },
-    createdAt: "2026-01-01T00:00:00.000Z",
-    ...overrides,
-  })
-}
-
-/** The same rule at a new version, which is what an edit looks like to the service. */
-export function kernelRuleSnapshotAtVersion(
-  templateVersion: number,
-  overrides: Partial<Record<string, unknown>> = {},
-): LocalProjectDefinition["ruleSnapshots"][number] {
-  return kernelRuleSnapshot({ templateVersion, ...overrides })
-}
-
-/**
- * A `LocalProjectRegistry` over a mutable definition.
- *
- * `current` is public and assignable precisely so a test can perform a RULE EDIT
- * between two operations and watch what the service does.
- */
-export class MutableProjectRegistry implements LocalProjectRegistry {
-  current: LocalProjectDefinition;
-  launchAuthorized = true;
-  readonly authorizationRequests: LaunchPathAuthorizationRequest[] = [];
-
-  constructor(current: LocalProjectDefinition = serviceProjectDefinition()) {
-    this.current = current;
-  }
-
-  async listAuthorizedProjects(): Promise<Result<readonly LocalProjectDefinition[]>> {
-    return ok([structuredClone(this.current)]);
-  }
-
-  async getAuthorizedProject(
-    projectId: LocalProjectDefinition["project"]["projectId"],
-  ): Promise<Result<LocalProjectDefinition>> {
-    return projectId === this.current.project.projectId
-      ? ok(structuredClone(this.current))
-      : fail("policy_denied", "fixture.project_denied", "Project is not authorized.");
-  }
-
-  async authorizeLaunchPath(
-    request: LaunchPathAuthorizationRequest,
-  ): Promise<Result<LaunchPathAuthorization>> {
-    this.authorizationRequests.push(structuredClone(request));
-    return this.launchAuthorized
-      ? ok({ ...request, realPath: request.configuredPath })
-      : fail("policy_denied", "fixture.path_denied", "Project path authorization was revoked.");
-  }
-}
-
-/** A clock that hands out `SERVICE_NOW` and can be moved by a test. */
-export function serviceClock(): { now(): string; advanceTo(instant: string): void } {
-  let current = SERVICE_NOW;
-  return {
-    now: () => current,
-    advanceTo: (instant) => {
-      current = instant;
-    },
-  };
-}
-
-/** An id source that hands out `kind-m6-N`, deterministically. */
-export function serviceIds(): { next(kind: string): string; readonly issued: readonly string[] } {
-  let sequence = 0;
-  const issued: string[] = [];
-  return {
-    next: (kind) => {
-      const id = `${kind}-m6-${++sequence}`;
-      issued.push(id);
-      return id;
-    },
-    get issued() {
-      return Object.freeze([...issued]);
-    },
-  };
-}
-
-/** A deterministic operation-id sequence. */
-export function operationIdFactory(): () => CommandId {
-  let sequence = 0;
-  return () => commandIdSchema.parse(`operation-m6-${++sequence}`);
-}
-
-/**
- * A real `InMemoryLocalApplicationService` over scripted runtime and terminal
- * adapters.
- *
- * The runtime and terminal are small but REAL implementations of the shipped
- * interfaces: they record what they were handed and return schema-valid values,
- * so the proposal → approval → launch path is the production one rather than a
- * shortcut past it.
- */
-export function applicationService(
-  registry: MutableProjectRegistry = new MutableProjectRegistry(),
-): {
-  readonly service: InMemoryLocalApplicationService;
-  readonly registry: MutableProjectRegistry;
-  /** Everything the runtime was asked to launch, in order. */
-  readonly launches: readonly unknown[];
-} {
-  const launches: unknown[] = [];
-  const dependencies: LocalApplicationDependencies = {
-    runtime: scriptedRuntime(launches),
-    terminal: scriptedTerminal(),
-    clock: serviceClock(),
-    ids: serviceIds(),
-    projects: registry,
-  };
-  return { service: new InMemoryLocalApplicationService(dependencies), registry, launches };
-}
-
-/** A scripted runtime that records launches and returns a schema-valid session. */
-function scriptedRuntime(launches: unknown[]): AgentRuntimeAdapter {
-  return {
-    kind: "scripted-opencode",
-    capabilities: {
-      structuredPermissions: true,
-      nativeSessionRestore: true,
-      reliableCompletion: true,
-      modelSelection: true,
-      usageData: false,
-      hooks: false,
-      transcriptExport: false,
-    },
-    async detect() {
-      return ok([]);
-    },
-    async launch(request) {
-      launches.push(clone(request));
-      // Through `runtimeSessionSchema`, because the session is a branded M0 record
-      // and a hand-written literal would need `as never` on four identifier fields.
-      // The schema is also the authority on the lifecycle/observation pairing, so a
-      // scripted runtime cannot claim a finished session at the instant it launched.
-      return ok(
-        runtimeSessionSchema.parse({
-          schemaVersion: 1,
-          sessionId: SESSION_ID,
-          projectId: request.operation.projectId,
-          runId: request.operation.runId,
-          taskId: request.dispatchEnvelope.taskId,
-          dispatchId: request.operation.dispatchId,
-          nodeId: request.operation.nodeId,
-          installationId: request.dispatchEnvelope.installationId,
-          runtimeKind: request.dispatchEnvelope.runtimeKind,
-          lifecycleState: "launching",
-          observedState: "starting",
-        }),
-      );
-    },
-    async restore() {
-      return fail("policy_denied", "fixture.restore", "Restore is unavailable.");
-    },
-    async prompt() {
-      return ok(undefined);
-    },
-    async *observe() {
-      // No observations queued; the service treats an empty stream as "no news".
-      return;
-    },
-    async respond() {
-      return ok(undefined);
-    },
-    async interrupt() {
-      return ok(undefined);
-    },
-    async terminate() {
-      return ok(undefined);
-    },
-    async collectResult() {
-      return ok({
-        schemaVersion: 1,
-        outcome: "unknown",
-        summary: "No verified completion evidence is available.",
-      });
-    },
-  };
-}
-
-/**
- * The terminal reference this backend hands back, parsed through the real schema.
- *
- * `TERMINAL_ID` is a fixed literal rather than an allocated id because the
- * application service allocates the real terminal id itself and passes it in
- * `createTerminalRequest.terminalId`; the fixture's own id is only ever what a
- * direct terminal read returns.
- */
-const TERMINAL_ID = terminalIdSchema.parse("terminal-m6");
-
-/**
- * A scripted terminal that satisfies the REAL interface and returns schema-valid
- * values.
- *
- * `create` returns `ok(...)`, not the bare reference, and `attach` returns a channel
- * carrying `reference` — the two members a hand-written adapter most often omits,
- * and the two whose absence is exactly the kind of mismatch a branded identifier
- * surfaces as a wall of nominal-type errors rather than as a diagnostic. Every value
- * here is parsed by the terminal's own schema, so the fixture cannot drift out of the
- * contract it is supposed to satisfy.
- */
-function scriptedTerminal(): TerminalBackend {
-  const reference = terminalReferenceSchema.parse({
-    schemaVersion: 1,
-    terminalId: TERMINAL_ID,
-    nodeId: NODE_A,
-    projectId: PROJECT_ID,
-    sessionId: SESSION_ID,
-    backendKind: "scripted-terminal",
-    adapterMetadata: { recoveryVersion: "1", fixture: "m6" },
-  });
-  const channel: TerminalChannel = {
-    reference,
-    clientId: terminalClientIdSchema.parse("client-m6"),
-    async read() {
-      return ok(new Uint8Array());
-    },
-    async write() {
-      return ok(undefined);
-    },
-    async requestInputOwnership() {
-      return ok(
-        terminalInputOwnershipSchema.parse({
-          schemaVersion: 1,
-          terminalId: reference.terminalId,
-          ownerClientId: channel.clientId,
-          changedAt: SERVICE_NOW,
-        }),
-      );
-    },
-    async releaseInputOwnership() {
-      return ok(
-        terminalInputOwnershipSchema.parse({
-          schemaVersion: 1,
-          terminalId: reference.terminalId,
-          ownerClientId: null,
-          changedAt: SERVICE_NOW,
-        }),
-      );
-    },
-    async takeOverInput() {
-      return ok(
-        terminalInputOwnershipSchema.parse({
-          schemaVersion: 1,
-          terminalId: reference.terminalId,
-          ownerClientId: channel.clientId,
-          changedAt: SERVICE_NOW,
-        }),
-      );
-    },
-  };
-  return {
-    kind: "scripted-terminal",
-    async create(request) {
-      // The binding is echoed from the request, which is what the application
-      // service checks against the session it was launched for.
-      return ok(
-        terminalReferenceSchema.parse({
-          schemaVersion: 1,
-          terminalId: request.terminalId,
-          nodeId: request.operation.nodeId,
-          projectId: request.operation.projectId,
-          sessionId: request.sessionId,
-          backendKind: request.backendKind,
-          adapterMetadata: reference.adapterMetadata,
-        }),
-      );
-    },
-    async attach() {
-      return ok(channel);
-    },
-    async resize() {
-      return ok(undefined);
-    },
-    async snapshot(attached) {
-      return ok(
-        terminalSnapshotSchema.parse({
-          schemaVersion: 1,
-          terminalId: attached.terminalId,
-          nodeId: attached.nodeId,
-          projectId: attached.projectId,
-          sessionId: attached.sessionId,
-          capturedAt: SERVICE_NOW,
-          byteCount: 0,
-          truncated: false,
-          data: new Uint8Array(),
-        }),
-      );
-    },
-    async detach() {
-      return ok(undefined);
-    },
-    async terminate() {
-      return ok(undefined);
-    },
-    async recover() {
-      return ok([]);
-    },
   };
 }
 

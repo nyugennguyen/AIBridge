@@ -1,7 +1,7 @@
 # Configuration Guide
 
 > **Status:** Current  
-> **Applies to:** AIBridge 3.1.0  
+> **Applies to:** AIBridge 3.1.1  
 > **Owner:** Maintainers  
 
 AIBridge configurations define network binding, security credentials, project boundaries, agent permissions, and routing policies. Configurations are validated against strict Zod schemas (`src/config/schemas.ts`) and serialized to XDG profile directories.
@@ -160,7 +160,7 @@ Below are focused, schema-conforming partial examples illustrating each major se
 - **`url`** *(string, URL)*: Tailscale HTTP endpoint of the peer (e.g., `http://100.64.0.1:8787`).
 - **`capabilities`** *(array of strings)*: Work kinds supported by the remote peer.
 
-### 2.7 `terminal` & `timeouts`
+### 2.7 `terminal` (deprecated) & `timeouts`
 
 ```json
 {
@@ -176,7 +176,7 @@ Below are focused, schema-conforming partial examples illustrating each major se
 
 - **`terminal.backend`** *(enum, default: `"tmux"`)*:
   - `"tmux"`: Detached headless sessions (standard for headless VPS and daemon setups).
-  - `"herdr"`: Interactive presentation substrate utilizing the Herdr manager plugin.
+  - `"herdr"`: **Deprecated** since 3.1.1. Still accepted so existing profiles load; it logs a warning and uses tmux. Removal planned for 3.2.0 (ADR 0014).
 - **`timeouts.default_job_seconds`** *(integer)*: Maximum allowed execution duration before a job times out.
 - **`timeouts.callback_retry_attempts`** *(integer)*: Number of retry attempts for reporting completion callbacks to remote peers.
 

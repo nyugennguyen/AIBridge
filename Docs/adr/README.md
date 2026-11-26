@@ -20,11 +20,12 @@ This directory is the canonical repository for all formal Architecture Decision 
 | [**ADR 0006**](0006-codex-runtime-adapter.md) | Codex Runtime Adapter | Accepted | 2026-09-29 | Codex execution harness, JSON-RPC protocol mapping, and sub-agent coordination. |
 | [**ADR 0007**](0007-rule-language-and-evaluation.md) | Rule Language & Evaluation | Accepted | 2026-10-01 | Deterministic rule expressions, advisory notifications, and immutable safety floors. |
 | [**ADR 0008**](0008-polyglot-ingress-and-admission.md) | Polyglot Ingress & Durable Admission | Accepted | 2026-10-03 | Two-tier architecture: native Rust ingress router (`aibr-router`) with commit-before-202 WAL. |
-| [**ADR 0009**](0009-herdr-terminal-backend-evaluation.md) | Herdr Terminal Backend Evaluation | Deferred | 2026-10-06 | Initial spike evaluation of Herdr terminal primitives (partially superseded by ADR 0011). |
-| [**ADR 0010**](0010-tui-daemon-modernization.md) | TUI & Daemon Modernization | Superseded | 2026-10-07 | Terminal UI state machine and daemon communication (superseded by Herdr plugin in ADR 0011). |
-| [**ADR 0011**](0011-herdr-orchestration-architecture.md) | Herdr Orchestration Architecture | Accepted | 2026-10-08 | Definitive separation: Herdr owns terminal presentation; AIBridge kernel owns intent. |
+| [**ADR 0009**](0009-herdr-terminal-backend-evaluation.md) | Herdr Terminal Backend Evaluation | Superseded by 0014 | 2026-10-06 | Initial spike evaluation of Herdr terminal primitives (partially superseded by ADR 0011). |
+| [**ADR 0010**](0010-tui-daemon-modernization.md) | TUI & Daemon Modernization | Superseded by 0014 | 2026-10-07 | Terminal UI state machine and daemon communication (superseded by Herdr plugin in ADR 0011). |
+| [**ADR 0011**](0011-herdr-orchestration-architecture.md) | Herdr Orchestration Architecture | Superseded by 0014 | 2026-10-08 | Definitive separation: Herdr owns terminal presentation; AIBridge kernel owns intent. |
 | [**ADR 0012**](0012-request-signing-and-pairing.md) | Request Signing & Pairing | Accepted | 2026-11-25 | ed25519 node signatures on `/trigger` and `/report` (`security.request_signing`) and `aibr enroll` pairing; refused in router mode. |
 | [**ADR 0013**](0013-operator-approval-ledger.md) | Operator Approval Ledger | Accepted | 2026-11-25 | Claude-runtime jobs held as `awaiting_approval`; operator-only, same-host approve/reject; hash-chained local approval ledger instead of kernel dispatch approval. |
+| [**ADR 0014**](0014-claude-is-the-operator-interface.md) | Claude Is the Operator Interface | Accepted | 2026-11-26 | Claude Code with the AIBridge plugin is the main interface; human-only actions stay in the `aibr` CLI; TUI, Herdr, terminal gateway and IPC bus removed in 3.1.1. |
 
 ---
 

@@ -1,7 +1,7 @@
 # Integrations Guide
 
 > **Status:** Current  
-> **Applies to:** AIBridge 3.1.0  
+> **Applies to:** AIBridge 3.1.1  
 > **Owner:** Maintainers  
 
 AIBridge integrates distributed agent runtimes, presentation substrates, and private networking layers into a unified orchestration mesh. This guide details integrations with OpenCode, Claude Code, Codex, and Tailscale.

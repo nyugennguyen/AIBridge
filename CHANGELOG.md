@@ -2,6 +2,30 @@
 
 ## [Unreleased]
 
+## [3.1.1] - 2026-11-26
+
+Removes the unused TUI, Herdr, terminal and IPC layer (about 54k lines, two Rust crates and two dependencies). Nothing in production depended on it: `/trigger`, `/report`, `/jobs`, the Claude Code plugin and the worker are unchanged. Claude Code with the AIBridge plugin is the operator interface, and human-only actions (approve, reject, kill switch, logs) stay in the `aibr` CLI on the worker. See [ADR 0014](Docs/adr/0014-claude-is-the-operator-interface.md).
+
+### Deprecated
+These still work in 3.1.1 and are removed in 3.2.0.
+- **`aibr tui`** is a stub that prints the replacements and exits 1. Use Claude Code with the AIBridge plugin, and on the worker `aibr jobs pending`, `aibr approve` / `aibr reject`, `aibr stop --all-jobs` and `aibr logs -f`.
+- **`aibr worker --ipc-publish`** is accepted but ignored, and warns. Drop the flag from hand-written service units; units generated from 3.1.1 do not pass it.
+- **Config `terminal.backend: "herdr"`** still loads, uses tmux and warns. Remove the key or set `"tmux"`.
+
+### Removed
+- **Herdr terminal backend and the `aibr-manager` launcher.** The `aibr-manager` and `aibr-herdr-bridge` Herdr plugins no longer work against AIBridge.
+- **The local IPC bus** (`src/ipc/`) and the effect of `--ipc-publish`.
+- **Rust crates `crates/aibr-ipc` and `crates/aibr-pty`.** The Cargo workspace now contains only `router/`.
+- **Terminal gateway**: the terminal WebSocket gateway and the `mesh.terminal.*` mesh records, `src/terminal/` (tmux and Herdr backends) and the TUI application service.
+- **TUI view models** and the SDK terminal registration.
+- **13 IPC-only contract schemas** in `contracts/v1`, and their generated Rust.
+- **Dependencies** `@opentui/core` and `@fastify/websocket`.
+
+### Changed
+- Preflight and `aibr verify` no longer probe for Herdr.
+- Newly generated launchd and systemd units no longer pass `--ipc-publish`.
+- TUI and Herdr documents moved to `Docs/archive/`; ADRs 0009 to 0011 are superseded by ADR 0014.
+
 ## [3.1.0] - 2026-11-26
 
 Claude Code becomes a first-class AIBridge runtime and the main orchestrator, and a new machine can now be set up in a few commands. Configuration files, the HTTP API and the OpenCode runtime path stay backward compatible; see **Behaviour changes** before upgrading a running node.

@@ -29,8 +29,13 @@ This archive retains historical specifications, initial brainstorming drafts, pr
 | [**remote-opencode-agent-bridge-visualization.md**](remote-opencode-agent-bridge-visualization.md) | Visual sequence diagrams for the initial POC design. | Historical | [`Docs/architecture/current-state.md`](../architecture/current-state.md) |
 | [**milestone-0-current-state-inventory.md**](milestone-0-current-state-inventory.md) | Pre-orchestration baseline inventory from Milestone 0.1. | Historical | [`Docs/architecture/current-state.md`](../architecture/current-state.md) |
 | [**milestone-0-legacy-migration.md**](milestone-0-legacy-migration.md) | Legacy migration plan from v1 bridge contracts to v2 event store. | Historical | [`Docs/architecture/current-state.md`](../architecture/current-state.md) |
-| [**milestone-1-ux-state-machine.md**](milestone-1-ux-state-machine.md) | Initial UX state machine specification for standalone TUI. | Superseded | [ADR 0011](../adr/0011-herdr-orchestration-architecture.md) |
+| [**milestone-1-ux-state-machine.md**](milestone-1-ux-state-machine.md) | Initial UX state machine specification for standalone TUI. | Superseded | [ADR 0014](../adr/0014-claude-is-the-operator-interface.md) |
 | [**milestone-2-adapter-conformance.md**](milestone-2-adapter-conformance.md) | Initial runtime adapter conformance test requirements. | Historical | [`Docs/guides/integrations.md`](../guides/integrations.md) |
+| [**TUI_UX_SPEC.md**](TUI_UX_SPEC.md), [**aibridge-tui-redesign.html**](aibridge-tui-redesign.html), [**aibridge-setup-wizard.html**](aibridge-setup-wizard.html) | TUI UX specification and HTML mockups (formerly `Docs/tui/`). | Historical | [ADR 0014](../adr/0014-claude-is-the-operator-interface.md) |
+| [**milestone-1-single-node-tui.md**](milestone-1-single-node-tui.md) | Milestone 1 work order for the single-node TUI. | Historical | [ADR 0014](../adr/0014-claude-is-the-operator-interface.md) |
+| [**AIBridge_TUI_and_Daemon_Modernization_Plan.md**](AIBridge_TUI_and_Daemon_Modernization_Plan.md) | TUI and daemon modernization plan (ADR 0010). | Superseded | [ADR 0014](../adr/0014-claude-is-the-operator-interface.md) |
+| [**aibridge-herdr-orchestration.md**](aibridge-herdr-orchestration.md) | Herdr orchestration architecture plan (ADR 0011). | Historical | [ADR 0014](../adr/0014-claude-is-the-operator-interface.md) |
+| [**websocket-test-harness.md**](websocket-test-harness.md) | Test notes for the terminal WebSocket gateway. | Historical | [ADR 0014](../adr/0014-claude-is-the-operator-interface.md) |
 
 ---
 

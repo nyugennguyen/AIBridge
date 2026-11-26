@@ -1,8 +1,8 @@
 # ADR 0010: Mouse-native TUI client and decoupled daemon
 
-> **Status:** Superseded in part
+> **Status:** Superseded by [ADR 0014](./0014-claude-is-the-operator-interface.md)
 >
-> [ADR 0011](./0011-herdr-orchestration-architecture.md) amends and supersedes this ADR's TUI direction, retiring `aibr-tui` in favor of the Herdr manager plugin. The decoupled daemon, IPC schema generation, and Cargo workspace structure established here remain active.
+> The IPC bus, `aibr-ipc`/`aibr-pty` crates and TUI described here were removed in 3.1.1. Earlier note: [ADR 0011](./0011-herdr-orchestration-architecture.md) amends and supersedes this ADR's TUI direction, retiring `aibr-tui` in favor of the Herdr manager plugin. The decoupled daemon, IPC schema generation, and Cargo workspace structure established here remain active.
 
 Status: Accepted (in progress)
 Date: 2026-10-06
@@ -19,7 +19,7 @@ The product direction is a **mouse-native, multi-pane terminal workspace
 manager**: a client that shows every workspace, every agent, and every pending
 job at once, embeds live OpenCode sessions, and lets an operator approve or
 reject a plan without leaving the keyboard. See
-[`Docs/implementation-plans/AIBridge_TUI_and_Daemon_Modernization_Plan.md`](../implementation-plans/AIBridge_TUI_and_Daemon_Modernization_Plan.md).
+[`Docs/archive/AIBridge_TUI_and_Daemon_Modernization_Plan.md`](../archive/AIBridge_TUI_and_Daemon_Modernization_Plan.md).
 
 Three things make that more than a rendering change.
 
@@ -166,5 +166,5 @@ and the reason is recorded here rather than left to be rediscovered.
   contract chain, and the polyglot guardrail amended here.
 - [`Docs/implementation-plans/README.md`](../implementation-plans/README.md) —
   global guardrails and the sub-agent execution protocol.
-- [`Docs/implementation-plans/AIBridge_TUI_and_Daemon_Modernization_Plan.md`](../implementation-plans/AIBridge_TUI_and_Daemon_Modernization_Plan.md) —
+- [`Docs/archive/AIBridge_TUI_and_Daemon_Modernization_Plan.md`](../archive/AIBridge_TUI_and_Daemon_Modernization_Plan.md) —
   the product direction this implements.

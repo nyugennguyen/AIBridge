@@ -48,7 +48,7 @@ aibr stop   -p <profile>              # unload + remove the unit, kill the tmux 
 The unit runs `aibr serve --profile <p>` by absolute path (`--with-opencode` for OpenCode
 workers), with the installing shell's `PATH`/XDG dirs and no secrets. Linux servers need
 `sudo loginctl enable-linger $USER` (doctor warns). Router mode (`bridge.ingress_mode: "router"`)
-runs `aibr worker --profile <p> --ipc-publish` instead and is advanced/opt-in.
+runs `aibr worker --profile <p>` instead and is advanced/opt-in.
 
 ## Proving it works
 

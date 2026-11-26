@@ -11,7 +11,7 @@ The plans are designed for a root Codex agent coordinating isolated implementati
 | Milestone | Plan | Outcome |
 | --- | --- | --- |
 | 0 | [Architecture and migration contracts](./milestone-0-architecture-and-migration.md) | Versioned domain contracts, ADRs, migration map, and threat model |
-| 1 | [Single-node TUI vertical slice](./milestone-1-single-node-tui.md) | One approved OpenCode task operated completely through `aibr tui` |
+| 1 | [Single-node TUI vertical slice](../archive/milestone-1-single-node-tui.md) (archived) | Historical: the TUI was removed in 3.1.1 ([ADR 0014](../adr/0014-claude-is-the-operator-interface.md)) |
 | 2 | [Multi-runtime adapter layer](./milestone-2-runtime-adapters.md) | OpenCode, Claude Code, and Codex behind one conformance-tested interface |
 | 3 | [Orchestration kernel](./milestone-3-orchestration-kernel.md) | Event-sourced runs, task graph, roles, policy, approvals, and retries |
 | 4 | [Distributed Tailscale mesh](./milestone-4-distributed-mesh.md) | Secure, recoverable multi-node orchestration with manual takeover |

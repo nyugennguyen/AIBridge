@@ -1,7 +1,7 @@
 # Getting Started with AIBridge
 
 > **Status:** Current  
-> **Applies to:** AIBridge 3.1.0  
+> **Applies to:** AIBridge 3.1.1  
 > **Owner:** Maintainers  
 
 AIBridge is a distributed multi-agent orchestration runtime connecting OpenCode, Claude Code, and Codex execution agents across machines over private Tailscale networks.

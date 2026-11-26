@@ -124,7 +124,7 @@ XDG paths, **not** the repo-local `.aibridge/` (`src/host/paths.ts:75-115`):
 ```
 config   ~/.config/aibridge/<profile>/config.json
 secrets  ~/.local/share/aibridge/<profile>/secrets/{bearer_token,opencode_password}  (0600)
-state    ~/.local/state/aibridge/<profile>/{jobs/*.json,tasks.md,egress_outbox.db,terminals/}
+state    ~/.local/state/aibridge/<profile>/{jobs/*.json,tasks.md,egress_outbox.db}
 ```
 
 Repo `.aibridge/` is only used by the legacy `bun run dev` entrypoint (`src/index.ts:11`).
@@ -175,11 +175,10 @@ Two facts that cause most confusion:
 - **`deny_unknown_fields` on config.** Adding a key to `config.json` **stops the router from
   starting** until `bun run generate:contracts` regenerates the contracts. CI enforces this
   with `git diff --exit-code` over **both** generated outputs: `router/src/contracts.rs` and
-  `crates/aibr-ipc/src/contracts.rs` (ADR 0010). Checking only the first misses a stale IPC
-  contract.
+  `contracts/` (the IPC crate and its contracts were removed in 3.1.1, ADR 0014).
 - **Cargo runs from the repository root.** The workspace root moved out of `router/` so that
-  `crates/*` could be siblings (Cargo refuses a member above its workspace root). `cd router &&
-  cargo test` still works but misses the TUI and IPC crates.
+  `crates/*` could be siblings (Cargo refuses a member above its workspace root). Since 3.1.1
+  the workspace only contains `router/` (and its `contract-gen`).
 
 The router's `/health` **requires** bearer auth and does **not** call opencode. The engine's
 `/health` does neither. Same path, opposite semantics.

@@ -2,7 +2,7 @@
  * Roundtable Deliberation Aggregate Types, Preconditions, and Error Models.
  *
  * Implements the domain contracts for advisory multi-agent deliberation
- * defined in docs/implementation-plans/aibridge-herdr-orchestration.md §6.3, §7.5, and §10.
+ * defined in docs/archive/aibridge-herdr-orchestration.md §6.3, §7.5, and §10.
  *
  * Key Invariants:
  * 1. ADVISORY ONLY (§7.5):

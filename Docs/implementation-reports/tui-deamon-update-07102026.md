@@ -11,12 +11,12 @@
  This implementation session executed two major architectural modernization milestones for AIBridge (aibr v2.0):
 
  1. Modernized TUI Control Plane Client (crates/aibr-tui, src/tui):
-    Re-engineered the terminal control plane according to ADR 0010 (../../Docs/adr/0010-tui-daemon-modernization.md) and Docs/tui/TUI_UX_SPEC.md (../../Docs/tui/TUI_UX_SPEC.md).
+    Re-engineered the terminal control plane according to ADR 0010 (../../Docs/adr/0010-tui-daemon-modernization.md) and Docs/archive/TUI_UX_SPEC.md (../../Docs/archive/TUI_UX_SPEC.md).
     Delivered a mouse-native, multi-pane terminal workspace manager featuring zero-prefix Alt-chords (Profile A), an embedded non-disruptive Human-in-the-Loop (HITL) approval card, a
     universal fuzzy command palette (Ctrl+K), an interactive keymap switcher (?), and a collapsible 28-column mesh/telemetry inspector (Alt+B).
  2. Brand Vector/ANSI Identity & 5-Step Stepper Onboarding Wizard (src/cli/, crates/aibr-tui):
-    Replaced legacy sequential readline prompts in aibr setup with a mouse-and-keyboard interactive 5-step stepper interface matching Docs/tui/aibridge-setup-wizard.html
-    (../../Docs/tui/aibridge-setup-wizard.html), Docs/assets/logos/logo-design-system.html (../../Docs/assets/logos/logo-design-system.html), and SKILL.md
+    Replaced legacy sequential readline prompts in aibr setup with a mouse-and-keyboard interactive 5-step stepper interface matching Docs/archive/aibridge-setup-wizard.html
+    (../../Docs/archive/aibridge-setup-wizard.html), Docs/assets/logos/logo-design-system.html (../../Docs/assets/logos/logo-design-system.html), and SKILL.md
     (../../.agents/skills/aibr-onboarding/SKILL.md). Embedded high-resolution vector/ANSI glyphs into the TUI chrome and CLI splash sequence, automated Tailscale discovery, enforced a
     128-bit CSPRNG bearer token security floor, and generated system supervisors (launchd/systemd).
 

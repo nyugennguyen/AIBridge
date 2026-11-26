@@ -135,7 +135,7 @@ export function registerOperatorRoutes(app: FastifyInstance, dependencies: AppDe
    */
   const launchApprovedOpencodeJob = async (approved: JobRecord, reply: FastifyReply): Promise<FastifyReply> => {
     try {
-      const dispatched = await dispatchOpencodeJob(approved, dependencies, { recordInKernel: false })
+      const dispatched = await dispatchOpencodeJob(approved, dependencies)
       if (!dispatched.ok) {
         // Fails and reports the job at most once, or leaves it to its owner.
         await settleFailedDispatch(approved, dispatched, dependencies)

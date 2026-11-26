@@ -146,8 +146,8 @@ rm ~/.local/state/aibridge/<profile>/aibridge.lock       # only if it is not
 Repo `.aibridge/` is only used by the legacy `bun run dev` entrypoint (`src/index.ts:11`).
 
 To reset: `aibr stop -p <profile>` first (service and tmux), then `rm -rf ~/.local/state/aibridge/<profile>`.
-Never delete terminal outbox rows to clear a backlog — they are forensic evidence and retention
-is enforced in `src/storage/outbox-repair.ts`.
+Never delete terminal outbox rows to clear a backlog — they are forensic evidence. No shipped
+command prunes them (the unwired `src/storage/outbox-repair.ts` was removed in 3.2.0).
 
 ## `timed_out` and stuck jobs
 

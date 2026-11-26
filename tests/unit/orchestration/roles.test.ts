@@ -10,9 +10,8 @@ import {
   RoleVersionConflictError,
   validateCompatibility,
   verifySnapshotDigest,
-  type RoleSnapshot,
-  type RoleTemplateInput,
-} from "../../../src/orchestration/roles/index.js"
+} from "../../../src/orchestration/roles/repository.js"
+import type { RoleSnapshot, RoleTemplateInput } from "../../../src/orchestration/roles/types.js"
 import { roleTemplateSchema } from "../../../src/orchestration/schemas.js"
 
 function loadExampleRoleFixture(): unknown {

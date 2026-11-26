@@ -66,13 +66,6 @@ export function registerReportRoute(app: FastifyInstance, dependencies: AppDepen
       })
     }
     for (const job of unblocked) {
-      // A report is an observation, not an authority: recording it must not
-      // fabricate a canonical lifecycle event, so the translation only
-      // correlates the job and names any launch it owes.
-      const recorded = dependencies.orchestration?.translation?.recordReport(job)
-      if (recorded !== undefined && !recorded.ok) {
-        return reply.code(500).send({ error: recorded.error.message, code: recorded.error.code })
-      }
       try {
         const { running } = await startOpencodeSession(job, { ...dependencies, reportTerminalJob: terminalReporter(dependencies) })
         void dependencies.monitorSession(running)

@@ -189,7 +189,7 @@ Below are focused, schema-conforming partial examples illustrating each major se
 | `AIBRIDGE_INGRESS_OUTBOX` | Path to the SQLite ingress queue database (`ingress_outbox.db`). |
 | `OPENCODE_PORT` | Port for the local OpenCode daemon (default: `4096`). |
 | `OPENCODE_SERVER_PASSWORD` | Password for OpenCode loopback authentication. |
-| `AIBRIDGE_OPERATOR_TOKEN` | Operator credential granting user-kind actor claims for charter approvals. |
+| `AIBRIDGE_OPERATOR_TOKEN` | Operator credential for `aibr approve`, reject, the kill switch, and reading any job. |
 
 ---
 

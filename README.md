@@ -92,7 +92,7 @@ For OpenCode workers that need a hardened, durable admission tier, `bridge.ingre
 
 ### Not yet wired
 
-Roughly 17,000 of the 61,000 lines in `src/` cannot be reached from the `aibr` and bridge entry points; `bun run docs:reachability` measures it. Some of that code is the base for the roadmap and is kept with deadlines ([ADR 0016](Docs/adr/0016-keep-selected-unwired-code-with-deadlines.md)); the rest (the orchestration kernel) is removed in 3.2.0. Rules, budgets, workflows, simulation, routing, registry, sdk, upgrade and the dead part of the mesh (leases, gateway, inbox, outbox transport) are already gone; what remains of `src/mesh` is node identity and request signing, the wire ids and replay window, and the delivery backoff policy.
+Roughly 11,000 of the 50,000 lines in `src/` cannot be reached from the `aibr` and bridge entry points; `bun run docs:reachability` measures it. Almost all of it is code kept for the roadmap with deadlines (the rest is under 100 lines: `src/mesh/identity/memory-key-store.ts` and the `src/diagnostics/index.ts` barrel) ([ADR 0016](Docs/adr/0016-keep-selected-unwired-code-with-deadlines.md)). The rest of the unwired code was removed in 3.2.0: rules, budgets, workflows, simulation, routing, registry, sdk, upgrade, the dead part of the mesh (leases, gateway, inbox, outbox transport) and the orchestration kernel (coordinator, scheduler, projections, charter and roundtable runtime, the `/orchestration/*` routes). What remains of `src/mesh` is node identity and request signing, the wire ids and replay window, and the delivery backoff policy; what remains of `src/orchestration` outside the event store is the schemas, identifiers and digests the runtime, pairing and request signing use.
 
 | Path | Serves | Wire by | Delete by |
 |---|---|---|---|
@@ -107,7 +107,7 @@ Roughly 17,000 of the 61,000 lines in `src/` cannot be reached from the `aibr` a
 1. **Two-Tier Validation:** The router is a structural gate, never an authorization authority. The worker independently re-parses and enforces all semantic permissions, allowlists, and approvals.
 2. **Commit Before 202 (`SF-08`):** An admission response (`HTTP 202 Accepted`) is emitted **only** after work has been durably committed to SQLite disk storage (`synchronous=FULL`). No in-memory queues or fallback drop-paths exist.
 3. **Decoupled Interface:** Claude Code with the AIBridge plugin dispatches and follows work; human-only actions (approve, reject, kill switch) stay in the `aibr` CLI on the worker. Closing the interface never disrupts running background agents.
-4. **Append-Only Evidence:** The operator approval ledger is hash-chained and append-only, and terminal outbox rows are kept. Repair and maintenance tools never rewrite or delete history.
+4. **Append-Only Evidence:** The operator approval ledger is hash-chained and append-only, and terminal outbox rows are kept. Nothing in AIBridge rewrites or deletes that history.
 5. **Terminal Outbox Rows are Evidence:** Errored or failed outbox records are preserved as permanent audit evidence with error taxonomy codes and attempt counters.
 6. **Automated Secret Redaction:** Prompts, transcripts, raw memory, bearer tokens, and private paths are scrubbed by default across all logs, telemetry, and diagnostics bundles.
 

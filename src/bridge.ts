@@ -10,17 +10,6 @@ import { reconcileJobsAfterRestart, relaunchJobs, startPeriodicSweep, type Resta
 import { relaunchClaudeJob } from "./server/routes/claude-dispatch.js"
 import { acquireStateLock } from "./host/state-lock.js"
 import { relaunchOpencodeJobs } from "./server/routes/opencode-dispatch.js"
-import {
-  createNotificationBus,
-  createNotificationStore,
-  createOrchestrationNotificationConsumer,
-  notificationTimestampSchema,
-  type NotificationBus,
-  type NotificationStore,
-  type OrchestrationEventLike,
-  type OrchestrationNotificationConsumer,
-} from "./notifications/index.js"
-import type { CommandLog } from "./orchestration/coordinator/types.js"
 import { FilePeerStore } from "./pairing/peer-store.js"
 import { createRequestIdentityGuard } from "./pairing/verifier.js"
 import { createPairingAcceptor } from "./pairing/service.js"
@@ -28,10 +17,6 @@ import { createPairingAcceptor } from "./pairing/service.js"
 export interface BridgeOptions extends RuntimeOptions {
   /** Force shadow mirroring on regardless of `bridge.ingress_mode`. */
   readonly shadowMode?: boolean
-  readonly orchestration?: AppDependencies["orchestration"]
-  readonly notificationStore?: NotificationStore
-  readonly notificationBus?: NotificationBus
-  readonly notificationConsumer?: OrchestrationNotificationConsumer
   /** The profile being served; only used to print an exact `aibr approve` hint. */
   readonly profileName?: string
   /** Period of the deadline sweep while the bridge runs. Default 60 s; tests shorten it. */
@@ -47,9 +32,6 @@ export interface BridgeInstance {
   shadowMirror?: ShadowIngressMirror
   /** Which process owns ingress: the engine listener, or the Rust router. */
   ingressMode: "engine" | "router"
-  notificationStore: NotificationStore
-  notificationBus: NotificationBus
-  notificationConsumer: OrchestrationNotificationConsumer
   /**
    * What the startup pass did with the job store it found (engine ingress
    * only; absent in router mode, where `aibr worker` executes jobs). Every
@@ -57,32 +39,6 @@ export interface BridgeInstance {
    */
   restartReconcile?: RestartReconcileResult
 }
-
-/**
- * Subscribes the advisory notification consumer to the post-append event path of a CommandLog.
- * Events durably committed to the log immediately feed the notification consumer.
- * Purely event-driven; zero polling loops.
- */
-export function attachNotificationConsumerToCommandLog(
-  log: CommandLog,
-  consumer: OrchestrationNotificationConsumer
-): CommandLog {
-  return {
-    append(options) {
-      const result = log.append(options)
-      if (!result.duplicate) {
-        for (const rawEvent of result.events) {
-          const event = (rawEvent && typeof rawEvent === "object" && "event" in rawEvent && rawEvent.event)
-            ? rawEvent.event
-            : rawEvent
-          void consumer.handleEvent(event as OrchestrationEventLike)
-        }
-      }
-      return result
-    },
-  }
-}
-
 
 /**
  * Builds the bridge. Takes the profile's state lock first (`acquireStateLock`)
@@ -115,18 +71,6 @@ async function startBridgeHoldingLock(options: BridgeOptions): Promise<BridgeIns
     options.shadowMode || ingressMode === "router"
       ? new ShadowIngressMirror(runtime.config)
       : undefined
-  const notificationClock = { now: () => notificationTimestampSchema.parse(new Date().toISOString()) }
-  const notificationStore = options.notificationStore ?? createNotificationStore({ clock: notificationClock })
-  const notificationBus =
-    options.notificationBus ??
-    createNotificationBus({
-      store: notificationStore,
-      adapters: [],
-      clock: notificationClock,
-    })
-  const notificationConsumer =
-    options.notificationConsumer ??
-    createOrchestrationNotificationConsumer(notificationBus)
 
   // Phase 3 (ADR 0012): node identity for /trigger and /report, and the
   // worker side of pairing. Both read `<stateDir>/identity/` per request, so a
@@ -152,8 +96,8 @@ async function startBridgeHoldingLock(options: BridgeOptions): Promise<BridgeIns
     ...(pairing !== undefined ? { pairing } : {}),
     config: runtime.config,
     bearerToken: options.bearerToken,
-    // The operator credential authorizes user-kind `actor` claims (charter
-    // approval/direct revision authority); peer bearer credentials do not.
+    // The operator credential authorizes the operator routes (`aibr approve`,
+    // reject, kill switch) and reading any job; peer bearer credentials do not.
     // Sourced from options first so tests can inject it, env second (the same
     // channel as the other runtime secrets). Absent -> authority fail-closed.
     operatorToken: options.operatorToken ?? process.env.AIBRIDGE_OPERATOR_TOKEN ?? null,
@@ -172,10 +116,6 @@ async function startBridgeHoldingLock(options: BridgeOptions): Promise<BridgeIns
     ...(options.profileName !== undefined ? { profileName: options.profileName } : {}),
     ...(options.log !== undefined ? { log: options.log } : {}),
     shadowMirror,
-    orchestration: options.orchestration,
-    notificationStore,
-    notificationBus,
-    notificationConsumer,
   }
   const app = createApp(appDependencies)
 
@@ -230,9 +170,6 @@ async function startBridgeHoldingLock(options: BridgeOptions): Promise<BridgeIns
     jobManager: runtime.jobManager,
     shadowMirror,
     ingressMode,
-    notificationStore,
-    notificationBus,
-    notificationConsumer,
     ...(restartReconcile !== undefined ? { restartReconcile } : {}),
   }
 }

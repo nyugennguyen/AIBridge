@@ -20,6 +20,8 @@ through `POST /orchestration/commands`. Two facts make that disproportionate tod
    promotion and a canonical `approval.decided`, none of which the Claude job runner consumes:
    it launches from the job record, not from a kernel effect.
 
+(3.2.0: the kernel and `POST /orchestration/commands` were removed, [ADR 0016](0016-keep-selected-unwired-code-with-deadlines.md); this ledger is the approval record.)
+
 ## Decision
 
 1. The worker decides whether a job needs approval from **its own config only**: the profile's

@@ -12,7 +12,7 @@ This directory is the canonical repository for all formal Architecture Decision 
 
 | ADR | Title | Status | Date | Core Scope |
 |---|---|:---:|:---:|---|
-| [**ADR 0001**](0001-canonical-domain-and-module-boundaries.md) | Canonical Domain & Module Boundaries | Accepted | 2026-09-28 | Establishes the bounded context between kernel orchestration, terminal backend, and host adapters. |
+| [**ADR 0001**](0001-canonical-domain-and-module-boundaries.md) | Canonical Domain & Module Boundaries | Accepted; kernel parts removed by 0016 | 2026-09-28 | Establishes the bounded context between kernel orchestration, terminal backend, and host adapters. The kernel was removed in 3.2.0. |
 | [**ADR 0002**](0002-versioned-contracts-and-adapter-boundaries.md) | Versioned Contracts & Adapter Boundaries | Accepted | 2026-09-28 | Versioned serialization contracts (`contracts/v1/`) and cross-language schema generation. |
 | [**ADR 0003**](0003-event-store-and-idempotency.md) | Event Store & Idempotency | Accepted | 2026-09-28 | SQLite append-only event store (`SqliteEventStore`), idempotency keys, and receipt deduplication. Not yet wired, deadline 3.3.0. |
 | [**ADR 0004**](0004-controller-leases-and-recovery.md) | Controller Leases & Recovery | Superseded by 0016 | 2026-09-28 | Durable leases, epoch progression, and failover boundaries for distributed controllers. |

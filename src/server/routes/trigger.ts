@@ -7,7 +7,6 @@ import { approvalRequired, callerClaimsPlanApproval } from "../../planning/appro
 import { authorizeClaudeCapability } from "../../runtime/claude-job-runner.js"
 import { requireIdentityGuard } from "../../pairing/verifier.js"
 import { GitRefNotFoundError, resolveConfiguredRepository } from "../../runtime/repo-workspace.js"
-import { legacyJobProjection } from "../../jobs/legacy-projection.js"
 import type { JobCheckout } from "../../jobs/types.js"
 import type { TriggerRequest } from "../../config/types.js"
 import type { AppDependencies } from "../app.js"
@@ -115,18 +114,9 @@ export function registerTriggerRoute(app: FastifyInstance, dependencies: AppDepe
         task_id: trigger.task_id,
       }
 
-      if (holdForOperator) {
-        // Same kernel seam as the Claude path: a held job is recorded as the
-        // same held DRAFT/PAUSED run every legacy trigger records.
-        const acceptance = dependencies.orchestration?.translation?.acceptTrigger(legacyJobProjection(job))
-        if (acceptance !== undefined && !acceptance.ok) {
-          await dependencies.jobManager.markFailed(job.id, acceptance.error.message)
-          return reply.code(500).send({ error: acceptance.error.message, code: acceptance.error.code })
-        }
-        return await holdForApproval(job, request.body, reply, dependencies, base)
-      }
+      if (holdForOperator) return await holdForApproval(job, request.body, reply, dependencies, base)
 
-      const dispatched = await dispatchOpencodeJob(job, dependencies, { recordInKernel: true })
+      const dispatched = await dispatchOpencodeJob(job, dependencies)
       if (!dispatched.ok) return reply.code(dispatched.statusCode).send(dispatched.body)
 
       if (dispatched.status === "accepted") dependencies.shadowMirror?.mirrorTrigger(request.body, true)
@@ -218,15 +208,6 @@ async function handleClaudeTrigger(
     return reply.code(500).send({ error: message })
   }
 
-  // Same kernel seam as the OpenCode path: record the accepted intent first,
-  // and fail closed if the kernel cannot account for it. A held job is, to the
-  // kernel, the same held DRAFT/PAUSED run every legacy trigger records.
-  const acceptance = dependencies.orchestration?.translation?.acceptTrigger(legacyJobProjection(job))
-  if (acceptance !== undefined && !acceptance.ok) {
-    await dependencies.jobManager.markFailed(job.id, acceptance.error.message)
-    return reply.code(500).send({ error: acceptance.error.message, code: acceptance.error.code })
-  }
-
   const base = {
     accepted: true,
     job_id: job.id,
@@ -253,8 +234,7 @@ async function handleClaudeTrigger(
 
 /**
  * A no-op job: the caller is an enrolled source, nothing runs, the job is
- * completed at once and reported back through the normal callback path. It is
- * not recorded in the kernel: no work was accepted, so there is no run.
+ * completed at once and reported back through the normal callback path.
  */
 async function handlePing(trigger: TriggerRequest, reply: FastifyReply, dependencies: AppDependencies): Promise<FastifyReply> {
   const source = dependencies.config.security.allowed_sources.find((s) => s.source_agent_id === trigger.source_agent_id)

@@ -1,6 +1,6 @@
 # ADR 0001: Canonical domain language and module boundaries
 
-Status: accepted for the Milestone 0 contract freeze (M0.2).
+Status: accepted for the Milestone 0 contract freeze (M0.2). Partly superseded by [ADR 0016](0016-keep-selected-unwired-code-with-deadlines.md): the kernel modules this ADR draws boundaries around (coordinator, scheduler, projections, charter and roundtable runtime, policy evaluation, legacy translation and migration) were never wired into `aibr serve` and were removed in 3.2.0 (block D5); the design is in the `archive/kernel-mesh-3.1.1` tag. The domain schemas in `src/orchestration/schemas.ts` remain, because `contracts/v1` is generated from them.
 
 Contract family: `aibridge.orchestration`, schema version `1`.
 

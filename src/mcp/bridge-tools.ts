@@ -439,6 +439,8 @@ export class BridgeTools {
       profile,
     )
     if (response.status === 404) throw new ToolError(`Job ${jobId} not found on ${target}.`, "job_not_found")
+    // Since 3.2.0 the worker authorizes `GET /jobs/:id` like the job API: name the fix.
+    if (response.status === 401 || response.status === 403) throw jobApiError(response.status, await readJson(response), jobId, target, "status")
     if (!response.ok) throw new ToolError(`Status lookup failed (HTTP ${response.status}).`, "status_failed")
     return readJson(response)
   }
@@ -847,8 +849,14 @@ function dispatchError(status: number, payload: Record<string, unknown>): ToolEr
   return new ToolError(`Dispatch failed (HTTP ${status}): ${message}`, status === 403 ? "forbidden" : "dispatch_failed")
 }
 
-/** A non-2xx answer from the job API (`/jobs/:id/events`, `/jobs/:id/cancel`) as a ToolError that names the fix. */
-function jobApiError(status: number, payload: Record<string, unknown>, jobId: string, target: string, action: "events" | "cancel"): ToolError {
+/** A non-2xx answer from the job API (`/jobs/:id`, `/jobs/:id/events`, `/jobs/:id/cancel`) as a ToolError that names the fix. */
+function jobApiError(
+  status: number,
+  payload: Record<string, unknown>,
+  jobId: string,
+  target: string,
+  action: "status" | "events" | "cancel",
+): ToolError {
   const message = typeof payload.error === "string" ? payload.error : `HTTP ${status}`
   const code = typeof payload.code === "string" ? payload.code : ""
   if (status === 404) {
@@ -886,7 +894,7 @@ function jobApiError(status: number, payload: Record<string, unknown>, jobId: st
         "This node's requests must be signed for the worker to know which jobs are its own: pair it with the worker (`aibr enroll issue` there, `aibr enroll join <code>` here) and have the worker's operator enable security.request_signing.",
       )
     }
-    if (code === "not_job_requester") return new ToolError(message, "forbidden", "Only the node that dispatched a job can follow or cancel it.")
+    if (code === "not_job_requester") return new ToolError(message, "forbidden", "Only the node that dispatched a job can read, follow or cancel it.")
     return new ToolError(`Denied (403): ${message}`, "forbidden")
   }
   if (status === 401) {

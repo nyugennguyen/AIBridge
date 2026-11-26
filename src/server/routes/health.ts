@@ -63,11 +63,11 @@ export function registerHealthRoute(app: FastifyInstance, dependencies: AppDepen
   //
   // Why the disclosure is acceptable. In order of weight:
   //
-  //   1. `GET /jobs/:id` is ALREADY unauthenticated and returns the stored
-  //      trigger verbatim — prompt, `project_dir` filesystem path, callback
-  //      URL, source and target agent ids (threat model finding F-03). An
-  //      `agent_id` plus a capability name is a strict subset of what an
-  //      anonymous caller can already read from this same bridge.
+  //   1. Until 3.2.0, `GET /jobs/:id` was unauthenticated and returned the
+  //      stored trigger verbatim (threat model finding F-03); it now needs the
+  //      bearer or the operator credential (`routes/jobs.ts`). That is no
+  //      longer an argument for this route, and the points below stand on
+  //      their own.
   //   2. Neither value is secret in the first place. `agent_id` is echoed in
   //      this same config's `bridge.public_url` (`http://test-vps.tailnet:8787`)
   //      and in every `/trigger` response as `target_agent_id`; the capability

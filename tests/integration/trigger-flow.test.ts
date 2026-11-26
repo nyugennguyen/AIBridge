@@ -80,7 +80,7 @@ describe("trigger flow", () => {
     const { app } = await buildTestApp()
     await app.inject({ method: "POST", url: "/trigger", headers: { authorization: "Bearer secret" }, payload: validTrigger() })
 
-    const response = await app.inject({ method: "GET", url: "/jobs/job_1" })
+    const response = await app.inject({ method: "GET", url: "/jobs/job_1", headers: { authorization: "Bearer secret" } })
 
     expect(response.statusCode).toBe(200)
     expect(response.json()).toMatchObject({ id: "job_1", status: "running" })

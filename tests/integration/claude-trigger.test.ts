@@ -290,7 +290,7 @@ describe("POST /trigger with runtime.kind claude", () => {
     proc.finish(0)
     await h.monitors[0]
 
-    const response = await h.app.inject({ method: "GET", url: "/jobs/job_1" })
+    const response = await h.app.inject({ method: "GET", url: "/jobs/job_1", headers: { authorization: "Bearer secret" } })
     expect(response.statusCode).toBe(200)
     const job = response.json()
     // Existing fields are still there, unchanged.
@@ -372,7 +372,7 @@ describe("POST /trigger with the default opencode runtime", () => {
   it("leaves GET /jobs/:id unchanged for an OpenCode job", async () => {
     const { app } = await buildTestApp()
     await app.inject({ method: "POST", url: "/trigger", headers: { authorization: "Bearer secret" }, payload: validTrigger() })
-    const job = (await app.inject({ method: "GET", url: "/jobs/job_1" })).json()
+    const job = (await app.inject({ method: "GET", url: "/jobs/job_1", headers: { authorization: "Bearer secret" } })).json()
     expect(job).not.toHaveProperty("summary")
     expect(job).not.toHaveProperty("findings")
     expect(job.opencodeSessionId).toBe("ses_1")

@@ -2,12 +2,12 @@
 //!
 //! # Why this exists at all, given the engine already has one
 //!
-//! `GET /jobs/:id` is finding `F-03`: it is registered by `createApp()` with no
-//! authentication whatsoever ([`src/server/routes/jobs.ts:5`](../../src/server/routes/jobs.ts),
-//! [`src/server/app.ts:38`](../../src/server/app.ts)), so the record it returns —
-//! prompt text, project path, source agent, callback metadata — is readable by
-//! anyone who can reach the socket. Moving the route into the router and putting
-//! *every* route behind the bearer, reads included, is the closure.
+//! `GET /jobs/:id` is finding `F-03`: until 3.2.0 `createApp()` registered it with
+//! no authentication whatsoever, so the record it returns — prompt text, project
+//! path, source agent, callback metadata — was readable by anyone who could reach
+//! the socket. Putting *every* router route behind the bearer, reads included, is
+//! the router's half of the closure; the engine's route now authorizes its reader
+//! too ([`src/server/routes/jobs.ts`](../../src/server/routes/jobs.ts)).
 //!
 //! The important structural property is the "every". A read route is exactly where
 //! a "we only need auth on writes" instinct shows up, and the instinct is what

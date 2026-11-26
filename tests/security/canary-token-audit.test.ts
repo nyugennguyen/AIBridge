@@ -317,7 +317,7 @@ describe("v3.2.0 block R: job results never carry a canary secret", () => {
     expect(stored.runtimeResult!.summary).toContain("src/runtime/sanitizer.ts")
     expect(stored.runtimeResult!.summary).toContain("Authorization: Bearer [REDACTED]")
 
-    const viewed = await h.app.inject({ method: "GET", url: "/jobs/job_1" })
+    const viewed = await h.app.inject({ method: "GET", url: "/jobs/job_1", headers: { authorization: "Bearer secret" } })
     expect(viewed.statusCode).toBe(200)
     expectNoJobResultCanary(viewed.body, "GET /jobs/:id")
 

@@ -292,7 +292,7 @@ describe("Compatibility policy: kernel absent", () => {
     const { app, jobManager } = await buildTestApp()
     await app.inject({ method: "POST", url: "/trigger", headers: { authorization: "Bearer secret" }, payload: validTrigger() })
 
-    const response = await app.inject({ method: "GET", url: "/jobs/job_1" })
+    const response = await app.inject({ method: "GET", url: "/jobs/job_1", headers: { authorization: "Bearer secret" } })
 
     // Byte-identical to the stored record: the absent-kernel response adds
     // nothing, so a client that predates the kernel sees no change at all.
@@ -369,7 +369,7 @@ describe("Compatibility policy: kernel present", () => {
     const { app, jobManager } = await buildTestApp({ orchestration: { translation } })
     await app.inject({ method: "POST", url: "/trigger", headers: { authorization: "Bearer secret" }, payload: validTrigger() })
 
-    const response = await app.inject({ method: "GET", url: "/jobs/job_1" })
+    const response = await app.inject({ method: "GET", url: "/jobs/job_1", headers: { authorization: "Bearer secret" } })
     const body = response.json()
     const stored = await jobManager.getJob("job_1")
 
@@ -392,7 +392,7 @@ describe("Compatibility policy: kernel present", () => {
     const { translation } = kernelApp()
     const { app } = await buildTestApp({ jobManager, orchestration: { translation } })
 
-    const response = await app.inject({ method: "GET", url: "/jobs/job_1" })
+    const response = await app.inject({ method: "GET", url: "/jobs/job_1", headers: { authorization: "Bearer secret" } })
 
     expect(response.statusCode).toBe(200)
     expect(response.json().orchestration.correlation.legacyJobId).toBe("job_1")
@@ -543,7 +543,7 @@ describe("Compatibility policy: unrepresentable and malformed records fail close
       orchestration: { translation: new LegacyTranslation({ mode: "present", context: unmapped, now: () => NOW, commands: new RecordingCommands() }) },
     })
 
-    const response = await app.inject({ method: "GET", url: "/jobs/job_1" })
+    const response = await app.inject({ method: "GET", url: "/jobs/job_1", headers: { authorization: "Bearer secret" } })
 
     // The record EXISTS; only the mapping is missing. A 404 here would hide a
     // real data problem behind a plausible-looking one.
@@ -668,7 +668,7 @@ describe("M4-A / F-05: the legacy launch path is retired", () => {
 
     // `/jobs/:id` still answers with the bare legacy record plus the additive
     // correlation, and adds no field beyond that.
-    const job = await app.inject({ method: "GET", url: "/jobs/job_1" })
+    const job = await app.inject({ method: "GET", url: "/jobs/job_1", headers: { authorization: "Bearer secret" } })
     const stored = await jobManager.getJob("job_1")
     expect(job.statusCode).toBe(200)
     expect(job.json().id).toBe(stored.id)

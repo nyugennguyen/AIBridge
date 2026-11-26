@@ -143,7 +143,9 @@ export class JobManager {
       createdAt: now,
       updatedAt: now,
     }
-    await this.store.save(job)
+    // `create` checks and reserves the id atomically (two concurrent creates of
+    // one id, or of ids differing only in case: exactly one succeeds).
+    await (this.store.create !== undefined ? this.store.create(job) : this.store.save(job))
     await appendJobEvent(this.events, id, { type: "status", data: { status: job.status } })
     return job
   }

@@ -7,7 +7,8 @@
  *
  * Open SSE streams are capped (`jobEventStreamLimits`); one more answers 429.
  *
- * Who may call (`resolveJobCaller`):
+ * Who may call (`resolveJobCaller`, built on `../job-caller.ts`, which
+ * `GET /jobs/:id` shares):
  * - the OPERATOR credential, under the same rules as `aibr approve`
  *   (`authorizeOperatorRequest`, including `approval_from_loopback_only`):
  *   every job on this node;
@@ -28,17 +29,13 @@ import { z } from "zod"
 import { CANCELLED_BY_OPERATOR, CANCELLED_BY_REQUESTER, cancelJob, isTerminalStatus, type CancelOutcome } from "../../jobs/cancel.js"
 import { InMemoryJobEventLog, type JobEvent, type JobEventLog, type JobEventPage } from "../../jobs/events.js"
 import type { JobRecord, JobStatus } from "../../jobs/types.js"
-import { requireIdentityGuard } from "../../pairing/verifier.js"
-import { bearerTokenMatches, createAuthProvider } from "../../security/auth-provider.js"
-import { authorizeOperatorRequest } from "../../security/operator-auth.js"
 import type { AppDependencies } from "../app.js"
+import { callerMaySeeJob, createJobCallerIdentifier, NOT_JOB_REQUESTER, type JobCaller, type JobCallerRefusal } from "../job-caller.js"
 import { terminalReporter } from "./claude-dispatch.js"
 
-export type JobCaller = { readonly kind: "operator" } | { readonly kind: "requester"; readonly agentId: string }
+export type { JobCaller } from "../job-caller.js"
 
-type CallerResolution =
-  | { readonly ok: true; readonly caller: JobCaller }
-  | { readonly ok: false; readonly status: number; readonly body: Record<string, unknown> }
+type CallerResolution = { readonly ok: true; readonly caller: JobCaller } | JobCallerRefusal
 
 const JOB_STATUSES = [
   "received",
@@ -145,8 +142,7 @@ export function pageJobs(
 
 export function registerJobApiRoutes(app: FastifyInstance, dependencies: AppDependencies): void {
   // Built at registration, as on `/trigger`: a misconfigured profile fails when the app is built.
-  const auth = createAuthProvider(dependencies.config.security.auth_mode, dependencies.bearerToken)
-  const identity = requireIdentityGuard(dependencies.config.security.request_signing, dependencies.requestIdentity)
+  const identify = createJobCallerIdentifier(dependencies)
   const events: JobEventLog = dependencies.jobEvents ?? dependencies.jobManager.eventLog ?? new InMemoryJobEventLog()
   const pollMs = dependencies.jobEventPollMs ?? DEFAULT_EVENT_POLL_MS
   const report = terminalReporter(dependencies)
@@ -160,25 +156,9 @@ export function registerJobApiRoutes(app: FastifyInstance, dependencies: AppDepe
   const streamSlots = new StreamSlots({ ...DEFAULT_STREAM_LIMITS, ...dependencies.jobEventStreamLimits })
 
   const resolveJobCaller = async (request: FastifyRequest): Promise<CallerResolution> => {
-    const authorization = request.headers.authorization
-    const operatorToken = dependencies.operatorToken ?? null
-    if (operatorToken !== null && operatorToken.length > 0 && bearerTokenMatches(authorization, operatorToken)) {
-      const decision = authorizeOperatorRequest(
-        {
-          config: dependencies.config,
-          operatorToken,
-          ...(dependencies.localAddresses !== undefined ? { localAddresses: dependencies.localAddresses } : {}),
-        },
-        request,
-      )
-      return decision.ok ? { ok: true, caller: { kind: "operator" } } : { ok: false, status: decision.statusCode, body: decision.body }
-    }
-    if (!auth.validate(authorization)) return { ok: false, status: 401, body: { error: "Unauthorized" } }
-    if (identity !== undefined) {
-      const verified = await identity.check(request, undefined)
-      if (!verified.ok) return { ok: false, status: verified.status, body: verified.body }
-      if (verified.agentId !== null) return { ok: true, caller: { kind: "requester", agentId: verified.agentId } }
-    }
+    const identified = await identify(request)
+    if (!identified.ok) return identified
+    if (identified.caller !== null) return { ok: true, caller: identified.caller }
     return {
       ok: false,
       status: 403,
@@ -203,9 +183,7 @@ export function registerJobApiRoutes(app: FastifyInstance, dependencies: AppDepe
     } catch {
       return { sent: reply.code(404).send({ error: "Job not found" }) }
     }
-    if (caller.kind === "requester" && job.trigger.source_agent_id !== caller.agentId) {
-      return { sent: reply.code(403).send({ error: "This job was not dispatched by the caller", code: "not_job_requester" }) }
-    }
+    if (!callerMaySeeJob(caller, job)) return { sent: reply.code(403).send(NOT_JOB_REQUESTER) }
     return { job }
   }
 
@@ -221,7 +199,7 @@ export function registerJobApiRoutes(app: FastifyInstance, dependencies: AppDepe
     }
     const caller = resolved.caller
     const visible = (await dependencies.jobManager.listJobs()).filter(
-      (job) => caller.kind === "operator" || job.trigger.source_agent_id === caller.agentId,
+      (job) => callerMaySeeJob(caller, job),
     )
     const page = pageJobs(visible, {
       ...(query.data.status !== undefined ? { status: query.data.status } : {}),

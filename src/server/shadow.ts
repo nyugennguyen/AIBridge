@@ -16,6 +16,7 @@ import {
   reportCallbackSchema,
 } from "../config/schemas.js"
 import type { BridgeConfig } from "../config/types.js"
+import { JOB_ID_PATTERN } from "../jobs/job-id.js"
 
 export interface ShadowDivergence {
   readonly route: string
@@ -33,8 +34,8 @@ export interface ShadowStats {
   readonly recentDivergences: readonly ShadowDivergence[]
 }
 
-/** Job ID charset enforced by router (F-01, M7.3): [A-Za-z0-9_-]{1,128} */
-const JOB_ID_REGEX = /^[A-Za-z0-9_-]{1,128}$/
+/** Job ID charset enforced by the router and the engine (F-01, `src/jobs/job-id.ts`). */
+const JOB_ID_REGEX = JOB_ID_PATTERN
 
 export class ShadowIngressMirror {
   private total = 0
@@ -75,17 +76,18 @@ export class ShadowIngressMirror {
     // Strip envelope key to evaluate payload
     const { schemaVersion: _, ...inner } = raw
 
+    // 2. job_id charset check (F-01). Before the schema, which carries the same
+    // pattern since 3.2.0, so the reason names the traversal.
+    if (inner.job_id !== undefined && !(typeof inner.job_id === "string" && JOB_ID_REGEX.test(inner.job_id))) {
+      return { admitted: false, reason: "JOB_ID_TRAVERSAL_OR_INVALID_CHARSET" }
+    }
+
     const parseResult = triggerRequestSchema.safeParse(inner)
     if (!parseResult.success) {
       return { admitted: false, reason: "SCHEMA_VALIDATION_FAILED" }
     }
 
     const trigger = parseResult.data
-
-    // 2. job_id charset check (F-01: [A-Za-z0-9_-]{1,128})
-    if (trigger.job_id && !JOB_ID_REGEX.test(trigger.job_id)) {
-      return { admitted: false, reason: "JOB_ID_TRAVERSAL_OR_INVALID_CHARSET" }
-    }
 
     // 3. Project containment check (F-04: realpath containment)
     try {
@@ -119,15 +121,13 @@ export class ShadowIngressMirror {
 
     const { schemaVersion: _, ...inner } = raw
 
+    if (inner.job_id !== undefined && !(typeof inner.job_id === "string" && JOB_ID_REGEX.test(inner.job_id))) {
+      return { admitted: false, reason: "JOB_ID_TRAVERSAL_OR_INVALID_CHARSET" }
+    }
+
     const parseResult = reportCallbackSchema.safeParse(inner)
     if (!parseResult.success) {
       return { admitted: false, reason: "SCHEMA_VALIDATION_FAILED" }
-    }
-
-    const report = parseResult.data
-
-    if (report.job_id && !JOB_ID_REGEX.test(report.job_id)) {
-      return { admitted: false, reason: "JOB_ID_TRAVERSAL_OR_INVALID_CHARSET" }
     }
 
     return { admitted: true }

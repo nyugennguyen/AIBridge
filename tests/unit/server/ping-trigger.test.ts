@@ -53,7 +53,7 @@ describe("POST /trigger with capability aibr.ping", () => {
     expect(response.statusCode).toBe(202)
     expect(response.json()).toMatchObject({ accepted: true, job_id: "ping-1", status: "accepted", target_agent_id: "test-vps" })
 
-    const job = await h.app.inject({ method: "GET", url: "/jobs/ping-1" })
+    const job = await h.app.inject({ method: "GET", url: "/jobs/ping-1", headers: { authorization: "Bearer secret" } })
     expect(job.statusCode).toBe(200)
     const body = job.json()
     expect(body.status).toBe("completed")
@@ -82,7 +82,7 @@ describe("POST /trigger with capability aibr.ping", () => {
     const h = await setup(config)
     const response = await h.app.inject({ method: "POST", url: "/trigger", headers: AUTH, payload: pingTrigger() })
     expect(response.statusCode).toBe(202)
-    const body = (await h.app.inject({ method: "GET", url: "/jobs/ping-1" })).json()
+    const body = (await h.app.inject({ method: "GET", url: "/jobs/ping-1", headers: { authorization: "Bearer secret" } })).json()
     expect(body.status).toBe("completed")
     expect(body.pong.runtime).toBe("claude")
     await flush()

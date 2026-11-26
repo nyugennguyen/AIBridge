@@ -83,7 +83,15 @@ pub const MAX_BODY_BYTES: usize = 1_048_576;
 /// field.
 pub const JOB_ID_MAX_LEN: usize = 128;
 
-/// The `job_id` charset: `[A-Za-z0-9_-]{1,128}`.
+/// The `400` discriminator for a malformed `job_id` in a body.
+pub const JOB_ID_RULE: &str = "job_id must match [A-Za-z0-9][A-Za-z0-9_-]{0,127}";
+
+/// The `job_id` charset: `[A-Za-z0-9][A-Za-z0-9_-]{0,127}`.
+///
+/// The same rule as the engine's `JOB_ID_PATTERN` (`src/jobs/job-id.ts`, 3.2.0),
+/// which the generated contract types also carry as a `pattern`. The first byte
+/// is a letter or digit so an id is never read as a command-line option
+/// (`aibr approve -x`, `git worktree add ... -x`).
 ///
 /// This is the `F-01` closure, and the finding's own reproduction is the test: a
 /// schema-valid `../escaped` maps `/state/jobs` to `/state/escaped.json`
@@ -109,6 +117,7 @@ pub fn valid_job_id(id: &str) -> bool {
     let bytes = id.as_bytes();
     !bytes.is_empty()
         && bytes.len() <= JOB_ID_MAX_LEN
+        && bytes[0].is_ascii_alphanumeric()
         && bytes
             .iter()
             .all(|byte| byte.is_ascii_alphanumeric() || *byte == b'_' || *byte == b'-')
@@ -270,7 +279,7 @@ pub fn canonical_project_dir(requested: &str, roots: &[PathBuf]) -> Result<PathB
 /// [`crate::routes`] for what happens next.
 pub fn check_optional_job_id(trigger: &TriggerRequest) -> Result<(), ApiError> {
     match trigger.job_id.as_ref() {
-        Some(id) => require_job_id(id, "job_id must match [A-Za-z0-9_-]{1,128}"),
+        Some(id) => require_job_id(id, JOB_ID_RULE),
         None => Ok(()),
     }
 }
@@ -301,13 +310,20 @@ mod tests {
             "a",
             "A",
             "0",
-            "-",
-            "_",
+            "a-",
+            "a_",
             "job-1",
             "JOB_1",
             "0123456789abcdef",
         ] {
             assert!(valid_job_id(id), "{id:?} should be accepted");
+        }
+    }
+
+    #[test]
+    fn an_id_must_start_with_a_letter_or_digit() {
+        for id in ["-", "_", "-rf", "_job", "--help"] {
+            assert!(!valid_job_id(id), "{id:?} should be refused");
         }
     }
 

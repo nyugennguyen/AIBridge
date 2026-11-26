@@ -141,7 +141,7 @@ describe("startBridge", () => {
     expect(trigger.statusCode).toBe(401)
 
     // Jobs route exists (returns 404 for unknown job, not route-not-found)
-    const jobs = await bridge.app.inject({ method: "GET", url: "/jobs/nonexistent" })
+    const jobs = await bridge.app.inject({ method: "GET", url: "/jobs/nonexistent", headers: { authorization: "Bearer secret" } })
     expect(jobs.statusCode).toBe(404)
     expect(jobs.json().error).toBe("Job not found")
 

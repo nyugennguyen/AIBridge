@@ -96,7 +96,7 @@ bun run test:installer       # Shellcheck & installer tests
 
 ### Contract Parity & Schemas
 
-AIBridge synchronizes wire contracts between TypeScript (`src/config/schemas.ts`, `src/ipc/schemas.ts`), generated JSON schemas (`contracts/v1/`), and Rust crates (`router/src/contracts.rs`, `crates/aibr-ipc/src/contracts.rs`).
+AIBridge synchronizes wire contracts between TypeScript (`src/config/schemas.ts`), generated JSON schemas (`contracts/v1/`), and the Rust router (`router/src/contracts.rs`).
 
 ```bash
 # Regenerate wire contracts and JSON schemas

@@ -1,7 +1,7 @@
 /**
  * Versioned Charter Repository with canonical snapshot digest and immutable core stamping.
  *
- * Implements the charter store requirements of docs/implementation-plans/aibridge-herdr-orchestration.md §10
+ * Implements the charter store requirements of docs/archive/aibridge-herdr-orchestration.md §10
  * and §15 (settled architecture decisions):
  *
  * 1. Profile Scope (§15 decision #1):

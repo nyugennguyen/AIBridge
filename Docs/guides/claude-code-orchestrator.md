@@ -1,7 +1,7 @@
 # Claude Code as Orchestrator
 
 > **Status:** Current  
-> **Applies to:** AIBridge 3.1.0  
+> **Applies to:** AIBridge 3.1.1  
 > **Owner:** Maintainers  
 
 The AIBridge Claude Code plugin lets a Claude Code session on your workstation hand work (integration tests, bug reproduction, log reading, fixes on a branch) to remote AIBridge worker nodes, then read the results and continue locally. The plugin adds an MCP server, a dispatch skill, two slash commands and a SessionStart summary.

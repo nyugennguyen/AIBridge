@@ -1,6 +1,6 @@
 /**
  * Parity tests for Charter and Roundtable contract schemas
- * (Phase 0 / Milestone 6 of docs/implementation-plans/aibridge-herdr-orchestration.md §10-§11).
+ * (Phase 0 / Milestone 6 of docs/archive/aibridge-herdr-orchestration.md §10-§11).
  *
  * Asserts that:
  * 1. The committed `contracts/v1/*.schema.json` artefacts match what the live Zod schemas

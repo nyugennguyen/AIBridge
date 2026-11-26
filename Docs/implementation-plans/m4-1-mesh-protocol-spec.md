@@ -1,5 +1,7 @@
 # M4.1 — Mesh Wire Protocol: Normative Specification
 
+> **Update (3.1.1):** §4.9 `mesh.terminal` and the M4.7 terminal WebSocket gateway were removed with the TUI/Herdr layer ([ADR 0014](../adr/0014-claude-is-the-operator-interface.md)); seven families and nine record types remain. The rest of this specification is unchanged.
+
 **Status:** specification of record. M4.1's deliverable is code that conforms to this
 document plus the sequence diagrams in `sequence-diagrams.md`.
 

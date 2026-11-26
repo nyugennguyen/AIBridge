@@ -4,7 +4,7 @@
  * A sequential line-prompt flow driven through an injected `Prompter`. It is the
  * flow every `aibr setup` run executes, interactive terminal or scripted test
  * alike. (`StepperFSM` at the bottom of this file models a keyboard/mouse
- * stepper from Docs/tui/aibridge-setup-wizard.html; it is retained and unit
+ * stepper from Docs/archive/aibridge-setup-wizard.html; it is retained and unit
  * tested, but `runSetupWizard` does not drive it.)
  *
  * Flow:

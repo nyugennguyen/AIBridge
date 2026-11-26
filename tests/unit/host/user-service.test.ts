@@ -99,7 +99,7 @@ describe("names and paths", () => {
 
   it("adds --with-opencode only in engine mode", () => {
     expect(daemonCommandArgs("dev", "engine", { withOpencode: true })).toEqual(["serve", "--profile", "dev", "--with-opencode"])
-    expect(daemonCommandArgs("dev", "router", { withOpencode: true })).toEqual(["worker", "--profile", "dev", "--ipc-publish"])
+    expect(daemonCommandArgs("dev", "router", { withOpencode: true })).toEqual(["worker", "--profile", "dev"])
   })
 })
 

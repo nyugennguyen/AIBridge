@@ -35,70 +35,16 @@ fn main() -> ExitCode {
     }
 }
 
-/// The contract families that belong to the LOCAL IPC BUS rather than to the
-/// admission router.
-///
-/// WHY THE PARTITION EXISTS, and it is a size bound rather than taste. The
-/// router's release binary is gated at 3.00 MiB (ADR 0008 §13) by
-/// `.github/workflows/milestone-7.yml`, and the typify output for these thirteen
-/// families is tens of thousands of lines of validation and construction code
-/// for messages the router never receives. Compiling them into
-/// `router/src/contracts.rs` would push a binary that is ALREADY over its
-/// original 2 MiB bound further past it to buy nothing.
-///
-/// WHY A LIST AND NOT A NAMING CONVENTION. A prefix (`ipc-*.schema.json`) would
-/// be self-maintaining, but it would also make the boundary depend on a filename
-/// convention nobody is forced to notice. An explicit list makes adding an IPC
-/// family a reviewed line, and the two-partition check below turns a file that
-/// belongs to neither side into a generation failure rather than a silent
-/// omission.
-const IPC_CONTRACT_FILES: &[&str] = &[
-    "ack.schema.json",
-    "control-command.schema.json",
-    "job-state.schema.json",
-    "job-view.schema.json",
-    "pane-view.schema.json",
-    "pty-chunk.schema.json",
-    "pty-exit.schema.json",
-    "server-error.schema.json",
-    "server-message.schema.json",
-    "state-diff.schema.json",
-    "state-snapshot.schema.json",
-    "tailscale-status.schema.json",
-    "workspace-view.schema.json",
-];
-
 fn run() -> Result<String, String> {
     let repository_root = repository_root()?;
-    let all = read_contract_inputs(&repository_root.join("contracts/v1"))?;
-    let router_inputs = contracts_partition_router(&all)?;
-    let ipc_inputs = contracts_partition_ipc(&all)?;
-    assert_root_names_disjoint(
-        "router admission",
-        &router_inputs,
-        "local IPC bus",
-        &ipc_inputs,
-    )?;
-    let destinations = [
-        (
-            "router admission contracts",
-            router_inputs,
-            repository_root.join("router/src/contracts.rs"),
-            "src/config/schemas.ts, src/orchestration/schemas.ts",
-        ),
-        (
-            "local IPC bus contracts",
-            ipc_inputs,
-            repository_root.join("crates/aibr-ipc/src/contracts.rs"),
-            "src/ipc/schemas.ts",
-        ),
-    ];
-
-    let mut summaries = Vec::new();
-    for (label, inputs, destination, sources) in destinations {
-        summaries.push(emit_target(label, inputs, &destination, sources)?);
-    }
-    Ok(summaries.join("\n"))
+    let inputs = read_contract_inputs(&repository_root.join("contracts/v1"))?;
+    assert_root_names_unique(&inputs)?;
+    emit_target(
+        "router admission contracts",
+        inputs,
+        &repository_root.join("router/src/contracts.rs"),
+        "src/config/schemas.ts, src/orchestration/schemas.ts",
+    )
 }
 
 /// Read every `*.schema.json` under `contracts/v1`, keyed by file name.
@@ -144,63 +90,7 @@ fn read_contract_inputs(contracts_directory: &Path) -> Result<BTreeMap<String, P
     Ok(inputs)
 }
 
-/// Split the read inputs into the two generated units, refusing a partial split.
-///
-/// The refusal is the point of the function. A new `contracts/v1/*.schema.json`
-/// that is not in `IPC_CONTRACT_FILES` is generated into the ROUTER, where a
-/// TUI message family would inflate a size-gated binary; a name in the list that
-/// no longer exists on disk is a stale entry that would otherwise sit unnoticed.
-/// Both are generation errors, not warnings, because `bun run generate:contracts`
-/// is the CI command and this is where it can still fail loudly.
-fn contracts_partition(
-    inputs: &BTreeMap<String, PathBuf>,
-    take: impl Fn(&str) -> bool,
-    label: &str,
-) -> Result<BTreeMap<String, PathBuf>, String> {
-    let selected: BTreeMap<String, PathBuf> = inputs
-        .iter()
-        .filter(|(name, _)| take(name))
-        .map(|(name, path)| (name.clone(), path.clone()))
-        .collect();
-    if selected.is_empty() {
-        return Err(format!("the {label} partition is empty"));
-    }
-    Ok(selected)
-}
-
-fn contracts_partition_router(
-    all: &BTreeMap<String, PathBuf>,
-) -> Result<BTreeMap<String, PathBuf>, String> {
-    let claimed = contracts_partition(
-        all,
-        |name| IPC_CONTRACT_FILES.contains(&name),
-        "local IPC bus",
-    )?;
-    for name in IPC_CONTRACT_FILES {
-        if !claimed.contains_key(*name) {
-            return Err(format!(
-                "IPC_CONTRACT_FILES lists `{name}`, which is not present in contracts/v1; the entry is stale"
-            ));
-        }
-    }
-    contracts_partition(
-        all,
-        |name| !IPC_CONTRACT_FILES.contains(&name),
-        "router admission",
-    )
-}
-
-fn contracts_partition_ipc(
-    all: &BTreeMap<String, PathBuf>,
-) -> Result<BTreeMap<String, PathBuf>, String> {
-    contracts_partition(
-        all,
-        |name| IPC_CONTRACT_FILES.contains(&name),
-        "local IPC bus",
-    )
-}
-
-/// Generate one Rust module from one partition of the contracts.
+/// Generate the router's Rust module from the contracts.
 #[allow(clippy::too_many_arguments)]
 fn emit_target(
     label: &str,
@@ -315,7 +205,7 @@ fn emit_target(
     header.push_str(", using typify 0.8.0.\n");
     header.push_str("// Contents: the ");
     header.push_str(label);
-    header.push_str(" partition of contracts/v1 (");
+    header.push_str(" generated from contracts/v1 (");
     header.push_str(&inputs.len().to_string());
     header.push_str(" files, in the order listed below)\n");
     header.push_str(
@@ -326,18 +216,13 @@ fn emit_target(
     header.push_str(",\n");
     header.push_str("//              which are the single source of truth (ADR 0008 §2.3).\n");
     header.push_str("//\n");
-    header.push_str("// PARTITIONING. `contracts/v1/` is split across several generated units\n");
-    header.push_str("// by IPC_CONTRACT_FILES in this generator, so that a crate compiles\n");
-    header.push_str("// only the families it actually speaks. Adding a schema there without\n");
-    header.push_str("// adding its name to that list is a generation error, not a silent drop.\n");
-    header.push_str("//\n");
     header.push_str("// Regenerate with:\n");
     header.push_str("//     bun run generate:contracts\n");
     header.push_str(
         "// A hand edit to this file is a build failure, not a review comment: CI runs\n",
     );
     header.push_str(
-        "// `git diff --exit-code contracts/ router/src/contracts.rs crates/aibr-ipc/src/contracts.rs`\n",
+        "// `git diff --exit-code contracts/ router/src/contracts.rs`\n",
     );
     header.push_str("// after generation.\n");
     header.push_str("//\n");
@@ -390,7 +275,7 @@ fn emit_target(
     let current = fs::read_to_string(destination).ok();
     if current.as_deref() == Some(rendered.as_str()) {
         return Ok(format!(
-            "aibr-contract-gen: {} partition, {} inputs -> {} is already up to date",
+            "aibr-contract-gen: {}, {} inputs -> {} is already up to date",
             label,
             inputs.len(),
             destination.display()
@@ -414,41 +299,21 @@ fn emit_target(
     ))
 }
 
-/// Assert that every input partition produced a distinct set of root names.
+/// Assert that no two inputs declare the same root type name.
 ///
-/// WHY THIS EXISTS. `contracts/v1/` holds two independent families that are
-/// generated into two different crates, and neither crate's build can see the
-/// other's types. A name collision -- say a future `state-diff.schema.json` in
-/// the ingress closure and the IPC `state-diff.schema.json` -- would compile
-/// cleanly in both units and produce two distinct Rust types with the same name
-/// for the same conceptual thing, which is the exact divergence ADR 0008 §2.3
-/// exists to prevent and which no test on either side would catch.
-///
-/// The root names come from each schema's `title`, so this is a check on the
-/// committed artefacts rather than on the generator's behaviour.
-fn assert_root_names_disjoint(
-    first_label: &str,
-    first: &BTreeMap<String, PathBuf>,
-    second_label: &str,
-    second: &BTreeMap<String, PathBuf>,
-) -> Result<(), String> {
-    let mut first_names = BTreeMap::new();
-    for (file_name, path) in first {
+/// Two files with the same `title` would generate two Rust types with the same
+/// name for what is conceptually one thing, which is the divergence ADR 0008
+/// §2.3 exists to prevent. The root names come from each schema's `title`, so
+/// this is a check on the committed artefacts rather than on the generator.
+fn assert_root_names_unique(inputs: &BTreeMap<String, PathBuf>) -> Result<(), String> {
+    let mut names = BTreeMap::new();
+    for (file_name, path) in inputs {
         let name = root_type_name(path)?;
-        if let Some(previous) = first_names.insert(name.clone(), file_name.clone()) {
+        if let Some(previous) = names.insert(name.clone(), file_name.clone()) {
             return Err(format!(
                 "{file_name} and {previous} both declare the root type `{name}`"
             ));
         }
-    }
-    for (file_name, path) in second {
-        let name = root_type_name(path)?;
-        if let Some(previous) = first_names.get(&name) {
-            return Err(format!(
-                "{file_name} declares the root type `{name}`, which {previous} in the {first_label} partition already declares; the two partitions cannot share a type name"
-            ));
-        }
-        let _ = second_label;
     }
     Ok(())
 }

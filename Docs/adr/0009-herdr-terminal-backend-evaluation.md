@@ -1,6 +1,6 @@
 # ADR 0009: Herdr Terminal Backend Experiment and Evaluation
 
-- **Status:** SUPERSEDED by [ADR 0011: Herdr-Orchestrated Multi-Agent Architecture](./0011-herdr-orchestration-architecture.md) (formerly: Evaluated / DEFERRED for Production Inclusion)
+- **Status:** Superseded by [ADR 0014](./0014-claude-is-the-operator-interface.md) (earlier: superseded by [ADR 0011](./0011-herdr-orchestration-architecture.md); formerly: Evaluated / DEFERRED for Production Inclusion)
 - **Date:** 2026-10-05 (Superseded: 2026-10-14)
 - **Authors:** AIBridge Architecture & Hardening Team
 - **Deciders:** Core Engineering Team, Release Gate

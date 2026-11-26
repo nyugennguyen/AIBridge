@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-CLI_VERSION="3.1.0"
+CLI_VERSION="3.1.1"
 
 YES=0
 WITH_UNITS=0
@@ -36,7 +36,7 @@ Options:
 Environment:
   AIBRIDGE_VERSION        npm version/tag to install (default: latest)
   AIBRIDGE_PACKAGE        full package spec to install instead (e.g. a local
-                          ./nyugennguyen-aibridge-3.1.0.tgz for pre-release testing)
+                          ./nyugennguyen-aibridge-3.1.1.tgz for pre-release testing)
   AIBRIDGE_ROUTER_BIN     path to an aibr-router binary (with --ingress router)
   AIBRIDGE_INGRESS_OUTBOX absolute path of the admission store (with --ingress router)
 USAGE
@@ -162,12 +162,23 @@ required_tools() {
   local rt
   rt="$(worker_runtime_tool)"
   case "$ROLE" in
-    worker) echo "tailscale tmux $rt" ;;
+    worker) echo "tailscale $rt" ;;
     orchestrator) echo "tailscale claude" ;;
     both)
-      if [ "$rt" = "claude" ]; then echo "tailscale tmux claude"; else echo "tailscale tmux $rt claude"; fi
+      if [ "$rt" = "claude" ]; then echo "tailscale claude"; else echo "tailscale $rt claude"; fi
       ;;
   esac
+}
+
+# tmux is optional: only `aibr start --foreground` uses it (the bridge normally
+# runs as a user service). Never installed by default; a one-line note for roles
+# that run jobs.
+note_optional_tmux() {
+  case "$ROLE" in worker|both) ;; *) return 0 ;; esac
+  if has_cmd tmux; then return 0; fi
+  local cmd
+  cmd="$(install_cmd_for tmux)"
+  echo "note: tmux not found (optional, only for 'aibr start --foreground'); install with: ${cmd:-your package manager}"
 }
 
 is_runtime_tool() { [ "$1" = "opencode" ] || [ "$1" = "claude" ]; }
@@ -185,6 +196,7 @@ check_prereqs() {
       echo "✗ $tool missing${cmd:+ — will offer to install via: $cmd}"
     fi
   done
+  note_optional_tmux
 }
 
 runtime_hint() {
@@ -212,16 +224,6 @@ install_missing_prereqs() {
   for tool in $(required_tools); do
     if has_cmd "$tool"; then continue; fi
     case "$tool" in
-      tmux)
-        if [ "$OS" = "macos" ] && ! has_cmd brew; then
-          echo "✗ Homebrew not found; install tmux manually (https://brew.sh then brew install tmux)"
-          MISSING_SUMMARY+=("tmux is missing and Homebrew is unavailable")
-        elif confirm "Install tmux? Run: $(install_cmd_for tmux)"; then
-          if [ "$OS" = "macos" ]; then brew install tmux; else as_root apt-get install -y tmux; fi
-        else
-          MISSING_SUMMARY+=("tmux is missing — install with: $(install_cmd_for tmux)")
-        fi
-        ;;
       tailscale)
         if [ "$OS" = "macos" ] && ! has_cmd brew; then
           echo "✗ Homebrew not found; install Tailscale manually (https://tailscale.com/download)"

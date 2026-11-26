@@ -21,6 +21,9 @@
 
 import { createRuntime, type Runtime, type RuntimeOptions } from "./runtime.js"
 import { IngressDrainer, type IngressLifecycleObserver } from "./drainer.js"
+import { reconcileJobsAfterRestart, startPeriodicSweep, type RestartReconcileResult } from "../jobs/reconcile.js"
+import { relaunchOpencodeJobs } from "../server/routes/opencode-dispatch.js"
+import { acquireStateLock, type StateLock } from "../host/state-lock.js"
 
 export const INGRESS_OUTBOX_ENV = "AIBRIDGE_INGRESS_OUTBOX"
 
@@ -44,6 +47,12 @@ export interface IngressWorkerHandle {
   /** Resolves once the poll loop has stopped. Idempotent. */
   readonly stopped: Promise<void>
   stop(): void
+  /**
+   * What the startup pass did with the job store it found (see
+   * `reconcileJobsAfterRestart`). Every relaunched job had been handed to
+   * OpenCode before `startIngressWorker` returned.
+   */
+  readonly restartReconcile: RestartReconcileResult
 }
 
 export interface IngressWorkerOptions extends RuntimeOptions {
@@ -56,6 +65,8 @@ export interface IngressWorkerOptions extends RuntimeOptions {
    * Optional because a worker with no observer must not pay for it.
    */
   readonly ingressObserver?: IngressLifecycleObserver
+  /** Period of the deadline sweep. Default 60 s; tests shorten it. */
+  readonly sweepIntervalMs?: number
 }
 
 export const DEFAULT_POLL_INTERVAL_MS = 500
@@ -89,10 +100,29 @@ export function resolveStorePath(
   return value
 }
 
+/**
+ * Starts the drain loop. Takes the profile's state lock first and holds it
+ * until `stop()`: a second worker or bridge on the same profile refuses to
+ * start (`StateLockHeldError`) instead of reconciling the live one's jobs.
+ */
 export async function startIngressWorker(
   options: IngressWorkerOptions,
 ): Promise<IngressWorkerHandle> {
   const storePath = resolveStorePath(options.storePath, options.environment)
+  const lock = acquireStateLock(options.stateDir)
+  try {
+    return await startIngressWorkerHoldingLock(options, storePath, lock)
+  } catch (error) {
+    lock.release()
+    throw error
+  }
+}
+
+async function startIngressWorkerHoldingLock(
+  options: IngressWorkerOptions,
+  storePath: string,
+  lock: StateLock,
+): Promise<IngressWorkerHandle> {
   const runtime = await createRuntime(options)
 
   let drainer: IngressDrainer
@@ -104,6 +134,7 @@ export async function startIngressWorker(
       callbackReporter: runtime.callbackReporter,
       taskGraphSyncer: runtime.taskGraphSyncer,
       monitorSession: runtime.monitorSession,
+      reportTerminalJob: runtime.reportTerminalJob,
       observer: options.ingressObserver,
     })
   } catch (error) {
@@ -116,12 +147,46 @@ export async function startIngressWorker(
     )
   }
 
+  // This process executes the router's jobs, so it owns the restart pass
+  // (block K) and the periodic deadline sweep, as `aibr serve` does in engine
+  // mode. Before the first drain: nothing here is running yet.
+  const callbackRetries = await runtime.jobManager.listCallbackRetries()
+  const reconciled = await reconcileJobsAfterRestart({
+    jobManager: runtime.jobManager,
+    config: runtime.config,
+    taskGraphSyncer: runtime.taskGraphSyncer,
+    abortOpencodeSession: (sessionId) => runtime.opencodeClient.abortSession(sessionId),
+  })
+  for (const job of [...reconciled.swept, ...reconciled.interrupted, ...reconciled.declined, ...callbackRetries]) {
+    void runtime.reportTerminalJob(job)
+  }
+  // Awaited before the first drain, so a relaunch never races new work.
+  await relaunchOpencodeJobs(reconciled.relaunch, {
+      jobManager: runtime.jobManager,
+      opencodeClient: runtime.opencodeClient,
+      taskGraphSyncer: runtime.taskGraphSyncer,
+      monitorSession: runtime.monitorSession,
+      reportTerminalJob: runtime.reportTerminalJob,
+      callbackReporter: runtime.callbackReporter,
+      config: runtime.config,
+      bearerToken: options.bearerToken,
+  })
+  const restartReconcile = reconciled
+  const stopSweep = startPeriodicSweep({
+    jobManager: runtime.jobManager,
+    reportTerminalJob: runtime.reportTerminalJob,
+    isActive: runtime.isJobActive,
+    ...(options.sweepIntervalMs !== undefined ? { intervalMs: options.sweepIntervalMs } : {}),
+  })
+
   drainer.start(options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS)
 
   let stop: () => void = () => {}
   const stopped = new Promise<void>((resolve) => {
     stop = () => {
+      stopSweep()
       drainer.stop()
+      lock.release()
       resolve()
     }
   })
@@ -134,5 +199,6 @@ export async function startIngressWorker(
     pendingIngressCount: () => drainer.pendingCount(),
     stopped,
     stop,
+    restartReconcile,
   }
 }

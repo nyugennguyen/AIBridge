@@ -21,6 +21,7 @@ import type { BridgeConfig } from "../config/types.js"
 import type { JobManager } from "../jobs/manager.js"
 import type { JobRecord } from "../jobs/types.js"
 import type { OpencodeClient } from "../opencode/types.js"
+import { startOpencodeSession } from "../opencode/launch.js"
 import type { TaskGraphSyncer } from "../tasks/types.js"
 import type { CallbackReporter } from "../callback/reporter.js"
 import type { LegacyTranslation } from "../orchestration/legacy/translation.js"
@@ -91,6 +92,8 @@ export interface IngressDrainerDependencies {
   readonly callbackReporter?: CallbackReporter
   readonly taskGraphSyncer: TaskGraphSyncer
   readonly monitorSession: (job: JobRecord) => Promise<void>
+  /** Delivers the report of a job whose launch OpenCode refused. `aibr worker` always passes it. */
+  readonly reportTerminalJob?: (job: JobRecord) => Promise<void>
   /** Optional; see {@link IngressLifecycleObserver} for why it is not a return value. */
   readonly observer?: IngressLifecycleObserver
   readonly orchestration?: {
@@ -105,6 +108,7 @@ export class IngressDrainer {
   readonly #opencodeClient: OpencodeClient
   readonly #taskGraphSyncer: TaskGraphSyncer
   readonly #monitorSession: (job: JobRecord) => Promise<void>
+  readonly #reportTerminalJob?: (job: JobRecord) => Promise<void>
   readonly #orchestration?: { readonly translation: LegacyTranslation }
   readonly #observer?: IngressLifecycleObserver
   private running = false
@@ -117,6 +121,7 @@ export class IngressDrainer {
     this.#opencodeClient = dependencies.opencodeClient
     this.#taskGraphSyncer = dependencies.taskGraphSyncer
     this.#monitorSession = dependencies.monitorSession
+    this.#reportTerminalJob = dependencies.reportTerminalJob
     this.#observer = dependencies.observer
     this.#orchestration = dependencies.orchestration
   }
@@ -431,18 +436,24 @@ export class IngressDrainer {
       return
     }
 
-    const session = await this.#opencodeClient.createSession(`AIBridge ${job.id}`, trigger.project_dir)
-    await this.#jobManager.attachSession(job.id, session.id)
-    await this.#opencodeClient.sendPromptAsync(session.id, trigger.prompt, trigger.project_dir)
-    const running = await this.#jobManager.markRunning(job.id)
+    // A launch OpenCode refuses fails and reports the job, then throws: the
+    // row is failed by `processRecord` with the (redacted) launch error.
+    const { sessionId, running } = await startOpencodeSession(job, {
+      jobManager: this.#jobManager,
+      opencodeClient: this.#opencodeClient,
+      ...(this.#reportTerminalJob !== undefined ? { reportTerminalJob: this.#reportTerminalJob } : {}),
+    })
 
     await this.#taskGraphSyncer.syncJobToTask(resolvedTaskId, "running", {
       Job: job.id,
-      Session: session.id,
+      Session: sessionId,
     })
 
     void this.#monitorSession(running).catch(async (error: unknown) => {
-      await this.#jobManager.markFailed(job.id, error instanceof Error ? error.message : "Session monitor failed")
+      const failed = await this.#jobManager
+        .markFailed(job.id, error instanceof Error ? error.message : "Session monitor failed")
+        .catch(() => undefined)
+      if (failed !== undefined) await this.#reportTerminalJob?.(failed)
     })
 
     // Second durable write: acknowledge upon successful dispatch
@@ -490,23 +501,15 @@ export class IngressDrainer {
         throw new Error(recorded.error.message)
       }
       try {
-        const session = await this.#opencodeClient.createSession(
-          `AIBridge ${unblockedJob.id}`,
-          unblockedJob.trigger.project_dir,
-        )
-        await this.#jobManager.attachSession(unblockedJob.id, session.id)
-        await this.#opencodeClient.sendPromptAsync(
-          session.id,
-          unblockedJob.trigger.prompt,
-          unblockedJob.trigger.project_dir,
-        )
-        const running = await this.#jobManager.markRunning(unblockedJob.id)
+        const { running } = await startOpencodeSession(unblockedJob, {
+          jobManager: this.#jobManager,
+          opencodeClient: this.#opencodeClient,
+          ...(this.#reportTerminalJob !== undefined ? { reportTerminalJob: this.#reportTerminalJob } : {}),
+        })
         void this.#monitorSession(running)
-      } catch (err) {
-        await this.#jobManager.markFailed(
-          unblockedJob.id,
-          err instanceof Error ? err.message : "Execution failed",
-        )
+      } catch {
+        // OpenCode refused: the job is already failed and reported. The
+        // marker refused: another path owns this job; leave it alone.
       }
     }
 

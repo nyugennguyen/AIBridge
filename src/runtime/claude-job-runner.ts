@@ -28,7 +28,7 @@ import type {
 } from "../config/types.js"
 import { claudeConfigSchema } from "../config/schemas.js"
 import { approvalRequired } from "../planning/approval.js"
-import type { JobManager } from "../jobs/manager.js"
+import { LaunchRefusedError, type JobManager } from "../jobs/manager.js"
 import type { JobRecord, RuntimeJobResult, RuntimeJobUsage } from "../jobs/types.js"
 import type { RepoWorkspaceManager } from "./repo-workspace.js"
 import { CLAUDE_PROVIDER_ENV_KEYS } from "./sanitizer.js"
@@ -445,6 +445,21 @@ export interface ClaudeJobLaunch {
   readonly startedAtMs?: number
 }
 
+/**
+ * Thrown by `start` when the launch failed after `launchStartedAt` was
+ * written. The job is already `failed` (its stored error is this message) and
+ * reported: callers must not fail or report it again.
+ */
+export class ClaudeLaunchError extends Error {
+  readonly code = "claude_launch_failed"
+  constructor(
+    message: string,
+    readonly job: JobRecord | undefined,
+  ) {
+    super(message)
+  }
+}
+
 /** Thrown by `start` when `limits.max_concurrent_jobs` jobs are already running. */
 export class RunnerAtCapacityError extends Error {
   readonly code = "node_at_capacity"
@@ -546,15 +561,17 @@ export class ClaudeJobRunner {
   }
 
   /**
-   * Claims a concurrency slot, prepares the job's working directory (its own
+   * Claims a concurrency slot, records `launchStartedAt` (refused unless the
+   * job is `accepted` and was never launched), prepares the job's working directory (its own
    * worktree at the pinned sha when the job has a `checkout`) and, when the
    * profile's first step is Claude Code, launches it. Moves the job to
-   * `running`. Throws `RunnerAtCapacityError` when the node is full, or the
-   * launch error; on a throw the slot and any worktree are released and the
-   * job is left for the caller to fail.
+   * `running`. Throws `RunnerAtCapacityError` when the node is full and the
+   * marker's refusal as is (the job is left alone). A failure after the
+   * marker fails and reports the job, then throws `ClaudeLaunchError`. On any
+   * throw the slot and any worktree are released.
    */
   async start(job: JobRecord): Promise<ClaudeJobLaunch> {
-    if (this.#active.has(job.id)) throw new Error(`Job ${job.id} is already running`)
+    if (this.#active.has(job.id)) throw new LaunchRefusedError(`Job ${job.id} is already running`)
     if (!this.hasCapacity()) {
       throw new RunnerAtCapacityError(
         `This node is already running ${this.#active.size} job(s), its limit (limits.max_concurrent_jobs = ${maxConcurrentJobs(this.#config)}). Retry later.`,
@@ -564,6 +581,15 @@ export class ClaudeJobRunner {
     this.#active.set(job.id, active)
     const startedAt = this.#clock()
     const timeoutSeconds = claudeTimeoutSeconds(this.#config, job.trigger)
+    // Before any side effect (worktree, spawn, script): after a restart, a
+    // job without this marker provably never ran and may be launched again.
+    // A refusal (not `accepted`, or launched before) leaves the job alone.
+    try {
+      await this.#jobManager.markLaunchStarted(job.id)
+    } catch (error) {
+      await this.#releaseJob(job, active)
+      throw error
+    }
     try {
       const cwd = await this.#prepareWorkingDirectory(job, active)
       const profile = capabilityProfile(this.#config, job.trigger.capability)
@@ -582,8 +608,18 @@ export class ClaudeJobRunner {
         startedAtMs: startedAt,
       }
     } catch (error) {
+      // Past the marker the job may have done something: fail it now with the
+      // launch error and report it, rather than leave it `accepted`. The slot
+      // is released only after the terminal write, so the sweep never sees
+      // the job both inactive and unfinished.
+      const message = error instanceof Error ? error.message : "Claude Code launch failed"
+      const failed = await this.#jobManager.markFailed(job.id, message, undefined, { maxLength: MAX_ERROR_LENGTH }).catch(() => undefined)
       await this.#releaseJob(job, active)
-      throw error
+      if (failed !== undefined) {
+        await this.#taskGraphSyncer?.syncJobToTask(job.trigger.task_id ?? `#${job.id}`, "failed").catch(() => undefined)
+        await this.#reportTerminalJob(failed).catch(() => undefined)
+      }
+      throw new ClaudeLaunchError(failed?.error ?? "Claude Code launch failed", failed)
     }
   }
 
@@ -646,8 +682,6 @@ export class ClaudeJobRunner {
         error: stopReason,
       }
     }
-    await this.#releaseJob(launch.job, active)
-
     const result: RuntimeJobResult = {
       summary: outcome.summary,
       findings: outcome.findings,
@@ -655,6 +689,9 @@ export class ClaudeJobRunner {
       ...(scriptResults.length > 0 ? { scriptResults } : {}),
     }
 
+    // The job stays in `#active` until its terminal write, so the periodic
+    // sweep (which skips active jobs) cannot end it in between and report it
+    // a second time. Redaction happens before truncation (`maxLength`).
     let terminal: JobRecord
     try {
       await this.#jobManager.recordRuntimeResult(jobId, result)
@@ -663,11 +700,13 @@ export class ClaudeJobRunner {
           ? await this.#jobManager.markCompleted(jobId)
           : outcome.state === "timed_out"
             ? await this.#jobManager.markTimedOut(jobId)
-            : await this.#jobManager.markFailed(jobId, truncate(outcome.error ?? outcome.summary, MAX_ERROR_LENGTH))
+            : await this.#jobManager.markFailed(jobId, outcome.error ?? outcome.summary, undefined, { maxLength: MAX_ERROR_LENGTH })
     } catch {
       // Already terminal (e.g. swept at startup): its report is owned elsewhere.
+      await this.#releaseJob(launch.job, active)
       return undefined
     }
+    await this.#releaseJob(launch.job, active)
 
     try {
       await this.#taskGraphSyncer?.syncJobToTask(

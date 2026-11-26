@@ -140,7 +140,7 @@ export const TOOL_DEFINITIONS: readonly ToolDefinition[] = [
   {
     name: "bridge_result",
     description:
-      "Get the outcome of a job: status plus summary and findings when the worker reported them. Call after bridge_await reports a final status.",
+      "Get the outcome of a job: status plus summary and findings when the worker reported them. Call after bridge_await reports a final status. A failed job whose error starts with \"interrupted: bridge restarted\" was cut off when the worker's bridge restarted: it may have partly run (changed files, run commands) and is never retried automatically, so check its effects and decide whether to dispatch it again. An error starting with \"not relaunched after restart\" means the job never started (the reason follows); dispatching it again is safe if it is still wanted.",
     inputSchema: jobSchema(),
   },
   {

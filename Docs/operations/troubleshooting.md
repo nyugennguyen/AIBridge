@@ -93,6 +93,21 @@ aibr bundle --profile <profile> --preview
 - **Root Cause:** Layer-1 network bind preflight detected that the configured `bridge.host` is not a provisioned Tailscale address on this host.
 - **Fix:** Run `tailscale ip -4` and update `bridge.host` in `config.json` with the assigned Tailscale coordinate (`100.64.0.0/10`).
 
+### `aibr serve` / `aibr worker` exits: "Another AIBridge process (PID n) is already running on this profile"
+- **Root Cause:** Only one bridge or worker may run per profile. Each holds `~/.local/state/aibridge/<profile>/aibridge.lock` (its PID and that PID's start time) for its whole life, because on startup it ends every job the store says is in flight as `interrupted: bridge restarted`. A second process, typically `aibr start --foreground` while the launchd/systemd service is running, would interrupt the live bridge's jobs, so it refuses to start and touches no job.
+- **How the lock is checked:** the lock is stale, and replaced automatically, only when its PID is dead, or when the PID's start time was read both when the lock was taken and now and the two differ (a PID reused after a crash or a reboot). The start time is read without depending on time zone or locale (Linux: boot id and `/proc/<pid>/stat`; macOS: `ps` under `TZ=UTC`). If the PID is alive but its start time cannot be verified (unreadable now, or missing from a lock written by an older version), the lock counts as **held**: two bridges on one profile would interrupt each other's jobs, so AIBridge errs on the side of a manual recovery.
+- **Fix:** Stop the other process (`aibr stop -p <profile>` stops both the service and the tmux session), then start again. If the PID named in the message is alive but is not AIBridge, remove the lock by hand:
+```bash
+aibr stop -p <profile>                                   # stops the service and the tmux session
+cat ~/.local/state/aibridge/<profile>/aibridge.lock      # {"pid":…,"start":…,"token":…}
+ps -o pid=,lstart=,command= -p <pid>                     # is it really an AIBridge process?
+rm ~/.local/state/aibridge/<profile>/aibridge.lock       # only if it is not
+```
+
+### Jobs fail with `interrupted: bridge restarted` or `not relaunched after restart: … (never started)`
+- **Root Cause:** The bridge restarted. A job that may have started (it was `running`, or its launch had begun) ends as `interrupted: bridge restarted` and is never retried automatically: it may already have changed files or run commands. An approved job that had not started is relaunched once; if it may no longer run (approval now required, source or project no longer allowlisted, no free slot, OpenCode unavailable) it ends as `not relaunched after restart: <reason> (never started)`. Both are reported to the requester.
+- **Fix:** Nothing on the worker. The orchestrator decides whether to dispatch the job again.
+
 ### Port conflict on 8787 or 4096
 - **Root Cause:** A lingering background process or previous tmux session is holding the socket.
 - **Fix:** Identify the conflicting process:

@@ -17,7 +17,7 @@ import type { JobRecord } from "../../jobs/types.js"
 import { authorizeOperatorRequest } from "../../security/operator-auth.js"
 import type { AppDependencies } from "../app.js"
 import { atCapacityBody, launchClaudeJob, terminalReporter } from "./claude-dispatch.js"
-import { dispatchOpencodeJob } from "./opencode-dispatch.js"
+import { dispatchOpencodeJob, settleFailedDispatch } from "./opencode-dispatch.js"
 
 const rejectBodySchema = z
   .object({ reason: z.string().trim().min(1).max(500).optional() })
@@ -134,23 +134,22 @@ export function registerOperatorRoutes(app: FastifyInstance, dependencies: AppDe
    * original caller is waiting for a callback, not for this response.
    */
   const launchApprovedOpencodeJob = async (approved: JobRecord, reply: FastifyReply): Promise<FastifyReply> => {
-    const fail = async (statusCode: number, body: { readonly error: string; readonly code?: string }): Promise<FastifyReply> => {
-      // The dispatcher may already have failed the job; report whatever is stored.
-      await dependencies.jobManager.markFailed(approved.id, body.error).catch(() => undefined)
-      const failed = await dependencies.jobManager.getJob(approved.id).catch(() => undefined)
-      if (failed?.status === "failed") await report(failed)
-      return reply.code(statusCode).send(body)
-    }
     try {
       const dispatched = await dispatchOpencodeJob(approved, dependencies, { recordInKernel: false })
-      if (!dispatched.ok) return await fail(dispatched.statusCode, dispatched.body)
+      if (!dispatched.ok) {
+        // Fails and reports the job at most once, or leaves it to its owner.
+        await settleFailedDispatch(approved, dispatched, dependencies)
+        return reply.code(dispatched.statusCode).send(dispatched.body)
+      }
       return reply.code(200).send({
         job_id: approved.id,
         status: dispatched.job.status,
         ...(dispatched.sessionId !== undefined ? { opencode_session_id: dispatched.sessionId } : {}),
       })
     } catch (error) {
-      return await fail(500, { error: error instanceof Error ? error.message : "OpenCode launch failed" })
+      const body = { error: error instanceof Error ? error.message : "OpenCode launch failed" }
+      await settleFailedDispatch(approved, { body }, dependencies)
+      return reply.code(500).send({ error: (await dependencies.jobManager.getJob(approved.id).catch(() => undefined))?.error ?? body.error })
     }
   }
 

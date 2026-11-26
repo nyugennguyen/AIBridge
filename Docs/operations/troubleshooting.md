@@ -107,6 +107,22 @@ rm ~/.local/state/aibridge/<profile>/aibridge.lock       # only if it is not
 ### Jobs fail with `interrupted: bridge restarted` or `not relaunched after restart: … (never started)`
 - **Root Cause:** The bridge restarted. A job that may have started (it was `running`, or its launch had begun) ends as `interrupted: bridge restarted` and is never retried automatically: it may already have changed files or run commands. An approved job that had not started is relaunched once; if it may no longer run (approval now required, source or project no longer allowlisted, no free slot, OpenCode unavailable) it ends as `not relaunched after restart: <reason> (never started)`. Both are reported to the requester.
 - **Fix:** Nothing on the worker. The orchestrator decides whether to dispatch the job again.
+- `interrupted: bridge stopped` is the same for a bridge that was stopped normally (SIGTERM, SIGINT, Ctrl-C in `aibr start --foreground`): it stopped its running jobs (their whole process groups) and reported them before exiting.
+
+### A Claude Code or script process of an interrupted job "could not be verified"
+- **Root Cause:** The bridge died without cleaning up (SIGKILL, crash). Each runtime process it spawned is recorded in `~/.local/state/aibridge/<profile>/runtime-processes/` (job id, PID, the PID's start time, process group). At the next start the bridge stops a recorded process only when its PID is alive **and** its start time, read now the same way as for the state lock, equals the recorded one: then SIGTERM to its process group, SIGKILL after 5 s. If the PID is alive but the start time cannot be read, was not recorded, or was read another way (`linux:` vs `ps:`), it cannot tell that process from an unrelated one that got the same PID, so it does **not** signal it and logs:
+  ```text
+  claude process <pid> of job <job_id> left by the previous bridge could not be verified (…); NOT stopped.
+  ```
+  The record is then removed; the job itself is reported `interrupted: bridge restarted` as usual.
+- **Fix:** Check the process by hand and stop it only if it is the job's:
+  ```bash
+  aibr logs -p <profile> | grep 'could not be verified'      # job id and PID
+  ps -o pid,pgid,lstart,command -p <pid>                    # is it claude, or the job's script, in the job's directory?
+  ps -A -o pid,pgid,command | awk '$2 == <pgid>'            # what else is in its group (tools it started)
+  kill -TERM -<pgid>                                        # the whole group; kill -KILL -<pgid> if it ignores SIGTERM
+  ```
+  Tools or shells that outlived their Claude Code process (it exited before the restart) are never stopped automatically; find them by the job's worktree (`~/.local/state/aibridge/<profile>/worktrees/`) or project directory (`lsof +D <dir>`).
 
 ### Port conflict on 8787 or 4096
 - **Root Cause:** A lingering background process or previous tmux session is holding the socket.

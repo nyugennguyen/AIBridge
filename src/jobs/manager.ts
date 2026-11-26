@@ -16,7 +16,40 @@ const TERMINAL_STATUSES: JobStatus[] = ["completed", "failed", "timed_out", "cal
  */
 export const DEPENDENCY_RESOLUTION_WINDOW_MS = 30_000
 
+/**
+ * When a job's `timeout_seconds` starts counting:
+ * - a job waiting for an operator: from creation (the approval window);
+ * - a job that began launching: from `launchStartedAt`;
+ * - an approved job that has not launched yet: from the operator's decision;
+ * - anything else: from creation.
+ *
+ * Time spent waiting for approval is therefore never charged to the run.
+ */
+export function jobTimeoutAnchor(job: JobRecord): string {
+  if (job.status === "awaiting_approval") return job.createdAt
+  if (job.launchStartedAt !== undefined) return job.launchStartedAt
+  if (job.approval?.status === "approved" && job.approval.decidedAt !== undefined) return job.approval.decidedAt
+  return job.createdAt
+}
+
+/** The instant (ms since epoch) after which `sweepExpiredJobs` times the job out. */
+export function jobDeadlineMs(job: JobRecord): number {
+  return Date.parse(jobTimeoutAnchor(job)) + job.trigger.timeout_seconds * 1000
+}
+
+export interface SweepOptions {
+  /**
+   * Jobs a live monitor in this process is driving. Their runner enforces its
+   * own deadline (and terminates the process), so the sweep leaves them alone
+   * rather than marking a job terminal while its process keeps running.
+   */
+  readonly isActive?: (jobId: string) => boolean
+}
+
 export class JobManager {
+  /** Job ids whose `markLaunchStarted` is in progress. */
+  private readonly launchClaims = new Set<string>()
+
   constructor(private readonly store: JobStore) {}
 
   /**
@@ -102,6 +135,29 @@ export class JobManager {
     const next: JobRecord = { ...current, runtimeResult, updatedAt: now }
     await this.store.save(next)
     return next
+  }
+
+  /**
+   * Records that this node is about to launch the job on its runtime. Every
+   * launch path calls it BEFORE any runtime contact (worktree, spawn, OpenCode
+   * session or prompt), so after a restart an `accepted` job without the
+   * marker provably never ran. Refuses anything but an `accepted` job that
+   * was not launched before: a job awaiting approval, a terminal job or a
+   * second launch of the same job never gets past this point.
+   */
+  async markLaunchStarted(id: string, now = new Date().toISOString()): Promise<JobRecord> {
+    // Claimed synchronously, before the first await: two launch paths racing
+    // on the same job in this process cannot both read "not launched yet".
+    if (this.launchClaims.has(id)) throw new Error(`Job ${id} is already being launched`)
+    this.launchClaims.add(id)
+    try {
+      const current = await this.getJob(id)
+      if (current.status !== "accepted") throw new Error(`Job ${id} cannot be launched from status ${current.status}`)
+      if (current.launchStartedAt !== undefined) throw new Error(`Job ${id} was already launched at ${current.launchStartedAt}`)
+      return await this.transition(id, "accepted", now, { launchStartedAt: now })
+    } finally {
+      this.launchClaims.delete(id)
+    }
   }
 
   async markRunning(id: string, now = new Date().toISOString()): Promise<JobRecord> {
@@ -207,11 +263,16 @@ export class JobManager {
    * Sweeps jobs to terminal states:
    * 1. Blocked jobs with missing local dependencies past the resolution window
    *    are marked failed (with specific diagnosis before generic timeout).
-   * 2. Non-terminal jobs past their configured timeout are marked timed_out.
+   * 2. Non-terminal jobs past their deadline (`jobDeadlineMs`) are marked
+   *    timed_out.
+   *
+   * Runs at startup and periodically while the bridge lives. Jobs for which
+   * `options.isActive` answers true are skipped. A job that another path made
+   * terminal while the sweep ran is skipped, not an error.
    *
    * Returns all jobs transitioned to a terminal state during this sweep.
    */
-  async sweepExpiredJobs(now = new Date().toISOString()): Promise<JobRecord[]> {
+  async sweepExpiredJobs(now = new Date().toISOString(), options: SweepOptions = {}): Promise<JobRecord[]> {
     const currentTime = new Date(now).getTime()
     const expired: JobRecord[] = []
 
@@ -219,19 +280,24 @@ export class JobManager {
       let transitionedInPass = 0
       for (const job of await this.store.list()) {
         if (TERMINAL_STATUSES.includes(job.status)) continue
+        if (options.isActive?.(job.id) === true) continue
 
         if (job.status === "blocked") {
           const outcome = await this.dependencyOutcome(job, now)
           if (outcome.kind === "failed") {
-            expired.push(await this.markFailed(job.id, outcome.error, now))
-            transitionedInPass++
+            const failed = await this.markFailed(job.id, outcome.error, now).catch(() => undefined)
+            if (failed !== undefined) {
+              expired.push(failed)
+              transitionedInPass++
+            }
             continue
           }
         }
 
-        const deadline = new Date(job.createdAt).getTime() + job.trigger.timeout_seconds * 1000
-        if (currentTime <= deadline) continue
-        expired.push(await this.markTimedOut(job.id, now))
+        if (currentTime <= jobDeadlineMs(job)) continue
+        const timedOut = await this.markTimedOut(job.id, now).catch(() => undefined)
+        if (timedOut === undefined) continue
+        expired.push(timedOut)
         transitionedInPass++
       }
 

@@ -28,6 +28,7 @@ import { SdkOpencodeClientAdapter } from "../opencode/client.js"
 import type { OpencodeClient } from "../opencode/types.js"
 import { StaticPermissionPolicy } from "../opencode/permissions.js"
 import { waitForIdle } from "../opencode/monitor.js"
+import { startOpencodeSession } from "../opencode/launch.js"
 import { CallbackReporter } from "../callback/reporter.js"
 import { EgressOutboxStore } from "../callback/egress-outbox.js"
 import { FileTaskGraphSyncer } from "../tasks/syncer.js"
@@ -111,6 +112,12 @@ export interface Runtime {
   readonly monitorSession: (job: JobRecord) => Promise<void>
   /** Re-delivers the report of a job already known to be terminal. */
   readonly reportTerminalJob: (job: JobRecord) => Promise<void>
+  /**
+   * Whether a monitor in THIS process is driving the job (an OpenCode session
+   * monitor or the Claude runner). The periodic sweep leaves such jobs to
+   * their monitor, which enforces the deadline and stops the process.
+   */
+  readonly isJobActive: (jobId: string) => boolean
 }
 
 export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
@@ -179,7 +186,10 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
         })
       : undefined
 
-  const monitorSession =
+  // OpenCode jobs whose session monitor is running in this process. The
+  // periodic sweep skips them: `waitForIdle` enforces their deadline itself.
+  const monitoredJobs = new Set<string>()
+  const baseMonitorSession: (job: JobRecord) => Promise<void> =
     options.deps?.monitorSession ??
     (async (job) => {
       if (!job.opencodeSessionId) throw new Error(`Job ${job.id} has no opencode session`)
@@ -205,17 +215,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
       const unblockedJobs = await jobManager.unblockDependents(job.id)
       for (const unblocked of unblockedJobs) {
         try {
-          const session = await opencodeClient.createSession(
-            `AIBridge ${unblocked.id}`,
-            unblocked.trigger.project_dir,
-          )
-          await jobManager.attachSession(unblocked.id, session.id)
-          await opencodeClient.sendPromptAsync(
-            session.id,
-            unblocked.trigger.prompt,
-            unblocked.trigger.project_dir,
-          )
-          const running = await jobManager.markRunning(unblocked.id)
+          const { running } = await startOpencodeSession(unblocked, { jobManager, opencodeClient })
           void monitorSession(running).catch(async (err: unknown) => {
             await jobManager.markFailed(
               unblocked.id,
@@ -231,6 +231,16 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
       }
       await reportTerminalJob(terminalJob)
     })
+  const monitorSession = async (job: JobRecord): Promise<void> => {
+    monitoredJobs.add(job.id)
+    try {
+      await baseMonitorSession(job)
+    } finally {
+      monitoredJobs.delete(job.id)
+    }
+  }
+  const isJobActive = (jobId: string): boolean =>
+    monitoredJobs.has(jobId) || (claudeJobRunner?.activeJobIds().includes(jobId) ?? false)
 
   return {
     config,
@@ -243,5 +253,6 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     ...(repoWorkspaces ? { repoWorkspaces } : {}),
     monitorSession,
     reportTerminalJob,
+    isJobActive,
   }
 }

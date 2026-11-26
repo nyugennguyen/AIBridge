@@ -21,6 +21,7 @@ import type { BridgeConfig } from "../config/types.js"
 import type { JobManager } from "../jobs/manager.js"
 import type { JobRecord } from "../jobs/types.js"
 import type { OpencodeClient } from "../opencode/types.js"
+import { startOpencodeSession } from "../opencode/launch.js"
 import type { TaskGraphSyncer } from "../tasks/types.js"
 import type { CallbackReporter } from "../callback/reporter.js"
 import type { LegacyTranslation } from "../orchestration/legacy/translation.js"
@@ -431,14 +432,14 @@ export class IngressDrainer {
       return
     }
 
-    const session = await this.#opencodeClient.createSession(`AIBridge ${job.id}`, trigger.project_dir)
-    await this.#jobManager.attachSession(job.id, session.id)
-    await this.#opencodeClient.sendPromptAsync(session.id, trigger.prompt, trigger.project_dir)
-    const running = await this.#jobManager.markRunning(job.id)
+    const { sessionId, running } = await startOpencodeSession(job, {
+      jobManager: this.#jobManager,
+      opencodeClient: this.#opencodeClient,
+    })
 
     await this.#taskGraphSyncer.syncJobToTask(resolvedTaskId, "running", {
       Job: job.id,
-      Session: session.id,
+      Session: sessionId,
     })
 
     void this.#monitorSession(running).catch(async (error: unknown) => {
@@ -490,17 +491,10 @@ export class IngressDrainer {
         throw new Error(recorded.error.message)
       }
       try {
-        const session = await this.#opencodeClient.createSession(
-          `AIBridge ${unblockedJob.id}`,
-          unblockedJob.trigger.project_dir,
-        )
-        await this.#jobManager.attachSession(unblockedJob.id, session.id)
-        await this.#opencodeClient.sendPromptAsync(
-          session.id,
-          unblockedJob.trigger.prompt,
-          unblockedJob.trigger.project_dir,
-        )
-        const running = await this.#jobManager.markRunning(unblockedJob.id)
+        const { running } = await startOpencodeSession(unblockedJob, {
+          jobManager: this.#jobManager,
+          opencodeClient: this.#opencodeClient,
+        })
         void this.#monitorSession(running)
       } catch (err) {
         await this.#jobManager.markFailed(

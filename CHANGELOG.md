@@ -11,6 +11,15 @@
 - An approval-gated OpenCode trigger with `depends_on` is refused with `501 not_implemented` (as on the Claude runtime), because a dependency's report arriving while the job waits for the operator would be lost.
 - With `bridge.ingress_mode: "router"` there is no operator approval path, so approval-gated capabilities are refused (`PLAN_APPROVAL_REQUIRED`) whatever the caller sends.
 
+### Fixed
+- **Jobs left behind by a bridge restart are reconciled.** Before, a job that was `running` when the bridge stopped stayed `running` forever (its requester saw `still_running` forever), and an approved job that had not launched yet never ran. Now, when `aibr serve` (engine ingress) or `aibr worker` (router ingress) starts, before it serves or drains anything:
+  - a job that may have started (`running`, `session_created`, or `accepted` with a launch already begun) ends as `failed` with the error `interrupted: bridge restarted`, and its requester gets the report. It is **never** retried automatically, because it may already have changed files or run commands; the orchestrator decides whether to dispatch it again. An OpenCode session it left in `opencode serve` is aborted;
+  - an `accepted` job that provably never launched is launched once, but only if this node would still accept it (source, project and capability still allowlisted) and it does not bypass approval: a job that was held for approval must be operator-approved, and any other job must not need approval under the current config. Otherwise it ends as interrupted, with the reason;
+  - jobs `awaiting_approval` and `blocked` are kept. A job awaiting approval is never turned into a run.
+- Every launch path now records `launchStartedAt` on the job before contacting the runtime (Claude Code spawn, OpenCode session and prompt, on `/trigger`, `aibr approve`, `/report` unblocking and the router drainer), which is what tells "never ran" from "may have run". A job can be launched only from `accepted`, and only once.
+- **Job deadlines are swept every 60 seconds**, not only at startup, and a job's `timeout_seconds` now counts from when it launched (or, for an approved job not yet launched, from the operator's approval) instead of from when it was created, so time spent waiting for `aibr approve` no longer eats into the run. A job awaiting approval still lapses `timeout_seconds` after it was created. Jobs whose runner is live in the process are left to the runner's own deadline.
+- The `bridge_result` MCP tool description tells orchestrators what an `interrupted: bridge restarted` failure means and that re-dispatching is their decision.
+
 ## [3.1.1] - 2026-11-26
 
 Removes the unused TUI, Herdr, terminal and IPC layer (about 54k lines, two Rust crates and two dependencies). Nothing in production depended on it: `/trigger`, `/report`, `/jobs`, the Claude Code plugin and the worker are unchanged. Claude Code with the AIBridge plugin is the operator interface, and human-only actions (approve, reject, kill switch, logs) stay in the `aibr` CLI on the worker. See [ADR 0014](Docs/adr/0014-claude-is-the-operator-interface.md).

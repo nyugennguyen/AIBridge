@@ -546,7 +546,8 @@ export class ClaudeJobRunner {
   }
 
   /**
-   * Claims a concurrency slot, prepares the job's working directory (its own
+   * Claims a concurrency slot, records `launchStartedAt` (refused unless the
+   * job is `accepted` and was never launched), prepares the job's working directory (its own
    * worktree at the pinned sha when the job has a `checkout`) and, when the
    * profile's first step is Claude Code, launches it. Moves the job to
    * `running`. Throws `RunnerAtCapacityError` when the node is full, or the
@@ -565,6 +566,9 @@ export class ClaudeJobRunner {
     const startedAt = this.#clock()
     const timeoutSeconds = claudeTimeoutSeconds(this.#config, job.trigger)
     try {
+      // Before any side effect (worktree, spawn, script): after a restart, a
+      // job without this marker provably never ran and may be launched again.
+      await this.#jobManager.markLaunchStarted(job.id)
       const cwd = await this.#prepareWorkingDirectory(job, active)
       const profile = capabilityProfile(this.#config, job.trigger.capability)
       if (profile === undefined) throw new Error(`Unknown capability profile: ${job.trigger.capability}`)

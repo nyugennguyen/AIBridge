@@ -3,7 +3,15 @@
  * need no approval) and `POST /jobs/:id/approve` (jobs an operator approved).
  */
 import type { JobRecord } from "../../jobs/types.js"
+import { waitUntil } from "../../jobs/reconcile.js"
+import { startOpencodeSession } from "../../opencode/launch.js"
 import type { AppDependencies } from "../app.js"
+
+/** What dispatching needs; `aibr worker` (no HTTP app) supplies the same objects. */
+export type OpencodeDispatchDependencies = Pick<
+  AppDependencies,
+  "jobManager" | "opencodeClient" | "taskGraphSyncer" | "monitorSession" | "orchestration"
+>
 
 export type OpencodeDispatchOutcome =
   | {
@@ -27,7 +35,7 @@ export type OpencodeDispatchOutcome =
  */
 export async function dispatchOpencodeJob(
   job: JobRecord,
-  dependencies: AppDependencies,
+  dependencies: OpencodeDispatchDependencies,
   options: { readonly recordInKernel: boolean },
 ): Promise<OpencodeDispatchOutcome> {
   const taskId = job.trigger.task_id ?? `#${job.id}`
@@ -79,16 +87,43 @@ export async function dispatchOpencodeJob(
     }
   }
 
-  const session = await dependencies.opencodeClient.createSession(`AIBridge ${job.id}`, job.trigger.project_dir)
-  await dependencies.jobManager.attachSession(job.id, session.id)
-  await dependencies.opencodeClient.sendPromptAsync(session.id, job.trigger.prompt, job.trigger.project_dir)
-  const running = await dependencies.jobManager.markRunning(job.id)
+  const { sessionId, running } = await startOpencodeSession(job, dependencies)
 
-  await dependencies.taskGraphSyncer.syncJobToTask(taskId, "running", { Job: job.id, Session: session.id })
+  await dependencies.taskGraphSyncer.syncJobToTask(taskId, "running", { Job: job.id, Session: sessionId })
 
   void dependencies.monitorSession(running).catch(async (error: unknown) => {
     await dependencies.jobManager.markFailed(job.id, error instanceof Error ? error.message : "Session monitor failed")
   })
 
-  return { ok: true, job: running, status: "accepted", sessionId: session.id }
+  return { ok: true, job: running, status: "accepted", sessionId }
+}
+
+/**
+ * Launches an `accepted` job that a restart found never launched
+ * (`reconcileJobsAfterRestart`). Waits up to `healthWaitMs` for OpenCode to
+ * answer (`aibr serve --with-opencode` starts it alongside the bridge), then
+ * dispatches it as `aibr approve` does: the kernel already recorded it when
+ * it was triggered. On any failure the job is failed and its report delivered.
+ */
+export async function relaunchOpencodeJob(
+  job: JobRecord,
+  dependencies: OpencodeDispatchDependencies & { readonly reportTerminalJob: (job: JobRecord) => Promise<void> },
+  options: { readonly healthWaitMs?: number; readonly healthPollMs?: number } = {},
+): Promise<void> {
+  const fail = async (error: string): Promise<void> => {
+    await dependencies.jobManager.markFailed(job.id, error).catch(() => undefined)
+    const failed = await dependencies.jobManager.getJob(job.id).catch(() => undefined)
+    if (failed?.status === "failed") await dependencies.reportTerminalJob(failed)
+  }
+  const healthy = await waitUntil(() => dependencies.opencodeClient.health(), {
+    timeoutMs: options.healthWaitMs ?? 60_000,
+    intervalMs: options.healthPollMs ?? 2_000,
+  })
+  if (!healthy) return await fail("OpenCode server unhealthy: the job could not be relaunched after a bridge restart")
+  try {
+    const dispatched = await dispatchOpencodeJob(job, dependencies, { recordInKernel: false })
+    if (!dispatched.ok) await fail(dispatched.body.error)
+  } catch (error) {
+    await fail(error instanceof Error ? error.message : "OpenCode launch failed")
+  }
 }

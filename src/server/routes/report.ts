@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify"
 import { reportCallbackSchema } from "../../config/schemas.js"
 import { createAuthProvider } from "../../security/auth-provider.js"
 import { requireIdentityGuard } from "../../pairing/verifier.js"
+import { startOpencodeSession } from "../../opencode/launch.js"
 import type { AppDependencies } from "../app.js"
 
 export function registerReportRoute(app: FastifyInstance, dependencies: AppDependencies): void {
@@ -47,10 +48,7 @@ export function registerReportRoute(app: FastifyInstance, dependencies: AppDepen
         return reply.code(500).send({ error: recorded.error.message, code: recorded.error.code })
       }
       try {
-        const session = await dependencies.opencodeClient.createSession(`AIBridge ${job.id}`, job.trigger.project_dir)
-        await dependencies.jobManager.attachSession(job.id, session.id)
-        await dependencies.opencodeClient.sendPromptAsync(session.id, job.trigger.prompt, job.trigger.project_dir)
-        const running = await dependencies.jobManager.markRunning(job.id)
+        const { running } = await startOpencodeSession(job, dependencies)
         void dependencies.monitorSession(running)
       } catch (error) {
         await dependencies.jobManager.markFailed(job.id, error instanceof Error ? error.message : "Execution failed")

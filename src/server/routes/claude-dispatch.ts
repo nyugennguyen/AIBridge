@@ -2,6 +2,8 @@
  * Launching an accepted Claude-runtime job, shared by `/trigger` (jobs that
  * need no approval) and `POST /jobs/:id/approve` (jobs an operator approved).
  */
+import { jobDeadlineMs } from "../../jobs/manager.js"
+import { waitUntil } from "../../jobs/reconcile.js"
 import { createTerminalJobReporter } from "../../jobs/report.js"
 import type { JobRecord } from "../../jobs/types.js"
 import { RunnerAtCapacityError, type ClaudeJobLaunch } from "../../runtime/claude-job-runner.js"
@@ -46,6 +48,27 @@ export async function launchClaudeJob(
   // `monitor` never rejects: it records the outcome and delivers the report itself.
   void runner.monitor(launch)
   return { ok: true, launch }
+}
+
+/**
+ * Launches an `accepted` job that a restart found never launched
+ * (`reconcileJobsAfterRestart`). Waits for a free slot rather than failing at
+ * capacity, but not past the job's deadline; then launches it as `aibr
+ * approve` does, failing and reporting it on error.
+ */
+export async function relaunchClaudeJob(
+  job: JobRecord,
+  dependencies: AppDependencies,
+  options: { readonly capacityPollMs?: number } = {},
+): Promise<void> {
+  const runner = dependencies.claudeJobRunner
+  if (runner?.hasCapacity !== undefined) {
+    await waitUntil(() => runner.hasCapacity?.() ?? true, {
+      timeoutMs: Math.max(0, jobDeadlineMs(job) - Date.now()),
+      intervalMs: options.capacityPollMs ?? 1_000,
+    })
+  }
+  await launchClaudeJob(job, dependencies, { reportFailure: true })
 }
 
 /** The answer when the node is already running its limit of jobs. */

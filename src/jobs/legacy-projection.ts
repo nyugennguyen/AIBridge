@@ -2,8 +2,8 @@ import type { JobRecord } from "./types.js"
 
 /**
  * The record as the legacy translation knows it. `legacyJobRecordSchema` (and
- * its trigger) is strict and predates runtime selection, operator approval and
- * repository pinning, so those fields are dropped before the kernel sees the
+ * its trigger) is strict and predates runtime selection, operator approval,
+ * repository pinning and the launch marker, so those fields are dropped before the kernel sees the
  * record rather than widening the frozen legacy contract. A job held for
  * approval is, to the kernel, accepted-but-not-launched work: the held
  * DRAFT/PAUSED run `acceptTrigger` already records for every legacy trigger.
@@ -15,6 +15,7 @@ export function legacyJobProjection(job: JobRecord): JobRecord {
     runtimeResult: _result,
     approval: _approval,
     checkout: _checkout,
+    launchStartedAt: _launchStartedAt,
     ...legacy
   } = job
   const { repo: _repo, ref: _ref, ...trigger } = legacy.trigger

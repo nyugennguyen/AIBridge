@@ -1,6 +1,6 @@
 # ADR 0003: Event store, transactions, and command idempotency
 
-Status: accepted for the Milestone 0 contract freeze (M0.5).
+Status: accepted for the Milestone 0 contract freeze (M0.5). Not yet wired into `aibr serve`; wire deadline 3.3.0, delete deadline 3.4.0 ([ADR 0016](0016-keep-selected-unwired-code-with-deadlines.md)).
 
 Depends on [ADR 0001](0001-canonical-domain-and-module-boundaries.md), [ADR 0002](0002-versioned-contracts-and-adapter-boundaries.md), and the completed [version-1 orchestration schemas](../../src/orchestration/schemas.ts). Lease authority and recovery are specified in [ADR 0004](0004-controller-leases-and-recovery.md).
 

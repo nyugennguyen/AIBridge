@@ -1,6 +1,6 @@
 # ADR 0014: Claude Code with the AIBridge Plugin Is the Operator Interface; the TUI/Herdr Layer Is Removed
 
-- **Status:** Accepted
+- **Status:** Accepted; amended by [ADR 0015](./0015-orchestrator-is-chosen-per-project.md) (the orchestrator is chosen per project, not fixed to Claude)
 - **Date:** 2026-11-26
 - **Related:** [3.1.1 slimming review](../implementation-plans/v3.1.1-slimming-review.md); [ADR 0013](./0013-operator-approval-ledger.md); [Claude Code as Orchestrator](../guides/claude-code-orchestrator.md). Supersedes [ADR 0009](./0009-herdr-terminal-backend-evaluation.md), [ADR 0010](./0010-tui-daemon-modernization.md), [ADR 0011](./0011-herdr-orchestration-architecture.md).
 

@@ -35,44 +35,55 @@ bun run release:check        # full pre-release gate (frozen install, build, tes
 
 ## Architecture
 
-The system coordinates multi-agent workloads across machines with a strict separation of concerns:
-**Claude Code dispatches and follows work; humans approve in the `aibr` CLI; the AIBridge kernel owns the intent.**
+The system dispatches jobs between machines. **Claude Code (or another MCP-capable agent) dispatches and follows work; humans approve in the `aibr` CLI on the worker.** What actually runs is the Fastify bridge (`aibr serve`), the job manager and runner, the approval ledger, signed requests and the MCP server. Roughly 55,000 of the 98,000 lines in `src/` are not reachable from `src/cli.ts` or `src/index.ts` (see "Not yet wired" below); `bun run docs:reachability` measures this.
 
 ```
 src/
-  orchestration/   - Kernel: Event store (SqliteEventStore), coordinator, charter repository
-                     & proposal lifecycle, RoleAssignment & RoleBinder, advisory roundtable
-                     deliberation, fan-out scheduler, policy & immutable core validator
-  mesh/            - Distributed mesh protocol: 11 record types, controller leases, epochs,
-                     SSE total-order event gateway, in/outbox
-  notifications/   - Advisory-only notification bus, store, quieting rules, and orchestration
-                     event consumer (zero upward dependencies, isolated per ADR 0007 §17)
-  ingress/         - Durable ingress admission queue, commit-before-202 WAL, router client
-  rules/           - Layered rule engine, expression evaluator, SAFETY_FLOOR, limit checks
-  budgets/         - Budget ledgers tracking agent concurrency and fan-out as separate counters
-  memory/          - Scoped memory storage, redaction pipelines (secret scrub), write-back
-  runtime/         - RoleBinder (deterministic prompt compile), runtime adapters (OpenCode,
-                     Claude Code, Codex), capability intersection, conformance kit
-  context/         - Deterministic context assembler and workspace isolation auditor
-  server/          - Fastify HTTP bridge (port 8787), SSE streams, routes (trigger, report,
-                     jobs, health, orchestration, charter, roundtable, discovery)
-  security/        - Bearer auth (BearerAuthProvider, OpenAuthProvider), source authorization,
-                     project allowlists, actor claims, operator tokens (AIBRIDGE_OPERATOR_TOKEN)
-  config/          - Zod schemas (schemas.ts), inferred types (types.ts), profile loader
-  host/            - Host environment probes, binary detection, platform supervisor generators
-  cli/             - CLI command implementations (setup wizard, verify, discover)
-  jobs/            - JobManager, JsonFileJobStore (file-backed in `<stateDir>/jobs/`, e.g. `~/.local/state/aibridge/<profile>/jobs/`)
-  opencode/        - Legacy OpenCode SDK adapter, session monitor, permission policies
-  planning/        - Plan approval provider
-  callback/        - Report callback reporter and egress outbox
-  registry/        - Mesh-aware agent registry and capability router
-  diagnostics/     - Diagnostics bundle generator and system health probes
+  cli.ts, cli/       - `aibr` commands: init, doctor, ping, send, start/stop/serve, logs, approve,
+                       enroll, plugin, mcp, update, setup wizard, verify, discover
+  index.ts, bridge.ts- Bridge process entry point and wiring (`createApp()` dependencies)
+  server/            - Fastify HTTP bridge (port 8787): routes trigger, report, jobs, operator
+                       (approve/reject), health, enroll; claude-dispatch and opencode-dispatch
+  jobs/              - JobManager, JsonFileJobStore (`<stateDir>/jobs/`), approval ledger,
+                       report handling
+  runtime/           - Claude Code job runner and adapter, OpenCode adapter, repo-workspace
+                       (job pinned to repo@sha in its own git worktree), script runner,
+                       result sanitizer
+  opencode/          - OpenCode SDK client, session monitor, tool permission policy
+  security/          - Bearer auth, source authorization, project allowlists, operator token
+  mesh/identity/     - ed25519 node keys, peer key pins, request signing, replay guard
+  pairing/           - `aibr enroll` pairing codes and peer store
+  mcp/               - `aibr mcp` MCP server (`bridge_*` tools); the Claude Code plugin in
+                       `plugins/aibridge` uses it
+  ingress/           - Router-mode drain worker (`aibr worker`) for the Rust router outbox
+  callback/          - `/report` reporter and durable egress outbox
+  planning/          - Plan approval provider
+  config/            - Zod schemas (`schemas.ts`), inferred types (`types.ts`), profile loader
+  host/              - Host probes, binary detection, service (launchd/systemd) generators, paths
+  diagnostics/       - Diagnostics bundle and health probes
+  tasks/             - Task file parser and syncer
+  notifications/     - Bus and store. Wired into `createApp` but fed only by the unused
+                       orchestration route, so nothing is delivered today (V5, 3.5.0)
 ```
 
 ### Rust Workspace (`router/`)
 
-- `router/` — High-performance polyglot ingress router (`aibr-router`) built in Rust for sub-millisecond commit-before-202 admission.
+- `router/` is the optional ingress router (`aibr-router`), written in Rust for sub-millisecond commit-before-202 admission. It is enabled with `bridge.ingress_mode: "router"`; router mode admits on the bearer token only (no request signing, no Claude Code runtime).
 - *(The `aibr-ipc` and `aibr-pty` crates, `aibr-tui` and the TUI were removed in 3.1.1, ADR 0014.)*
+
+### Not yet wired
+
+Code that is built and tested but not reachable from the entry points. Decisions and deadlines are in [ADR 0016](Docs/adr/0016-keep-selected-unwired-code-with-deadlines.md); the exemption list is `scripts/docs/reachability-exemptions.json`. A kept path that misses its wire deadline is deleted at its delete deadline.
+
+| Path | Serves | Wire by | Delete by |
+|---|---|---|---|
+| `src/memory` (redaction is wired in 3.2.0) | V4 handoff, V3 project memory | 3.3.0 | 3.4.0 |
+| `src/orchestration/event-store` | V4 job event log (ADR 0003) | 3.3.0 | 3.4.0 |
+| `src/runtime/codex-adapter.ts`, `src/runtime/discovery.ts` | V1 Codex runtime | 3.3.0 | 3.4.0 |
+| `src/context` | V3 context snapshot | 3.4.0 | 3.5.0 |
+| `src/notifications` | V5 Discord and Telegram | 3.5.0 | 3.6.0 |
+
+Scheduled for removal in 3.2.0 (blocks D1 to D5, ADR 0016): the orchestration kernel (coordinator, scheduler, charter and roundtable runtime, `routes/orchestration.ts`), the dead part of `src/mesh` (leases, gateway, outbox transport, fault harness), `src/rules`, `src/budgets`, `src/workflows`, `src/simulation`, `src/routing`, `src/registry`, `src/sdk` and `src/upgrade`. Until those PRs merge they are still in the tree, and the "Key Patterns" below about kernel authority, the immutable core, roundtables and rules describe that unwired code, not the running system.
 
 ## Key Patterns
 

@@ -325,7 +325,6 @@ bun remove -g @nyugennguyen/aibridge
 | `aibr plugin` | Installs, removes or reports the Claude Code plugin (`install\|uninstall\|status claude`). | No |
 | `aibr mcp` | MCP server used by the Claude Code plugin (`serve`, `summary`). | Optional |
 | `aibr update` | Checks for and installs latest version. | Optional |
-| `aibr tui` | Links and launches the `aibr-manager` plugin in Herdr. | **Yes** |
 | `aibr bundle` | Generates a redacted diagnostic support bundle. | **Yes** |
 | `aibr discover` | Lists tailnet peers and probes each peer's `/health`. | Optional |
 

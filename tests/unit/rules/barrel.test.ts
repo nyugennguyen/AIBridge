@@ -455,11 +455,6 @@ describe("every module under src/rules/ is reachable from the barrel", () => {
       "src/rules/index.ts",
       "src/rules/limits.ts",
       "src/rules/preview.ts",
-      "src/rules/tui/builder.ts",
-      "src/rules/tui/index.ts",
-      "src/rules/tui/state.ts",
-      "src/rules/tui/types.ts",
-      "src/rules/tui/view-model.ts",
       "src/rules/types.ts",
     ])
 

@@ -157,7 +157,6 @@ describe("the whole mesh tree is deterministic at the source level", () => {
       "outbox",
       "protocol",
       "registry",
-      "tui",
     ])
   })
 

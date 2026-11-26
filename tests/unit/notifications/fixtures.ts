@@ -46,7 +46,6 @@
 import {
   createNotificationBus,
   createNotificationStore,
-  createNotificationTuiAdapter,
   dedupeKeySchema,
   notificationEnvelopeSchema,
   notificationIdSchema,
@@ -64,6 +63,41 @@ import {
   type NotificationSeverity,
   type NotificationTimestamp,
 } from "../../../src/notifications/index.js"
+
+// ===========================================================================
+// In-memory delivery adapter
+// ===========================================================================
+
+export interface InMemoryAdapter extends NotificationAdapter {
+  readonly id: string
+  list(): readonly NotificationEnvelope[]
+  size(): number
+  clear(): void
+}
+
+/**
+ * A minimal in-memory delivery adapter: validates with `notificationEnvelopeSchema`
+ * (a gate, not a transformer), then appends the ORIGINAL envelope object.
+ */
+export function createInMemoryAdapter(): InMemoryAdapter {
+  const entries: NotificationEnvelope[] = []
+  return {
+    id: "in-memory-test",
+    available: () => true,
+    async deliver(envelope: NotificationEnvelope): Promise<NotificationDeliveryResult> {
+      if (!notificationEnvelopeSchema.safeParse(envelope).success) {
+        throw new TypeError("envelope does not satisfy notificationEnvelopeSchema")
+      }
+      entries.push(envelope)
+      return { delivered: true, notificationId: envelope.notificationId }
+    },
+    list: () => Object.freeze([...entries]),
+    size: () => entries.length,
+    clear: () => {
+      entries.length = 0
+    },
+  }
+}
 
 /** 2026-10-01T00:00:00.000Z. A literal, so nothing in these tests depends on when they run. */
 export const FIXED_NOW = "2026-10-01T00:00:00.000Z" as NotificationTimestamp
@@ -529,7 +563,7 @@ export interface TestHarness {
   readonly clock: ReturnType<typeof createTestClock>
   readonly store: ReturnType<typeof createNotificationStore>
   readonly bus: ReturnType<typeof createNotificationBus>
-  readonly tui: ReturnType<typeof createNotificationTuiAdapter>
+  readonly tui: InMemoryAdapter
   counters(): NotificationCounters
 }
 
@@ -546,7 +580,7 @@ export function testHarness(options: { readonly retentionWindowMs?: number; read
     clock,
     ...(options.retentionWindowMs === undefined ? {} : { retentionWindowMs: options.retentionWindowMs }),
   })
-  const tui = createNotificationTuiAdapter()
+  const tui = createInMemoryAdapter()
   const bus = createNotificationBus({
     store,
     adapters: [tui],

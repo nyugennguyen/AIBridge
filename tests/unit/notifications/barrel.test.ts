@@ -131,22 +131,6 @@ describe("the M6.9 surface is reachable through its barrel", () => {
   })
 
 
-  it("exports the TUI adapter, the view model builder, the reducer, and the key routing", () => {
-    expect(typeof notifications.createNotificationTuiAdapter).toBe("function")
-    expect(typeof notifications.buildNotificationTuiView).toBe("function")
-    expect(typeof notifications.reduceNotificationTui).toBe("function")
-    expect(typeof notifications.initialNotificationTuiState).toBe("function")
-    expect(typeof notifications.routeNotificationKey).toBe("function")
-    expect(typeof notifications.notificationNoticeLine).toBe("function")
-    expect(typeof notifications.loadNotificationTuiEntries).toBe("function")
-    expect(typeof notifications.acknowledgeNotificationEntries).toBe("function")
-    expect(typeof notifications.renderAge).toBe("function")
-    expect(typeof notifications.renderRowSubject).toBe("function")
-    expect(typeof notifications.summarizeNotification).toBe("function")
-    expect(typeof notifications.describeQuieting).toBe("function")
-    expect(typeof notifications.isNotificationMuted).toBe("function")
-  })
-
   it("exports the comparators, because a caller rendering the same order must reach them", () => {
     // `compareNotificationCodeUnits` is exported on purpose: the TUI sorts an inbox
     // the way this module sorted it, and re-deriving the comparator is how two views
@@ -278,13 +262,6 @@ describe("the M6.9 dependency edge runs one way", () => {
     for (const stopCondition of ["S8", "S9", "S10", "S15"]) {
       expect(bus, `bus.ts is missing ${stopCondition}`).toContain(stopCondition)
     }
-    const tui = readFileSync(join(NOTIFICATIONS_DIRECTORY, "tui-adapter.ts"), "utf8")
-    for (const invariant of ["N2", "N4", "N5", "N6", "N12", "N13"]) {
-      expect(tui, `tui-adapter.ts is missing ${invariant}`).toContain(invariant)
-    }
-    for (const stopCondition of ["S11", "S12", "S13"]) {
-      expect(tui, `tui-adapter.ts is missing ${stopCondition}`).toContain(stopCondition)
-    }
   })
 
   it("states N14 in the module that hands an adapter its envelope, because that is where the promise is made", () => {
@@ -302,9 +279,6 @@ describe("the M6.9 dependency edge runs one way", () => {
     // The architectural claim, asserted in the place a reviewer will look. If someone
     // later adds `src/notifications/ -> src/tui/`, this string is what the diff
     // contradicts, and the source scan above is what says so out loud.
-    const tui = readFileSync(join(NOTIFICATIONS_DIRECTORY, "tui-adapter.ts"), "utf8")
-    expect(tui).toContain("S4")
-    expect(tui).toContain("TuiUiState.notice")
     const index = readFileSync(join(NOTIFICATIONS_DIRECTORY, "index.ts"), "utf8")
     expect(index).toContain("DELIBERATELY NOT RE-EXPORTED")
   })

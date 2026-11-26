@@ -22,4 +22,4 @@
 export * from "./types.js"
 export * from "./assembler.js"
 export * from "./isolation.js"
-export * from "./tui/memory-view.js"
+export * from "./preview.js"

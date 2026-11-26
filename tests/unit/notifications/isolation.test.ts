@@ -67,14 +67,10 @@ import { join } from "node:path"
 import {
   DEFAULT_NOTIFICATION_RETENTION_WINDOW_MS,
   NOTIFICATION_NON_DELIVERY_REASONS,
-  buildNotificationTuiView,
   createNotificationBus,
   createNotificationStore,
   deepFreezeNotificationValue,
-  initialNotificationTuiState,
-  loadNotificationTuiEntries,
   notificationEnvelopeSchema,
-  notificationNoticeLine,
   type NotificationAdapter,
   type NotificationCounters,
   type NotificationDeliveryResult,
@@ -527,6 +523,14 @@ describe("M6.9 the producer cannot branch on anything emit returns", () => {
   })
 })
 
+/** A deterministic one-line-per-entry reading of the store, standing in for a rendered view. */
+function listing(store: NotificationStore): string {
+  return store
+    .entries()
+    .map((entry) => `${entry.disposition}|${entry.envelope.severity}|${entry.envelope.category}|${entry.envelope.summary}`)
+    .join("\n")
+}
+
 describe("M6.9 the same emitted sequence produces the same state and the same lines", () => {
   /** The sequence every determinism run performs, in the same order. */
   // `Parameters<typeof notificationRequest>[0]`, NOT
@@ -541,19 +545,17 @@ describe("M6.9 the same emitted sequence produces the same state and the same li
     { dedupeKey: "k-d", category: "budget_exhausted", severity: "info", summary: "budget exhausted" },
   ])
 
-  async function runOnce(adapters: readonly NotificationAdapter[]): Promise<{ inbox: string; lines: string; notice: string | null; counters: NotificationCounters }> {
+  async function runOnce(adapters: readonly NotificationAdapter[]): Promise<{ inbox: string; lines: string; pending: number; counters: NotificationCounters }> {
     const clock = createTestClock()
     const store = createNotificationStore({ clock })
     const bus = createNotificationBus({ store, adapters, clock })
     for (const request of SEQUENCE) {
       await bus.emit(notificationRequest(request))
     }
-    const state = loadNotificationTuiEntries(store, initialNotificationTuiState(FIXED_NOW), FIXED_NOW)
-    const view = buildNotificationTuiView(state)
     return {
       inbox: JSON.stringify(store.entries()),
-      lines: view.lines.join("\n"),
-      notice: notificationNoticeLine(state),
+      lines: listing(store),
+      pending: store.pendingCount(),
       counters: bus.counters(),
     }
   }
@@ -564,7 +566,7 @@ describe("M6.9 the same emitted sequence produces the same state and the same li
       const next = await runOnce([recordingAdapter("a"), recordingAdapter("b")])
       expect(next.inbox, `run ${run} inbox`).toBe(first.inbox)
       expect(next.lines, `run ${run} lines`).toBe(first.lines)
-      expect(next.notice, `run ${run} notice`).toBe(first.notice)
+      expect(next.pending, `run ${run} pending`).toBe(first.pending)
       expect(next.counters, `run ${run} counters`).toEqual(first.counters)
     }
   })
@@ -577,7 +579,7 @@ describe("M6.9 the same emitted sequence produces the same state and the same li
     const reversed = await runOnce([recordingAdapter("c"), recordingAdapter("b"), recordingAdapter("a")])
     expect(reversed.inbox).toBe(forward.inbox)
     expect(reversed.lines).toBe(forward.lines)
-    expect(reversed.notice).toBe(forward.notice)
+    expect(reversed.pending).toBe(forward.pending)
   })
 
   it("produces the same inbox state with one adapter as with three", async () => {
@@ -592,11 +594,6 @@ describe("M6.9 the same emitted sequence produces the same state and the same li
     const two = await runOnce([recordingAdapter("a"), recordingAdapter("b")])
     expect(two.counters.delivered).toBe(one.counters.delivered * 2)
     expect(two.inbox).toBe(one.inbox)
-  })
-
-  it("produces a notice that names the most severe unread notification, not the newest", async () => {
-    const { notice } = await runOnce([recordingAdapter("a")])
-    expect(notice).toContain("Run blocked")
   })
 })
 
@@ -1065,16 +1062,14 @@ describe("N14 the emitted sequence is deterministic with adversarial adapters in
     { dedupeKey: "k-d", category: "budget_exhausted", severity: "info", summary: "budget exhausted" },
   ])
 
-  async function runWith(adapters: readonly NotificationAdapter[]): Promise<{ inbox: string; lines: string; notice: string | null; counters: NotificationCounters }> {
+  async function runWith(adapters: readonly NotificationAdapter[]): Promise<{ inbox: string; lines: string; pending: number; counters: NotificationCounters }> {
     const clock = createTestClock()
     const store = createNotificationStore({ clock })
     const bus = createNotificationBus({ store, adapters, clock })
     for (const request of SEQUENCE) {
       await bus.emit(notificationRequest(request))
     }
-    const state = loadNotificationTuiEntries(store, initialNotificationTuiState(FIXED_NOW), FIXED_NOW)
-    const view = buildNotificationTuiView(state)
-    return { inbox: inboxAtRest(store), lines: view.lines.join("\n"), notice: notificationNoticeLine(state), counters: bus.counters() }
+    return { inbox: inboxAtRest(store), lines: listing(store), pending: store.pendingCount(), counters: bus.counters() }
   }
 
   it("produces the same inbox and the same lines whether or not a forging adapter is registered", async () => {
@@ -1082,7 +1077,7 @@ describe("N14 the emitted sequence is deterministic with adversarial adapters in
     const attacked = await runWith([vandalousAdapter("v1"), recordingAdapter("a"), nestedVandalousAdapter("v2"), recordingAdapter("b")])
     expect(attacked.inbox).toBe(honest.inbox)
     expect(attacked.lines).toBe(honest.lines)
-    expect(attacked.notice).toBe(honest.notice)
+    expect(attacked.pending).toBe(honest.pending)
   })
 
   it("produces the same inbox and the same lines with the forging adapters in a different order", async () => {
@@ -1101,7 +1096,7 @@ describe("N14 the emitted sequence is deterministic with adversarial adapters in
       const next = await runWith([vandalousAdapter("v1"), recordingAdapter("a"), nestedVandalousAdapter("v2"), halfMutatingThrowingAdapter("half")])
       expect(next.inbox, `run ${run} inbox`).toBe(first.inbox)
       expect(next.lines, `run ${run} lines`).toBe(first.lines)
-      expect(next.notice, `run ${run} notice`).toBe(first.notice)
+      expect(next.pending, `run ${run} pending`).toBe(first.pending)
       // Counters are the ONE thing that legitimately differs: four adapters, two of
       // which fail, is a different number from two adapters that both succeed. What
       // must not differ is the state the operator reads.

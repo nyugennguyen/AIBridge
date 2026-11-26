@@ -4,7 +4,7 @@
 > **Applies to:** AIBridge 3.1.0  
 > **Owner:** Maintainers  
 
-AIBridge integrates distributed agent runtimes, presentation substrates, and private networking layers into a unified orchestration mesh. This guide details integrations with OpenCode, Claude Code, Codex, Herdr, and Tailscale.
+AIBridge integrates distributed agent runtimes, presentation substrates, and private networking layers into a unified orchestration mesh. This guide details integrations with OpenCode, Claude Code, Codex, and Tailscale.
 
 ---
 
@@ -35,27 +35,18 @@ $$\text{allowed} \cap \text{roleAllowed} \cap \neg\text{denied}$$
 
 ---
 
-## 3. Herdr Workspace Presentation
+## 3. Operator Interface (Herdr removed in 3.1.1)
 
-AIBridge delegates terminal rendering and user input management to [Herdr](https://github.com/herdrdev/herdr).
-
-### Core Invariant
-> **Herdr owns the terminal; the AIBridge kernel owns the intent. Never both, never either.**
-
-- **Herdr Responsibilities:** Terminal multiplexing, tabs, pane layout, truecolor VT emulation, PTY process hosting, and input fencing.
-- **AIBridge Responsibilities:** Append-only event store (`SqliteEventStore`), versioned charters, role binding, advisory roundtables, and dispatch scheduling.
-
-### Input-Ownership Fencing
-Herdr provides atomic input fencing (`pane.claim_input` / `pane.release_input`). When an autonomous agent is executing, human keyboard input to that pane is fenced to prevent accidental command corruption. When human-in-the-loop (HITL) review is required, input ownership transitions explicitly.
-
-### Manager Plugin (`aibr tui`)
-To launch or link the `aibr-manager` plugin inside Herdr:
+The Herdr workspace backend and the `aibr tui` launcher for the `aibr-manager` plugin were removed in 3.1.1 (ADR 0014). Claude Code with the AIBridge plugin dispatches and follows jobs ([Claude Code as Orchestrator](claude-code-orchestrator.md)). The operator actions that must stay outside Claude run on the worker with the CLI:
 
 ```bash
-aibr tui --profile <profile>
+aibr jobs pending --profile <name>
+aibr approve <job_id> --profile <name>
+aibr logs --profile <name> -f
+aibr stop --all-jobs --profile <name>
 ```
 
-This links the plugin to Herdr and provides direct access to the Role Grid, Charter Editor, Roundtable Live Transcript, and Approval Queue.
+A profile that still sets `terminal.backend: "herdr"` loads with a deprecation warning and uses tmux.
 
 ---
 
@@ -78,7 +69,7 @@ aibr discover --profile <name>
 2. Makes an unauthenticated `GET /health` request to each peer on port `8787`.
 3. Reports peer status, agent IDs, and advertised capabilities.
 
-For programmatic consumers (such as the Herdr manager plugin), `--json` emits pure, machine-readable JSON:
+For programmatic consumers, `--json` emits pure, machine-readable JSON:
 
 ```bash
 aibr discover --profile <name> --json

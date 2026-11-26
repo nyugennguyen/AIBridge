@@ -49,7 +49,7 @@
  */
 
 import { assembleContext, renderContextWithContent, sourceIdOf } from "./assembler.js"
-import { verifyPreviewMatchesManifest } from "./tui/memory-view.js"
+import { verifyPreviewMatchesManifest } from "./preview.js"
 import type {
   ContextAssemblyRequest,
   ContextCandidate,

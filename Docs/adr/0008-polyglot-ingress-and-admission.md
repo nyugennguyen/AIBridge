@@ -143,7 +143,7 @@ to change before a broker could be reconsidered.
  +----------------+---------------+
                   | projections
  +----------------v---------------+
- |  aibr tui (Bun + opentui)      | SEPARATE PROCESS — never coupled (§7)
+ |  TUI client (retired, 3.1.1)   | SEPARATE PROCESS — never coupled (§7)
  +--------------------------------+
 ```
 

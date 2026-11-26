@@ -88,10 +88,8 @@ describe("M5 the milestone surface is reachable through its barrels", () => {
     expect(Array.isArray(context.ISOLATION_CASES)).toBe(true)
   })
 
-  it("the context barrel exports the TUI view model and the reducer", () => {
-    expect(typeof context.buildMemoryTuiView).toBe("function")
-    expect(typeof context.reduceMemoryTui).toBe("function")
-    expect(typeof context.initialMemoryTuiState).toBe("function")
+  it("the context barrel exports the dispatch-context preview", () => {
+    expect(typeof context.buildPreview).toBe("function")
     expect(typeof context.verifyPreviewMatchesManifest).toBe("function")
   })
 

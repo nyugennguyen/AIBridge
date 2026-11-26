@@ -130,7 +130,7 @@ Environment variables:
 
 - Process management: `aibr start` installs a per-profile user service (launchd `com.aibridge.<profile>` / systemd `aibridge-<profile>.service`) running `aibr serve`; `aibr start --foreground` runs the same in tmux for development; `aibr stop` stops both. Interactive operators may use the Herdr workspace manager. Logs: `<stateDir>/logs/aibridge.log` (`aibr logs -f`).
 - Terminal backend: selected via `terminal.backend` in config (`"tmux"` for headless VPS nodes, `"herdr"` for interactive operator workstations).
-- Presentation: `aibr-tui` is retired; `aibr tui` checks Herdr availability and launches/links the `aibr-manager` Herdr plugin.
+- Presentation: there is no TUI. Claude Code with the AIBridge plugin is the main interface; operator actions (`aibr jobs pending`, `aibr approve`, `aibr stop --all-jobs`, `aibr logs`) run on the worker. `aibr tui` is a removal stub since 3.1.1.
 - Job state persisted as JSON files under `<stateDir>/jobs/` (by default `~/.local/state/aibridge/<profile>/jobs/` in profile deployments, or `.aibridge/jobs/` in local legacy dev runs), with orchestration state managed in SQLite event stores.
 - Bridge port (8787) must be Tailscale-only. Never expose opencode serve publicly.
 - opencode serve defaults to port 4096 (`OPENCODE_PORT` or setup wizard prompt).

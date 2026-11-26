@@ -30,7 +30,6 @@
 
 import { describe, expect, it } from "vitest"
 import {
-  isNotificationMuted,
   normalizeNotificationQuieting,
   notificationMuteVerdict,
 } from "../../../src/notifications/index.js"
@@ -306,10 +305,10 @@ describe("M6.9 the quieting rule reads only the closed enums", () => {
     }
   })
 
-  it("exposes the same verdict through the convenience predicate the TUI uses", () => {
+  it("reports a category mute through the verdict, and only for that category", () => {
     const setting = quieting({ categories: ["run_failed"] })
-    expect(isNotificationMuted(setting, "run_failed", "info")).toBe(true)
-    expect(isNotificationMuted(setting, "run_blocked", "info")).toBe(false)
+    expect(notificationMuteVerdict(setting, "run_failed", "info")).toEqual({ muted: true, by: "category" })
+    expect(notificationMuteVerdict(setting, "run_blocked", "info")).toEqual({ muted: false })
   })
 
   it("has no parameter through which a summary could reach the quieting rule", () => {

@@ -30,6 +30,7 @@ import { claudeConfigSchema } from "../config/schemas.js"
 import { approvalRequired } from "../planning/approval.js"
 import { LaunchRefusedError, type JobManager } from "../jobs/manager.js"
 import type { JobRecord, RuntimeJobResult, RuntimeJobUsage } from "../jobs/types.js"
+import { appendJobEvent, type JobEventInput, type JobEventLog } from "../jobs/events.js"
 import type { RepoWorkspaceManager } from "./repo-workspace.js"
 import { CLAUDE_PROVIDER_ENV_KEYS } from "./sanitizer.js"
 import { ScriptRunner, type RunningScript } from "./script-runner.js"
@@ -44,7 +45,13 @@ import {
   type ClaudePermissionDenial,
   type ClaudeRunUsage,
 } from "./claude-adapter.js"
-import { launchAgentRequestSchema, type LaunchAgentRequest, type RuntimeOperationContext, type RuntimeSession } from "./schemas.js"
+import {
+  launchAgentRequestSchema,
+  type AgentRuntimeEvent,
+  type LaunchAgentRequest,
+  type RuntimeOperationContext,
+  type RuntimeSession,
+} from "./schemas.js"
 
 /**
  * Deny rules every Claude Code launch gets, whatever its capability profile
@@ -419,6 +426,11 @@ export interface ClaudeJobRunnerOptions {
   /** Milliseconds clock, for timeouts. */
   readonly clock?: () => number
   readonly sleep?: (ms: number) => Promise<void>
+  /**
+   * Where the runner records what a job does while it runs (`message`,
+   * `tool`, `result` events). Status events come from the `JobManager`.
+   */
+  readonly events?: JobEventLog
 }
 
 /** A started Claude Code process of one job. */
@@ -487,8 +499,17 @@ interface ActiveJob {
   script?: RunningScript
   /** Settles when `monitor` has recorded and reported the job. */
   done?: Promise<unknown>
+  /** Resolved when the job leaves `#active` (its terminal write is done, or `start` gave up). */
+  readonly released: Promise<void>
+  release: () => void
   /** Set by `start` when it created a worktree, so cleanup knows what to remove. */
   worktreeRepo?: string
+}
+
+function newActiveJob(jobId: string): ActiveJob {
+  let release: () => void = () => undefined
+  const released = new Promise<void>((resolve) => (release = resolve))
+  return { jobId, released, release }
 }
 
 export class ClaudeJobRunner {
@@ -506,9 +527,11 @@ export class ClaudeJobRunner {
   /** projectPathId -> worktree path, consulted by the adapter's project resolver. */
   readonly #worktrees = new Map<string, string>()
   readonly #active = new Map<string, ActiveJob>()
+  readonly #events?: JobEventLog
 
   constructor(options: ClaudeJobRunnerOptions) {
     this.#config = options.config
+    this.#events = options.events
     this.nodeId = toOpaqueId(options.config.agent_id, "node")
     this.#jobManager = options.jobManager
     this.#reportTerminalJob = options.reportTerminalJob
@@ -560,6 +583,11 @@ export class ClaudeJobRunner {
     return [...this.#active.keys()]
   }
 
+  /** Whether the job is between `start` and the end of `monitor` in this runner. */
+  isActive(jobId: string): boolean {
+    return this.#active.has(jobId)
+  }
+
   /**
    * Claims a concurrency slot, records `launchStartedAt` (refused unless the
    * job is `accepted` and was never launched), prepares the job's working directory (its own
@@ -577,7 +605,7 @@ export class ClaudeJobRunner {
         `This node is already running ${this.#active.size} job(s), its limit (limits.max_concurrent_jobs = ${maxConcurrentJobs(this.#config)}). Retry later.`,
       )
     }
-    const active: ActiveJob = { jobId: job.id }
+    const active = newActiveJob(job.id)
     this.#active.set(job.id, active)
     const startedAt = this.#clock()
     const timeoutSeconds = claudeTimeoutSeconds(this.#config, job.trigger)
@@ -596,7 +624,9 @@ export class ClaudeJobRunner {
       if (profile === undefined) throw new Error(`Unknown capability profile: ${job.trigger.capability}`)
 
       let claude: ClaudeStepLaunch | undefined
-      if (profile.script === undefined && (profile.pre ?? []).length === 0) {
+      // A job stopped while launching (cancel, kill switch) spawns nothing:
+      // its monitor sees the stop before the main step and fails it.
+      if (profile.script === undefined && (profile.pre ?? []).length === 0 && active.stopReason === undefined) {
         claude = await this.#launchClaude(job, active, timeoutSeconds)
       }
       const running = await this.#jobManager.markRunning(job.id)
@@ -632,7 +662,7 @@ export class ClaudeJobRunner {
    * terminal by another path.
    */
   monitor(launch: ClaudeJobLaunch): Promise<JobRecord | undefined> {
-    const active = this.#active.get(launch.job.id) ?? { jobId: launch.job.id }
+    const active = this.#active.get(launch.job.id) ?? newActiveJob(launch.job.id)
     this.#active.set(launch.job.id, active)
     const done = this.#monitor(launch, active)
     active.done = done
@@ -649,18 +679,52 @@ export class ClaudeJobRunner {
     const stopped: ActiveJob[] = []
     for (const active of this.#active.values()) {
       if (active.stopReason !== undefined) continue
-      active.stopReason = reason
       stopped.push(active)
-      if (active.claude !== undefined) {
-        await this.#adapter.terminate(active.claude.session, active.claude.operation).catch(() => undefined)
-      }
-      active.script?.kill()
+      await this.#requestStop(active, reason)
     }
     const settled = Promise.all(stopped.map((active) => active.done ?? Promise.resolve()))
     let timer: ReturnType<typeof setTimeout> | undefined
     await Promise.race([settled, new Promise((done) => (timer = setTimeout(done, waitMs)))])
     if (timer !== undefined) clearTimeout(timer)
     return stopped.map((active) => active.jobId)
+  }
+
+  /**
+   * Stops one job the way `stopAll` stops every job: records `reason`,
+   * terminates its Claude Code process or kills its script, and leaves the
+   * ending to the job's own monitor (or to `start`, when the job is still
+   * launching), which fails it with `reason` and reports it exactly once.
+   * Resolves once the job is ended and reported, or after `waitMs`.
+   *
+   * - `stopping`: this call asked the job to stop;
+   * - `already_stopping`: another stop (`stopAll`, an earlier `stop`) asked first, with its own reason;
+   * - `not_active`: the runner is not driving the job; nothing was done.
+   */
+  async stop(jobId: string, reason: string, waitMs = 15_000): Promise<"stopping" | "already_stopping" | "not_active"> {
+    const active = this.#active.get(jobId)
+    if (active === undefined) return "not_active"
+    const first = active.stopReason === undefined
+    if (first) await this.#requestStop(active, reason)
+    // `done` exists once `monitor` took the job over. Before that the job is
+    // still launching: `start` launches nothing more once a stop is recorded,
+    // and the job is ended by its monitor or, if the launch fails, by `start`;
+    // `released` settles in both cases, after the terminal write.
+    const settled = (async () => {
+      await (active.done ?? active.released)
+      await active.done
+    })()
+    let timer: ReturnType<typeof setTimeout> | undefined
+    await Promise.race([settled, new Promise((done) => (timer = setTimeout(done, waitMs)))])
+    if (timer !== undefined) clearTimeout(timer)
+    return first ? "stopping" : "already_stopping"
+  }
+
+  async #requestStop(active: ActiveJob, reason: string): Promise<void> {
+    active.stopReason = reason
+    if (active.claude !== undefined) {
+      await this.#adapter.terminate(active.claude.session, active.claude.operation).catch(() => undefined)
+    }
+    active.script?.kill()
   }
 
   async #monitor(launch: ClaudeJobLaunch, active: ActiveJob): Promise<JobRecord | undefined> {
@@ -797,6 +861,18 @@ export class ClaudeJobRunner {
       active.script = undefined
     }
     scriptResults.push(result)
+    await appendJobEvent(this.#events, launch.job.id, {
+      type: "tool",
+      data: {
+        tool: "script",
+        phase,
+        script,
+        exit_code: result.exit_code,
+        timed_out: result.timed_out,
+        duration_ms: result.duration_ms,
+        ...(result.signal !== undefined ? { signal: result.signal } : {}),
+      },
+    })
     if (active.stopReason !== undefined) {
       return { state: "failed", summary: capitalize(active.stopReason), findings: [], error: active.stopReason }
     }
@@ -835,6 +911,7 @@ export class ClaudeJobRunner {
       active.worktreeRepo = undefined
     }
     if (this.#active.get(job.id) === active) this.#active.delete(job.id)
+    active.release()
   }
 
   /**
@@ -891,6 +968,8 @@ export class ClaudeJobRunner {
       for await (const observed of this.#adapter.observe(claude.session, claude.operation)) {
         if (!observed.ok) return { state: "failed", detail: observed.error.message }
         if (observed.value.type === "lifecycle") latest = observed.value.state
+        const event = jobEventFromRuntime(observed.value)
+        if (event !== undefined) await appendJobEvent(this.#events, active.jobId, event)
       }
       if (active.stopReason !== undefined) {
         await this.#adapter.terminate(claude.session, claude.operation)
@@ -942,6 +1021,32 @@ export class ClaudeJobRunner {
         permissionDenials: usage?.permissionDenials.length ?? 0,
       },
     }
+  }
+}
+
+/** The adapter's polling heartbeat ("still executing"), which says nothing new. */
+const HEARTBEAT_DETAIL = "Claude Code executing"
+
+/**
+ * What one adapter observation adds to the job's event log, or `undefined`
+ * for nothing. Only the adapter's short, already-redacted texts are kept:
+ * tool names and counts, lifecycle notes, and the final result summary.
+ * The text goes through the log's redaction again before it is stored.
+ */
+export function jobEventFromRuntime(event: AgentRuntimeEvent): JobEventInput | undefined {
+  switch (event.type) {
+    case "lifecycle": {
+      const detail = event.detail
+      if (detail === undefined || detail === HEARTBEAT_DETAIL) return undefined
+      // Terminal lifecycle states are reported by the job's status and result events.
+      if (event.state === "completed" || event.state === "failed" || event.state === "unknown") return undefined
+      const isTool = detail.startsWith("Tool call") || detail.startsWith("Tool result") || detail.startsWith("Permission denied")
+      return { type: isTool ? "tool" : "message", data: { detail } }
+    }
+    case "result_available":
+      return { type: "result", data: { outcome: event.result.outcome, summary: event.result.summary } }
+    case "permission_requested":
+      return { type: "tool", data: { detail: `Permission requested: ${event.permission}` } }
   }
 }
 

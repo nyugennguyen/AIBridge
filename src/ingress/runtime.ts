@@ -24,6 +24,7 @@ import type { BridgeConfig } from "../config/types.js"
 import type { JobRecord } from "../jobs/types.js"
 import { JobManager } from "../jobs/manager.js"
 import { JsonFileJobStore } from "../jobs/store.js"
+import { FileJobEventLog } from "../jobs/events.js"
 import { SdkOpencodeClientAdapter } from "../opencode/client.js"
 import type { OpencodeClient } from "../opencode/types.js"
 import { StaticPermissionPolicy } from "../opencode/permissions.js"
@@ -145,8 +146,14 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     options.operatorToken,
     opencodeConfig !== undefined ? options.environment[opencodeConfig.password_env] : undefined,
   ].filter((value): value is string => typeof value === "string" && value.length > 0)
+  // `GET /jobs/:id/events`: `<state>/jobs/<id>.events.jsonl`, redacted like
+  // job results (block R) before anything is written.
+  const jobEvents = new FileJobEventLog(join(options.stateDir, "jobs"), {
+    redact: (text) => redactSecretsFromText(text, knownSecrets),
+  })
   const jobManager = new JobManager(new JsonFileJobStore(join(options.stateDir, "jobs")), {
     redactError: (text) => redactSecretsFromText(text, knownSecrets),
+    events: jobEvents,
   })
   const taskGraphSyncer = new FileTaskGraphSyncer(join(options.stateDir, "tasks.md"))
   const egressOutboxStore =
@@ -182,6 +189,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
           jobManager,
           taskGraphSyncer,
           reportTerminalJob,
+          events: jobEvents,
           ...(repoWorkspaces !== undefined ? { workspaces: repoWorkspaces } : {}),
           // Redacted from script output tails, should a script echo them.
           knownSecrets: [options.bearerToken, options.operatorToken].filter(

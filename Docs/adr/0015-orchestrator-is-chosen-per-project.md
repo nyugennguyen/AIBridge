@@ -17,6 +17,16 @@ Today a node has a `role` (`orchestrator`, `worker` or `both`). A node with `rol
 3. An orchestrator may cancel an individual job it dispatched for its own project. The node-wide kill switch (`aibr stop --all-jobs`) stays operator-only.
 4. **Every node runs `aibr serve`** (roadmap V0). The node `role` is dropped. Whether a node accepts jobs is decided by its runtime and capabilities, through an `accept_jobs` setting (default `true`). Which agent orchestrates is project configuration, not node configuration. A node with `accept_jobs: false` rejects `/trigger` with a distinct error but still receives `/report` and events.
 
+### Cancel by the requester is not an approval action
+
+Decision 3 is implemented in 3.2.0 (block B) as `POST /jobs/:id/cancel` and the MCP tool `bridge_cancel`:
+
+- A requester's cancel only reduces what runs: it ends one job (`failed`, error `cancelled by requester`) and can never start, widen or approve anything. It is therefore **not an approval action**: it does not go through the approval ledger (ADR 0013), and it is recorded in the bridge log (`aibr logs`) with the caller's identity instead.
+- Only the requester may cancel: the peer whose verified node signature (ADR 0012) names the job's `source_agent_id`. Any other peer gets 403. The operator credential, under the same rules as `aibr approve` (including `approval_from_loopback_only`), may cancel any job. Without a signature there is no caller identity, so an unsigned peer cannot cancel (or list, or follow) jobs, even on a node with `request_signing: "off"`.
+- A job awaiting approval cannot be cancelled (409): it has not started, and ending it is the operator's decision (`aibr reject`).
+- The node-wide kill switch (`aibr stop --all-jobs`, `POST /operator/stop-all-jobs`) stays operator-only, and `aibr approve` / `aibr reject` are not exposed through MCP or any route a peer can use, for every kind of orchestrator.
+- A cancel ends the job through the same end-once path as the runner, the periodic sweep and the kill switch: one terminal write, one report.
+
 ## Consequences
 
 - ADR 0014 becomes `Amended by ADR 0015`. Its Claude-as-interface decision stands for the default setup; it is no longer the only one.

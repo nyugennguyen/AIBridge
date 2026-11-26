@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto"
 import type { RemoteDependency, TriggerRequest } from "../config/types.js"
 import type { JobCheckout, JobRecord, JobStatus, PongInfo, RemoteDependencyReport, RuntimeJobResult } from "./types.js"
 import type { JobStore } from "./store.js"
+import { appendJobEvent, type JobEventLog } from "./events.js"
 
 const TERMINAL_STATUSES: JobStatus[] = ["completed", "failed", "timed_out", "callback_failed"]
 
@@ -64,6 +65,13 @@ export interface JobManagerOptions {
    * over this node's secrets.
    */
   readonly redactError?: (text: string) => string
+  /**
+   * Receives a `status` event for every status a job enters (creation
+   * included), so every runtime's jobs have at least their status history in
+   * `GET /jobs/:id/events`. Appended under the job's lock, after the record is
+   * saved; a failed append never fails the transition.
+   */
+  readonly events?: JobEventLog
 }
 
 type TransitionGuard = (current: JobRecord) => boolean
@@ -76,12 +84,19 @@ export class JobManager {
    */
   private readonly jobLocks = new Map<string, Promise<unknown>>()
   private readonly redactError: (text: string) => string
+  private readonly events: JobEventLog | undefined
 
   constructor(
     private readonly store: JobStore,
     options: JobManagerOptions = {},
   ) {
     this.redactError = options.redactError ?? ((text) => text)
+    this.events = options.events
+  }
+
+  /** The event log this manager writes status events to, if any (`GET /jobs/:id/events` reads it). */
+  get eventLog(): JobEventLog | undefined {
+    return this.events
   }
 
   /**
@@ -106,6 +121,7 @@ export class JobManager {
       updatedAt: now,
     }
     await this.store.save(job)
+    await appendJobEvent(this.events, id, { type: "status", data: { status: job.status } })
     return job
   }
 
@@ -229,6 +245,21 @@ export class JobManager {
         ? `${redacted.slice(0, Math.max(0, options.maxLength - 1))}…`
         : redacted
     return this.transition(id, "failed", now, { error: stored })
+  }
+
+  /**
+   * Fails the job only if `guard` accepts its fresh record (read under the
+   * job's lock) and it is not terminal; `undefined` otherwise. The caller that
+   * gets a record back is the one that ended the job, and so the one that
+   * reports it.
+   */
+  async markFailedIf(
+    id: string,
+    error: string,
+    guard: (current: JobRecord) => boolean,
+    now = new Date().toISOString(),
+  ): Promise<JobRecord | undefined> {
+    return this.transitionIf(id, "failed", now, { error: this.redactError(error) }, guard)
   }
 
   async markTimedOut(id: string, now = new Date().toISOString()): Promise<JobRecord> {
@@ -405,6 +436,13 @@ export class JobManager {
     }
     const next: JobRecord = { ...current, ...patch, status, updatedAt: now }
     await this.store.save(next)
+    if (status !== current.status) {
+      const terminal = TERMINAL_STATUSES.includes(status)
+      await appendJobEvent(this.events, next.id, {
+        type: "status",
+        data: { status, from: current.status, ...(terminal && next.error !== undefined ? { error: next.error } : {}) },
+      })
+    }
     return next
   }
 

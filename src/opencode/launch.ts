@@ -4,7 +4,7 @@ import type { OpencodeClient } from "./types.js"
 
 export interface OpencodeLaunchDependencies {
   readonly jobManager: Pick<JobManager, "markLaunchStarted" | "attachSession" | "markRunning" | "markFailed">
-  readonly opencodeClient: Pick<OpencodeClient, "createSession" | "sendPromptAsync">
+  readonly opencodeClient: Pick<OpencodeClient, "createSession" | "sendPromptAsync"> & Partial<Pick<OpencodeClient, "abortSession">>
   /**
    * Delivers the report of a job this launch failed. Absent only where no
    * reporter exists (a drainer built without one): the job is still failed.
@@ -46,8 +46,10 @@ export async function startOpencodeSession(
   dependencies: OpencodeLaunchDependencies,
 ): Promise<{ readonly sessionId: string; readonly running: JobRecord }> {
   await dependencies.jobManager.markLaunchStarted(job.id)
+  let sessionId: string | undefined
   try {
     const session = await dependencies.opencodeClient.createSession(`AIBridge ${job.id}`, job.trigger.project_dir)
+    sessionId = session.id
     await dependencies.jobManager.attachSession(job.id, session.id)
     await dependencies.opencodeClient.sendPromptAsync(session.id, job.trigger.prompt, job.trigger.project_dir)
     const running = await dependencies.jobManager.markRunning(job.id)
@@ -56,6 +58,11 @@ export async function startOpencodeSession(
     const message = error instanceof Error ? error.message : "OpenCode launch failed"
     const failed = await dependencies.jobManager.markFailed(job.id, message).catch(() => undefined)
     if (failed !== undefined) await dependencies.reportTerminalJob?.(failed).catch(() => undefined)
+    // Another path (a requester's cancel, the sweep) ended the job while it
+    // launched: whatever session was opened must not keep working for it.
+    if (failed === undefined && sessionId !== undefined) {
+      await dependencies.opencodeClient.abortSession?.(sessionId).catch(() => undefined)
+    }
     throw new OpencodeLaunchError(failed?.error ?? "OpenCode launch failed", failed)
   }
 }

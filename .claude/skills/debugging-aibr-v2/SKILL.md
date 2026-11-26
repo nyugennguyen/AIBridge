@@ -124,7 +124,20 @@ XDG paths, **not** the repo-local `.aibridge/` (`src/host/paths.ts:75-115`):
 ```
 config   ~/.config/aibridge/<profile>/config.json
 secrets  ~/.local/share/aibridge/<profile>/secrets/{bearer_token,opencode_password}  (0600)
-state    ~/.local/state/aibridge/<profile>/{jobs/*.json,tasks.md,egress_outbox.db}
+state    ~/.local/state/aibridge/<profile>/{jobs/*.json,tasks.md,egress_outbox.db,aibridge.lock}
+```
+
+`aibridge.lock` (`src/host/state-lock.ts`) is held by the one `aibr serve` / `aibr worker` of the
+profile for its lifetime: JSON with `pid`, `start` (`ps -o lstart=`) and a token. It counts as held
+only while that PID is alive **with the same start time**; a crashed holder or a PID reused after a
+reboot is replaced automatically. A second process exits with "Another AIBridge process (PID n) is
+already running on this profile" and touches no job. Manual recovery, only if PID n is not AIBridge:
+
+```bash
+aibr stop -p <profile>                                   # stops the service and the tmux session
+cat ~/.local/state/aibridge/<profile>/aibridge.lock      # {"pid":…,"start":…,"token":…}
+ps -o pid=,lstart=,command= -p <pid>                     # is it really an AIBridge process?
+rm ~/.local/state/aibridge/<profile>/aibridge.lock       # only if it is not
 ```
 
 Repo `.aibridge/` is only used by the legacy `bun run dev` entrypoint (`src/index.ts:11`).
@@ -156,8 +169,13 @@ Check in this order:
    `permissions.allow_tools`.
 4. **Terminal vs failed.** `Timed out waiting for OpenCode session …` always lands on status
    **`failed`**. Status `timed_out` with message `Job timed out` comes from `sweepExpiredJobs`
-   at **bridge startup** (`src/bridge.ts:47`) — i.e. a job left `running` across a restart.
+   (`src/jobs/manager.ts`), which runs at startup and every 60 s; the deadline counts from
+   `launchStartedAt`, else the approval, else creation. Jobs a live runner drives are skipped.
    If a report pairs them, the reporting peer is wrong.
+5. **Restart.** `interrupted: bridge restarted` = the job was running (or its launch had begun,
+   `launchStartedAt` set) when the bridge restarted; never retried. `not relaunched after restart:
+   <reason> (never started)` = an approved job that never started and may not launch now. Rules:
+   `src/jobs/reconcile.ts`.
 
 ## The Rust router
 

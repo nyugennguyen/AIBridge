@@ -161,18 +161,21 @@ describe("startBridge over an existing job store (OpenCode)", () => {
       expect(job.launchStartedAt).toBeDefined()
     }
 
-    // Interrupted, never relaunched, and reported to the requester.
-    for (const id of ["launched", "running", "unapproved"]) {
+    // Interrupted (may have run) or declined (never started); never relaunched; reported.
+    for (const id of ["launched", "running"]) {
       const job = await bridge.jobManager.getJob(id)
       expect(job.status).toBe("failed")
-      expect(job.error?.startsWith(INTERRUPTED_BY_RESTART)).toBe(true)
+      expect(job.error).toBe(INTERRUPTED_BY_RESTART)
     }
+    expect((await bridge.jobManager.getJob("unapproved")).error).toBe(
+      "not relaunched after restart: this node now requires operator approval for it (never started)",
+    )
     expect(opencode.aborted).toEqual(["ses_old"])
     await eventually(() => peer.reports.length === 3)
     expect(peer.reports.map((report) => report.job_id).sort()).toEqual(["launched", "running", "unapproved"])
     for (const report of peer.reports) {
       expect(report.status).toBe("failed")
-      expect(report.summary.startsWith(INTERRUPTED_BY_RESTART)).toBe(true)
+      expect(report.summary.startsWith(report.job_id === "unapproved" ? "not relaunched after restart" : INTERRUPTED_BY_RESTART)).toBe(true)
     }
 
     // The approval boundary holds across the restart.
@@ -294,7 +297,7 @@ describe("restart over an existing job store (Claude runner)", () => {
     })
 
     const reconciled = await reconcileJobsAfterRestart({ jobManager: jobs, config })
-    for (const job of reconciled.interrupted) void reportTerminalJob(job)
+    for (const job of [...reconciled.interrupted, ...reconciled.declined]) void reportTerminalJob(job)
     expect(reconciled.relaunch.map((job) => job.id).sort()).toEqual(["approved", "ungated"])
     await relaunchJobs(reconciled.relaunch, (job) =>
       relaunchClaudeJob(job, {
@@ -322,7 +325,7 @@ describe("restart over an existing job store (Claude runner)", () => {
     await eventually(() => reports.filter((report) => report.status === "failed").length >= 3)
     expect(
       reports
-        .filter((report) => ["unapproved", "spawned", "running"].includes(report.job_id))
+        .filter((report) => ["spawned", "running"].includes(report.job_id))
         .every((report) => report.summary.startsWith(INTERRUPTED_BY_RESTART)),
     ).toBe(true)
 

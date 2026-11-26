@@ -21,8 +21,8 @@
 
 import { createRuntime, type Runtime, type RuntimeOptions } from "./runtime.js"
 import { IngressDrainer, type IngressLifecycleObserver } from "./drainer.js"
-import { reconcileJobsAfterRestart, relaunchJobs, startPeriodicSweep, type RestartReconcileResult } from "../jobs/reconcile.js"
-import { relaunchOpencodeJob } from "../server/routes/opencode-dispatch.js"
+import { reconcileJobsAfterRestart, startPeriodicSweep, type RestartReconcileResult } from "../jobs/reconcile.js"
+import { relaunchOpencodeJobs } from "../server/routes/opencode-dispatch.js"
 import { acquireStateLock, type StateLock } from "../host/state-lock.js"
 
 export const INGRESS_OUTBOX_ENV = "AIBRIDGE_INGRESS_OUTBOX"
@@ -157,12 +157,11 @@ async function startIngressWorkerHoldingLock(
     taskGraphSyncer: runtime.taskGraphSyncer,
     abortOpencodeSession: (sessionId) => runtime.opencodeClient.abortSession(sessionId),
   })
-  for (const job of [...reconciled.swept, ...reconciled.interrupted, ...callbackRetries]) {
+  for (const job of [...reconciled.swept, ...reconciled.interrupted, ...reconciled.declined, ...callbackRetries]) {
     void runtime.reportTerminalJob(job)
   }
   // Awaited before the first drain, so a relaunch never races new work.
-  await relaunchJobs(reconciled.relaunch, (job) =>
-    relaunchOpencodeJob(job, {
+  await relaunchOpencodeJobs(reconciled.relaunch, {
       jobManager: runtime.jobManager,
       opencodeClient: runtime.opencodeClient,
       taskGraphSyncer: runtime.taskGraphSyncer,
@@ -171,8 +170,7 @@ async function startIngressWorkerHoldingLock(
       callbackReporter: runtime.callbackReporter,
       config: runtime.config,
       bearerToken: options.bearerToken,
-    }),
-  )
+  })
   const restartReconcile = reconciled
   const stopSweep = startPeriodicSweep({
     jobManager: runtime.jobManager,

@@ -9,7 +9,7 @@ import type { JobManager } from "./jobs/manager.js"
 import { reconcileJobsAfterRestart, relaunchJobs, startPeriodicSweep, type RestartReconcileResult } from "./jobs/reconcile.js"
 import { relaunchClaudeJob } from "./server/routes/claude-dispatch.js"
 import { acquireStateLock } from "./host/state-lock.js"
-import { relaunchOpencodeJob } from "./server/routes/opencode-dispatch.js"
+import { relaunchOpencodeJobs } from "./server/routes/opencode-dispatch.js"
 import {
   createNotificationBus,
   createNotificationStore,
@@ -192,15 +192,16 @@ async function startBridgeHoldingLock(options: BridgeOptions): Promise<BridgeIns
         ? { abortOpencodeSession: (sessionId: string) => runtime.opencodeClient.abortSession(sessionId) }
         : {}),
     })
-    for (const job of [...reconciled.swept, ...reconciled.interrupted]) void runtime.reportTerminalJob(job)
-    const relaunch =
-      runtime.config.runtime.kind === "claude"
-        ? (job: Parameters<typeof relaunchClaudeJob>[0]) => relaunchClaudeJob(job, appDependencies)
-        : (job: Parameters<typeof relaunchOpencodeJob>[0]) =>
-            relaunchOpencodeJob(job, { ...appDependencies, reportTerminalJob: runtime.reportTerminalJob })
+    for (const job of [...reconciled.swept, ...reconciled.interrupted, ...reconciled.declined]) {
+      void runtime.reportTerminalJob(job)
+    }
     // Awaited: every cleared job is launched (or failed and reported) before
     // the bridge serves, so a new trigger never races a relaunch for a slot.
-    await relaunchJobs(reconciled.relaunch, relaunch)
+    if (runtime.config.runtime.kind === "claude") {
+      await relaunchJobs(reconciled.relaunch, (job) => relaunchClaudeJob(job, appDependencies))
+    } else {
+      await relaunchOpencodeJobs(reconciled.relaunch, { ...appDependencies, reportTerminalJob: runtime.reportTerminalJob })
+    }
     restartReconcile = reconciled
 
     const stopSweep = startPeriodicSweep({

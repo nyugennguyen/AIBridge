@@ -121,8 +121,8 @@ describe("relaunchRefusal: the approval boundary (security)", () => {
     const job = record("accepted", {}, { capability: "deployment", metadata: { plan_status: "approved" } })
     expect(relaunchRefusal(job, config())).toBe("this node now requires operator approval for it")
     expect(restartDecision(job, config())).toEqual({
-      action: "interrupt",
-      error: `${INTERRUPTED_BY_RESTART}; not relaunched: this node now requires operator approval for it`,
+      action: "decline",
+      error: "not relaunched after restart: this node now requires operator approval for it (never started)",
     })
   })
 
@@ -272,14 +272,14 @@ describe("reconcileJobsAfterRestart", () => {
     })
 
     expect(result.relaunch.map((job) => job.id).sort()).toEqual(["approved", "fresh"])
-    expect(result.interrupted.map((job) => job.id).sort()).toEqual(["launched", "running", "unapproved"])
+    expect(result.interrupted.map((job) => job.id).sort()).toEqual(["launched", "running"])
     for (const job of result.interrupted) {
       expect(job.status).toBe("failed")
-      expect(job.error?.startsWith(INTERRUPTED_BY_RESTART)).toBe(true)
+      expect(job.error).toBe(INTERRUPTED_BY_RESTART)
     }
-    expect((await jobs.getJob("unapproved")).error).toBe(
-      `${INTERRUPTED_BY_RESTART}; not relaunched: this node now requires operator approval for it`,
-    )
+    // Never started, so it is declined, not "interrupted" (which says it may have partly run).
+    expect(result.declined.map((job) => job.id)).toEqual(["unapproved"])
+    expect((await jobs.getJob("unapproved")).error).toBe("not relaunched after restart: this node now requires operator approval for it (never started)")
     expect(result.swept.map((job) => `${job.id}:${job.status}`).sort()).toEqual(["dependent:failed", "expired:timed_out"])
     expect((await jobs.getJob("held")).status).toBe("awaiting_approval")
     expect((await jobs.getJob("fresh")).status).toBe("accepted")

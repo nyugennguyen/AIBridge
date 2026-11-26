@@ -14,7 +14,7 @@
  * | terminal                                | any               | kept                                      |
  * | `awaiting_approval`                     | any               | kept (still needs `aibr approve`)         |
  * | `blocked`                               | any               | kept (dependencies re-evaluated as usual) |
- * | `accepted`                              | absent            | relaunched, if still allowed (below)      |
+ * | `accepted`                              | absent            | relaunched if still allowed (below), else failed `not relaunched after restart: <reason> (never started)` |
  * | `accepted`                              | present           | failed `interrupted: bridge restarted`    |
  * | `session_created`, `running`, `reporting`, `received` | any | failed `interrupted: bridge restarted`  |
  *
@@ -25,8 +25,9 @@
  * still allowlisted, capability still configured) AND it does not bypass the
  * approval boundary: a job that carries an approval record must be
  * `approved`; a job without one must not need approval under the CURRENT
- * config (`approvalRequired`). Otherwise it is failed as interrupted, with
- * the reason.
+ * config (`approvalRequired`). Otherwise it is declined: failed with
+ * `not relaunched after restart: <reason> (never started)`, which tells the
+ * requester that, unlike an interrupted job, it did nothing.
  *
  * Every job this pass ends is returned so the caller delivers its report
  * (`reportTerminalJob`) like any other terminal job.
@@ -44,6 +45,14 @@ import type { JobRecord } from "./types.js"
 /** The error of a job a restart ended. Requesters decide whether to dispatch it again. */
 export const INTERRUPTED_BY_RESTART = "interrupted: bridge restarted"
 
+/** Prefix of the error of a job a restart found never started and did not launch. */
+export const NOT_RELAUNCHED_AFTER_RESTART = "not relaunched after restart"
+
+/** The error of a never-started job a restart declined to launch. */
+export function notRelaunchedError(reason: string): string {
+  return `${NOT_RELAUNCHED_AFTER_RESTART}: ${reason} (never started)`
+}
+
 /** How often a running bridge sweeps for expired jobs. */
 export const DEFAULT_SWEEP_INTERVAL_MS = 60_000
 
@@ -51,6 +60,7 @@ export type RestartDecision =
   | { readonly action: "keep" }
   | { readonly action: "relaunch" }
   | { readonly action: "interrupt"; readonly error: string }
+  | { readonly action: "decline"; readonly error: string }
 
 /**
  * Why this node must not launch `job` again, or `undefined` when it may.
@@ -103,7 +113,7 @@ export function restartDecision(job: JobRecord, config: BridgeConfig): RestartDe
       const refusal = relaunchRefusal(job, config)
       return refusal === undefined
         ? { action: "relaunch" }
-        : { action: "interrupt", error: `${INTERRUPTED_BY_RESTART}; not relaunched: ${refusal}` }
+        : { action: "decline", error: notRelaunchedError(refusal) }
     }
   }
 }
@@ -129,6 +139,8 @@ export interface RestartReconcileResult {
   readonly swept: JobRecord[]
   /** Jobs that may have run, now `failed` with `INTERRUPTED_BY_RESTART`. Report them. */
   readonly interrupted: JobRecord[]
+  /** Never-started jobs this node may no longer launch, now `failed` (`notRelaunchedError`). Report them. */
+  readonly declined: JobRecord[]
   /** `accepted` jobs that never launched and may launch now. Launch them. */
   readonly relaunch: JobRecord[]
 }
@@ -148,6 +160,7 @@ export async function reconcileJobsAfterRestart(options: RestartReconcileOptions
   const now = options.now ?? new Date().toISOString()
   const swept = await jobManager.sweepExpiredJobs(now)
   const interrupted: JobRecord[] = []
+  const declined: JobRecord[] = []
   const relaunch: JobRecord[] = []
 
   for (const job of await jobManager.listJobs()) {
@@ -159,16 +172,16 @@ export async function reconcileJobsAfterRestart(options: RestartReconcileOptions
     }
     const failed = await jobManager.markFailed(job.id, decision.error, now).catch(() => undefined)
     if (failed === undefined) continue
-    interrupted.push(failed)
+    ;(decision.action === "interrupt" ? interrupted : declined).push(failed)
     await options.taskGraphSyncer?.syncJobToTask(job.trigger.task_id ?? `#${job.id}`, "failed").catch(() => undefined)
     if (job.opencodeSessionId !== undefined && options.abortOpencodeSession !== undefined) {
       void options.abortOpencodeSession(job.opencodeSessionId).catch(() => undefined)
     }
   }
 
-  if (interrupted.length > 0) swept.push(...(await jobManager.sweepExpiredJobs(now)))
+  if (interrupted.length + declined.length > 0) swept.push(...(await jobManager.sweepExpiredJobs(now)))
   relaunch.sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id))
-  return { swept, interrupted, relaunch }
+  return { swept, interrupted, declined, relaunch }
 }
 
 /**

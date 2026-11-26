@@ -3,7 +3,7 @@
  * need no approval) and `POST /jobs/:id/approve` (jobs an operator approved).
  */
 import type { JobRecord } from "../../jobs/types.js"
-import { waitUntil } from "../../jobs/reconcile.js"
+import { notRelaunchedError, relaunchJobs, waitUntil } from "../../jobs/reconcile.js"
 import { LaunchRefusedError } from "../../jobs/manager.js"
 import { OpencodeLaunchError, startOpencodeSession } from "../../opencode/launch.js"
 import type { AppDependencies } from "../app.js"
@@ -169,25 +169,40 @@ export async function dispatchOpencodeJob(
 }
 
 /**
- * Launches an `accepted` job that a restart found never launched
- * (`reconcileJobsAfterRestart`). Waits up to `healthWaitMs` for OpenCode to
- * answer (`aibr serve --with-opencode` starts it alongside the bridge), then
- * dispatches it as `aibr approve` does: the kernel already recorded it when
- * it was triggered. On any failure the job is failed and its report delivered.
+ * Launches the `accepted` jobs a restart found never launched
+ * (`reconcileJobsAfterRestart`), oldest first. OpenCode's health is checked
+ * ONCE for the whole batch, waiting at most `healthWaitMs` (default 15 s:
+ * `aibr serve --with-opencode` starts it alongside the bridge). If it does
+ * not answer, every job of the batch is declined at once
+ * (`not relaunched after restart: OpenCode unavailable (never started)`) and
+ * reported, so startup is never held up per job.
  */
-export async function relaunchOpencodeJob(
-  job: JobRecord,
+export async function relaunchOpencodeJobs(
+  jobs: readonly JobRecord[],
   dependencies: OpencodeDispatchDependencies,
   options: { readonly healthWaitMs?: number; readonly healthPollMs?: number } = {},
 ): Promise<void> {
+  if (jobs.length === 0) return
+  const healthy = await waitUntil(() => dependencies.opencodeClient.health(), {
+    timeoutMs: options.healthWaitMs ?? 15_000,
+    intervalMs: options.healthPollMs ?? 500,
+  })
+  await relaunchJobs(jobs, (job) =>
+    healthy
+      ? relaunchOpencodeJob(job, dependencies)
+      : settleFailedDispatch(job, { body: { error: notRelaunchedError("OpenCode unavailable") } }, dependencies),
+  )
+}
+
+/**
+ * Launches one never-launched job as `aibr approve` does (the kernel already
+ * recorded it when it was triggered). No health check: `relaunchOpencodeJobs`
+ * did it for the batch. On failure the job is failed and reported at most once.
+ */
+export async function relaunchOpencodeJob(job: JobRecord, dependencies: OpencodeDispatchDependencies): Promise<void> {
   // Reports only a failure written here: a job another path already ended
   // (and reported) makes `markFailed` throw.
   const fail = async (error: string): Promise<void> => settleFailedDispatch(job, { body: { error } }, dependencies)
-  const healthy = await waitUntil(() => dependencies.opencodeClient.health(), {
-    timeoutMs: options.healthWaitMs ?? 60_000,
-    intervalMs: options.healthPollMs ?? 2_000,
-  })
-  if (!healthy) return await fail("OpenCode server unhealthy: the job could not be relaunched after a bridge restart")
   try {
     const dispatched = await dispatchOpencodeJob(job, dependencies, { recordInKernel: false })
     if (!dispatched.ok) await settleFailedDispatch(job, dispatched, dependencies)

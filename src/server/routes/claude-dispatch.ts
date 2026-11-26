@@ -3,7 +3,7 @@
  * need no approval) and `POST /jobs/:id/approve` (jobs an operator approved).
  */
 import { LaunchRefusedError } from "../../jobs/manager.js"
-import { INTERRUPTED_BY_RESTART } from "../../jobs/reconcile.js"
+import { notRelaunchedError } from "../../jobs/reconcile.js"
 import { createTerminalJobReporter } from "../../jobs/report.js"
 import type { JobRecord } from "../../jobs/types.js"
 import { ClaudeLaunchError, RunnerAtCapacityError, type ClaudeJobLaunch } from "../../runtime/claude-job-runner.js"
@@ -65,13 +65,13 @@ export async function launchClaudeJob(
  * (`reconcileJobsAfterRestart`), as `aibr approve` does: failing and reporting
  * it on error. Startup awaits this before serving, so it never waits for a
  * slot: when the node is full (more cleared jobs than
- * `limits.max_concurrent_jobs`) the job ends as interrupted, with the reason,
- * and the requester decides whether to dispatch it again.
+ * `limits.max_concurrent_jobs`) the job is declined (`notRelaunchedError`:
+ * it never started) and the requester decides whether to dispatch it again.
  */
 export async function relaunchClaudeJob(job: JobRecord, dependencies: AppDependencies): Promise<void> {
   if (dependencies.claudeJobRunner?.hasCapacity?.() === false) {
     const failed = await dependencies.jobManager
-      .markFailed(job.id, `${INTERRUPTED_BY_RESTART}; not relaunched: this node is at limits.max_concurrent_jobs`)
+      .markFailed(job.id, notRelaunchedError("no free slot (limits.max_concurrent_jobs)"))
       .catch(() => undefined)
     if (failed !== undefined) await terminalReporter(dependencies)(failed)
     return

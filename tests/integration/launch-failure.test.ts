@@ -28,7 +28,8 @@ import type { ProcessHandle } from "../../src/runtime/claude-adapter.js"
 import { ClaudeJobRunner } from "../../src/runtime/claude-job-runner.js"
 import type { AppDependencies } from "../../src/server/app.js"
 import { launchClaudeJob } from "../../src/server/routes/claude-dispatch.js"
-import { relaunchOpencodeJob } from "../../src/server/routes/opencode-dispatch.js"
+import { relaunchOpencodeJob, relaunchOpencodeJobs } from "../../src/server/routes/opencode-dispatch.js"
+import { notRelaunchedError } from "../../src/jobs/reconcile.js"
 import { buildTestApp, FakeOpencodeClient, FakeTaskGraphSyncer, InMemoryJobStore, testConfig, validTrigger } from "./fixtures.js"
 
 const OPERATOR = "operator-token-value-123"
@@ -348,8 +349,45 @@ describe("relaunchOpencodeJob never reports a job twice", () => {
         return false
       }
     })()
-    await relaunchOpencodeJob(job, { ...deps, opencodeClient: unhealthy }, { healthWaitMs: 0, healthPollMs: 1 })
+    await relaunchOpencodeJobs([job], { ...deps, opencodeClient: unhealthy }, { healthWaitMs: 0, healthPollMs: 1 })
     expect(reported).toEqual([])
+  })
+
+  it("checks OpenCode health once per batch and declines the whole batch when it is down", async () => {
+    const reported: string[] = []
+    const jobManager = new JobManager(new InMemoryJobStore())
+    const first = await jobManager.createJob(validTrigger({ job_id: "a" }) as never)
+    const second = await jobManager.createJob(validTrigger({ job_id: "b" }) as never)
+    let healthChecks = 0
+    const down = new (class extends FakeOpencodeClient {
+      override async health(): Promise<boolean> {
+        healthChecks += 1
+        return false
+      }
+    })()
+    const started = Date.now()
+    await relaunchOpencodeJobs(
+      [first, second],
+      {
+        config: testConfig(),
+        bearerToken: "secret",
+        jobManager,
+        opencodeClient: down,
+        callbackReporter: new CallbackReporter({ attempts: 1, baseDelayMs: 1, fetcher: async () => new Response(null, { status: 200 }) }),
+        monitorSession: async () => undefined,
+        taskGraphSyncer: new FakeTaskGraphSyncer(),
+        reportTerminalJob: async (failed: JobRecord) => void reported.push(`${failed.id}:${failed.error}`),
+      },
+      { healthWaitMs: 50, healthPollMs: 10 },
+    )
+    expect(Date.now() - started).toBeLessThan(1_000)
+    expect(healthChecks).toBeLessThanOrEqual(7)
+    expect(down.createdSessions).toBe(0)
+    expect(reported).toEqual([
+      `a:${notRelaunchedError("OpenCode unavailable")}`,
+      `b:${notRelaunchedError("OpenCode unavailable")}`,
+    ])
+    expect(notRelaunchedError("OpenCode unavailable")).toBe("not relaunched after restart: OpenCode unavailable (never started)")
   })
 })
 

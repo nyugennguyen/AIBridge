@@ -5,13 +5,14 @@
  * restart pass of `startIngressWorker` (router ingress).
  */
 import { existsSync, rmSync } from "node:fs"
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises"
+import { execFile } from "node:child_process"
+import { mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
 import { startBridge, type BridgeInstance } from "../../src/bridge.js"
 import type { BridgeConfig } from "../../src/config/types.js"
-import { acquireStateLock, STATE_LOCK_FILE, StateLockHeldError } from "../../src/host/state-lock.js"
+import { acquireStateLock, processStartTime, STATE_LOCK_FILE, StateLockHeldError, type StateLock } from "../../src/host/state-lock.js"
 import { startIngressWorker, type IngressWorkerHandle } from "../../src/ingress/worker.js"
 import { INTERRUPTED_BY_RESTART } from "../../src/jobs/reconcile.js"
 import type { JobRecord } from "../../src/jobs/types.js"
@@ -62,6 +63,15 @@ afterEach(async () => {
 })
 
 describe("acquireStateLock", () => {
+  const lockPath = (stateDir: string) => join(stateDir, STATE_LOCK_FILE)
+  const writeLock = (stateDir: string, content: unknown) =>
+    writeFile(lockPath(stateDir), typeof content === "string" ? content : `${JSON.stringify(content)}\n`)
+  /** A world where every PID is alive, with the given start times. */
+  const world = (starts: Record<number, string>) => ({
+    isAlive: (pid: number) => starts[pid] !== undefined,
+    startTimeOf: (pid: number) => starts[pid],
+  })
+
   it("refuses a second holder naming its PID, and is free again after release", async () => {
     const stateDir = await mkdtemp(join(tmpdir(), "aibridge-lock-"))
     const first = acquireStateLock(stateDir)
@@ -75,25 +85,112 @@ describe("acquireStateLock", () => {
     expect((refusal as StateLockHeldError).pid).toBe(process.pid)
     expect((refusal as Error).message).toContain(`PID ${process.pid}`)
     first.release()
-    expect(existsSync(join(stateDir, STATE_LOCK_FILE))).toBe(false)
+    expect(existsSync(lockPath(stateDir))).toBe(false)
     acquireStateLock(stateDir).release()
   })
 
-  it("replaces a lock whose holder is dead", async () => {
+  it("records the PID and its real start time (ps lstart)", async () => {
     const stateDir = await mkdtemp(join(tmpdir(), "aibridge-lock-"))
-    await writeFile(join(stateDir, STATE_LOCK_FILE), "999999 stale-token\n")
-    const lock = acquireStateLock(stateDir, { isAlive: (pid) => pid !== 999999 })
-    expect((await readFile(join(stateDir, STATE_LOCK_FILE), "utf8")).startsWith(`${process.pid} `)).toBe(true)
+    const lock = acquireStateLock(stateDir)
+    const content = JSON.parse(await readFile(lockPath(stateDir), "utf8")) as { pid: number; start: string }
+    expect(content.pid).toBe(process.pid)
+    expect(content.start).toBe(processStartTime(process.pid))
+    expect(content.start.length).toBeGreaterThan(0)
     lock.release()
+  })
+
+  it("same PID with the same start time: held", async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), "aibridge-lock-"))
+    await writeLock(stateDir, { pid: 4242, start: "Thu Nov 26 09:00:00 2026", token: "t" })
+    expect(() => acquireStateLock(stateDir, { pid: 5000, ...world({ 4242: "Thu Nov 26 09:00:00 2026", 5000: "now" }) })).toThrow(
+      StateLockHeldError,
+    )
+  })
+
+  it("PID reused after a reboot (different start time): stale, replaced", async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), "aibridge-lock-"))
+    await writeLock(stateDir, { pid: 4242, start: "Mon Nov 23 09:00:00 2026", token: "t" })
+    const lock = acquireStateLock(stateDir, { pid: 5000, ...world({ 4242: "Thu Nov 26 09:00:00 2026", 5000: "now" }) })
+    expect(JSON.parse(await readFile(lockPath(stateDir), "utf8"))).toMatchObject({ pid: 5000, start: "now" })
+    lock.release()
+  })
+
+  it("a live PID of another user (EPERM) with a different start time: stale", async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), "aibridge-lock-"))
+    await writeLock(stateDir, { pid: 4242, start: "Mon Nov 23 09:00:00 2026", token: "t" })
+    // isAlive answers true as it does on EPERM; only the start time differs.
+    const lock = acquireStateLock(stateDir, { pid: 5000, isAlive: () => true, startTimeOf: (pid) => (pid === 4242 ? "Tue" : "now") })
+    lock.release()
+  })
+
+  it("old-format file, unreadable start time, or dead PID: stale", async () => {
+    for (const [content, starts] of [
+      ["999999 stale-token\n", { 5000: "now" }],
+      [{ pid: 4242, start: "Mon", token: "t" }, { 5000: "now" }],
+      [{ pid: 4242, start: "", token: "t" }, { 4242: "", 5000: "now" }],
+    ] as const) {
+      const stateDir = await mkdtemp(join(tmpdir(), "aibridge-lock-"))
+      await writeLock(stateDir, content)
+      acquireStateLock(stateDir, { pid: 5000, ...world(starts as Record<number, string>) }).release()
+    }
   })
 
   it("release never removes a lock another process took over", async () => {
     const stateDir = await mkdtemp(join(tmpdir(), "aibridge-lock-"))
     const lock = acquireStateLock(stateDir)
-    await writeFile(join(stateDir, STATE_LOCK_FILE), "424242 someone-else\n")
+    await writeLock(stateDir, { pid: 424242, start: "x", token: "someone-else" })
     lock.release()
-    expect(existsSync(join(stateDir, STATE_LOCK_FILE))).toBe(true)
+    expect(existsSync(lockPath(stateDir))).toBe(true)
   })
+
+  it("two processes taking over the same stale lock at once: only one wins", async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), "aibridge-lock-"))
+    await writeLock(stateDir, { pid: 4242, start: "dead", token: "t" })
+    const live = world({ 1001: "a", 1002: "b" })
+    let second: StateLock | undefined
+    let firstOutcome: unknown
+    try {
+      // Process 1001 judges the lock stale; before it moves it aside, process
+      // 1002 does the whole takeover.
+      acquireStateLock(stateDir, {
+        pid: 1001,
+        ...live,
+        beforeTakeover: () => {
+          if (second === undefined) second = acquireStateLock(stateDir, { pid: 1002, ...live })
+        },
+      })
+      firstOutcome = "won"
+    } catch (error) {
+      firstOutcome = error
+    }
+    expect(second).toBeDefined()
+    expect(firstOutcome).toBeInstanceOf(StateLockHeldError)
+    expect((firstOutcome as StateLockHeldError).pid).toBe(1002)
+    expect(JSON.parse(await readFile(lockPath(stateDir), "utf8"))).toMatchObject({ pid: 1002 })
+    expect((await readdir(stateDir)).filter((name) => name !== STATE_LOCK_FILE)).toEqual([])
+    second?.release()
+  })
+
+  it("real processes racing for a stale lock: at most one holds it", async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), "aibridge-lock-race-"))
+    await writeLock(stateDir, { pid: 4242, start: "dead", token: "t" })
+    const script = join(stateDir, "..", `race-${Date.now()}.ts`)
+    const module = join(import.meta.dirname, "../../src/host/state-lock.ts")
+    await writeFile(
+      script,
+      `import { acquireStateLock } from ${JSON.stringify(module)}
+try { const lock = acquireStateLock(${JSON.stringify(stateDir)}, { isAlive: (pid) => pid !== 4242 && pid > 0 && (() => { try { process.kill(pid, 0); return true } catch { return false } })() })
+  console.log("won"); await new Promise((r) => setTimeout(r, 800)); lock.release() }
+catch (error) { console.log(error?.code === "state_dir_locked" ? "held" : "error " + error) }\n`,
+    )
+    const runOne = () =>
+      new Promise<string>((resolve) => {
+        execFile("bun", [script], { timeout: 20_000 }, (_error, stdout) => resolve(stdout.trim()))
+      })
+    const outcomes = await Promise.all(Array.from({ length: 5 }, runOne))
+    expect(outcomes.filter((outcome) => outcome === "won").length).toBeLessThanOrEqual(1)
+    expect(outcomes.every((outcome) => outcome === "won" || outcome === "held")).toBe(true)
+  }, 30_000)
 })
 
 describe("a second bridge on the same profile", () => {
@@ -178,7 +275,7 @@ describe("startIngressWorker (router ingress)", () => {
       expect((await worker.jobManager.getJob("fresh")).status).toBe("running")
       expect((await worker.jobManager.getJob("running")).error).toBe(INTERRUPTED_BY_RESTART)
       expect((await worker.jobManager.getJob("gated")).error).toBe(
-        `${INTERRUPTED_BY_RESTART}; not relaunched: this node now requires operator approval for it`,
+        "not relaunched after restart: this node now requires operator approval for it (never started)",
       )
 
       // A second worker on the same profile refuses and touches nothing.

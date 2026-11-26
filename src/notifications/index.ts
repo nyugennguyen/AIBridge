@@ -32,4 +32,3 @@
 export * from "./types.js"
 export * from "./store.js"
 export * from "./bus.js"
-export * from "./consumer.js"

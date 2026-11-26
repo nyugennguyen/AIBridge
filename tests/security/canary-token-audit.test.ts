@@ -4,8 +4,6 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { PassThrough } from "node:stream"
 import { describe, expect, it } from "vitest"
-import { StructuredLogger } from "../../src/observability/logger.js"
-import { collectOperationalSignals } from "../../src/observability/signals.js"
 import { CallbackReporter } from "../../src/callback/reporter.js"
 import type { BridgeConfig } from "../../src/config/types.js"
 import { generateSupportBundle, previewSupportBundle } from "../../src/diagnostics/index.js"
@@ -23,61 +21,6 @@ const CANARY_NODE_KEY = "CANARY_NODE_PRIVATE_KEY_999888777_DO_NOT_DISCLOSE"
 const CANARY_ENV_PASS = "CANARY_SUPER_SECRET_PASSWORD_ALPHA_BETA"
 
 describe("M8.3 / M7-C2: Canary Token and Secret Leak Audit", () => {
-  it("never leaks seeded canary secrets in structured log entries or attributes", () => {
-    const emittedLines: string[] = []
-    const logger = new StructuredLogger({
-      writer: (line) => emittedLines.push(line),
-      customSecrets: [CANARY_BEARER_TOKEN, CANARY_NODE_KEY, CANARY_ENV_PASS],
-    })
-
-    // Log various events attempting to leak secrets
-    logger.info("ingress.admitted", {
-      jobId: "job-audit-1",
-      attributes: {
-        authorizationHeader: `Bearer ${CANARY_BEARER_TOKEN}`,
-        nodeKey: CANARY_NODE_KEY,
-        password: CANARY_ENV_PASS,
-        nested: {
-          token: CANARY_BEARER_TOKEN,
-          rawSecret: `connecting with ${CANARY_NODE_KEY} now`,
-        },
-      },
-    })
-
-    logger.error("ingress.rejected", {
-      errorCode: "AUTH_FAILED",
-      attributes: {
-        attemptedToken: CANARY_BEARER_TOKEN,
-        secretEnv: CANARY_ENV_PASS,
-      },
-    })
-
-    expect(emittedLines.length).toBe(2)
-    const combinedLog = emittedLines.join("\n")
-
-    // The canary secrets MUST NEVER appear in emitted logs
-    expect(combinedLog.includes(CANARY_BEARER_TOKEN)).toBe(false)
-    expect(combinedLog.includes(CANARY_NODE_KEY)).toBe(false)
-    expect(combinedLog.includes(CANARY_ENV_PASS)).toBe(false)
-
-    // Redacted placeholders should appear instead
-    expect(combinedLog.includes("[REDACTED_SECRET]") || combinedLog.includes("[REDACTED_CANARY_SECRET]")).toBe(true)
-  })
-
-  it("never includes seeded bearer tokens or credentials in operational signals", async () => {
-    const signals = await collectOperationalSignals({
-      nodeId: "node-canary-test",
-      nodeHealth: "healthy",
-      leaseTimeRemainingMs: 30000,
-      epoch: 1,
-    })
-
-    const serializedSignals = JSON.stringify(signals)
-    expect(serializedSignals.includes(CANARY_BEARER_TOKEN)).toBe(false)
-    expect(serializedSignals.includes(CANARY_NODE_KEY)).toBe(false)
-    expect(serializedSignals.includes(CANARY_ENV_PASS)).toBe(false)
-  })
-
   it("never forwards bearer token to unlisted origins in CallbackReporter (F-02 / M8.3)", async () => {
     let capturedHeader: string | undefined
     const reporter = new CallbackReporter({

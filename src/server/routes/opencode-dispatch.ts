@@ -16,7 +16,6 @@ export type OpencodeDispatchDependencies = Pick<
   | "opencodeClient"
   | "taskGraphSyncer"
   | "monitorSession"
-  | "orchestration"
   | "reportTerminalJob"
   | "callbackReporter"
   | "config"
@@ -69,16 +68,11 @@ export async function settleFailedDispatch(
  * opens an OpenCode session, sends the prompt and hands the job to the session
  * monitor.
  *
- * `recordInKernel` asks the kernel translation to record the accepted intent
- * first (fail closed). The approve path passes false: the held job was already
- * recorded when it was triggered.
- *
  * Errors from the OpenCode client propagate; the caller decides how to fail.
  */
 export async function dispatchOpencodeJob(
   job: JobRecord,
   dependencies: OpencodeDispatchDependencies,
-  options: { readonly recordInKernel: boolean },
 ): Promise<OpencodeDispatchOutcome> {
   const taskId = job.trigger.task_id ?? `#${job.id}`
   const dependencyReferences = job.trigger.depends_on ?? []
@@ -106,42 +100,8 @@ export async function dispatchOpencodeJob(
 
   if (dependencyReferences.length > 0 && (hasRemoteDependencies || !localDependenciesDone)) {
     const blocked = await dependencies.jobManager.markBlocked(job.id, dependencyReferences)
-    // A blocked job is still ACCEPTED work, so the kernel records it. It maps
-    // to a paused draft run and names no launch effect: the job must not reach
-    // a runtime until its dependencies are satisfied.
-    if (options.recordInKernel) {
-      const acceptance = dependencies.orchestration?.translation?.acceptTrigger(blocked)
-      if (acceptance !== undefined && !acceptance.ok) {
-        const failed = await dependencies.jobManager.markFailed(job.id, acceptance.error.message)
-        return {
-          ok: false,
-          statusCode: 500,
-          body: { error: acceptance.error.message, code: acceptance.error.code },
-          settled: { kind: "failed", job: failed },
-        }
-      }
-    }
     await dependencies.taskGraphSyncer.syncJobToTask(taskId, "blocked", { Job: job.id })
     return { ok: true, job: blocked, status: "blocked" }
-  }
-
-  // M4-A. The kernel is asked to record the accepted intent FIRST, and that is
-  // all it is asked to do. It returns no launch effect: the
-  // `createSession`/`sendPromptAsync` pair below is the RELEASED legacy
-  // behaviour, authorized by the route's own bearer, source/capability,
-  // allowlist and approval checks. Fail closed: a job the kernel cannot
-  // account for is failed rather than reported as started.
-  if (options.recordInKernel) {
-    const acceptance = dependencies.orchestration?.translation?.acceptTrigger(job)
-    if (acceptance !== undefined && !acceptance.ok) {
-      const failed = await dependencies.jobManager.markFailed(job.id, acceptance.error.message)
-      return {
-        ok: false,
-        statusCode: 500,
-        body: { error: acceptance.error.message, code: acceptance.error.code },
-        settled: { kind: "failed", job: failed },
-      }
-    }
   }
 
   let launched: Awaited<ReturnType<typeof startOpencodeSession>>
@@ -195,8 +155,7 @@ export async function relaunchOpencodeJobs(
 }
 
 /**
- * Launches one never-launched job as `aibr approve` does (the kernel already
- * recorded it when it was triggered). No health check: `relaunchOpencodeJobs`
+ * Launches one never-launched job as `aibr approve` does. No health check: `relaunchOpencodeJobs`
  * did it for the batch. On failure the job is failed and reported at most once.
  */
 export async function relaunchOpencodeJob(job: JobRecord, dependencies: OpencodeDispatchDependencies): Promise<void> {
@@ -204,7 +163,7 @@ export async function relaunchOpencodeJob(job: JobRecord, dependencies: Opencode
   // (and reported) makes `markFailed` throw.
   const fail = async (error: string): Promise<void> => settleFailedDispatch(job, { body: { error } }, dependencies)
   try {
-    const dispatched = await dispatchOpencodeJob(job, dependencies, { recordInKernel: false })
+    const dispatched = await dispatchOpencodeJob(job, dependencies)
     if (!dispatched.ok) await settleFailedDispatch(job, dispatched, dependencies)
   } catch (error) {
     await fail(error instanceof Error ? error.message : "OpenCode launch failed")

@@ -100,15 +100,3 @@ export type RoundtableOutcome = z.infer<typeof roundtableOutcomeSchema>
  * rationale and evidence references back to deliberation sessions.
  */
 export type CharterProposal = z.infer<typeof charterProposalSchema>
-
-export type {
-  ProposalStatus,
-  CharterProposalRecord,
-  ProposeCharterInput,
-  ApproveCharterInput,
-  RejectCharterInput,
-} from "./proposal.js"
-export {
-  CharterProposalLifecycle,
-  CharterProposalRepository,
-} from "./proposal.js"

@@ -25,7 +25,6 @@ import type { OpencodeClient } from "../opencode/types.js"
 import { startOpencodeSession } from "../opencode/launch.js"
 import type { TaskGraphSyncer } from "../tasks/types.js"
 import type { CallbackReporter } from "../callback/reporter.js"
-import type { LegacyTranslation } from "../orchestration/legacy/translation.js"
 import {
   createSqliteDriver,
   type SqliteDriver,
@@ -99,9 +98,6 @@ export interface IngressDrainerDependencies {
   readonly observer?: IngressLifecycleObserver
   /** Where the drainer notes what it cannot surface otherwise. Default: stderr (the service's log file). */
   readonly log?: (level: "info" | "warn" | "error", message: string) => void
-  readonly orchestration?: {
-    readonly translation: LegacyTranslation
-  }
 }
 
 export class IngressDrainer {
@@ -112,7 +108,6 @@ export class IngressDrainer {
   readonly #taskGraphSyncer: TaskGraphSyncer
   readonly #monitorSession: (job: JobRecord) => Promise<void>
   readonly #reportTerminalJob?: (job: JobRecord) => Promise<void>
-  readonly #orchestration?: { readonly translation: LegacyTranslation }
   readonly #observer?: IngressLifecycleObserver
   readonly #log: (level: "info" | "warn" | "error", message: string) => void
   private running = false
@@ -127,7 +122,6 @@ export class IngressDrainer {
     this.#monitorSession = dependencies.monitorSession
     this.#reportTerminalJob = dependencies.reportTerminalJob
     this.#observer = dependencies.observer
-    this.#orchestration = dependencies.orchestration
     this.#log =
       dependencies.log ??
       ((level, message) => {
@@ -432,22 +426,9 @@ export class IngressDrainer {
     const hasRemoteDependencies = localDependencyIds.length !== dependencyReferences.length
 
     if (hasDeps && (hasRemoteDependencies || !depJobs.every((dep) => dep.status === "completed"))) {
-      const blocked = await this.#jobManager.markBlocked(job.id, dependencyReferences)
-      const blockedAcceptance = this.#orchestration?.translation.acceptTrigger(blocked)
-      if (blockedAcceptance !== undefined && !blockedAcceptance.ok) {
-        await this.#jobManager.markFailed(job.id, blockedAcceptance.error.message)
-        this.fail(record.job_id, claimToken, blockedAcceptance.error.message, Date.now())
-        return
-      }
+      await this.#jobManager.markBlocked(job.id, dependencyReferences)
       await this.#taskGraphSyncer.syncJobToTask(resolvedTaskId, "blocked", { Job: job.id })
       this.acknowledge(record.job_id, claimToken)
-      return
-    }
-
-    const acceptance = this.#orchestration?.translation.acceptTrigger(job)
-    if (acceptance !== undefined && !acceptance.ok) {
-      await this.#jobManager.markFailed(job.id, acceptance.error.message)
-      this.fail(record.job_id, claimToken, acceptance.error.message, Date.now())
       return
     }
 
@@ -533,10 +514,6 @@ export class IngressDrainer {
     }
 
     for (const unblockedJob of unblocked) {
-      const recorded = this.#orchestration?.translation.recordReport(unblockedJob)
-      if (recorded !== undefined && !recorded.ok) {
-        throw new Error(recorded.error.message)
-      }
       try {
         const { running } = await startOpencodeSession(unblockedJob, {
           jobManager: this.#jobManager,

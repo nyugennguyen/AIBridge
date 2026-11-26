@@ -13,21 +13,12 @@ function pingTrigger(overrides: Record<string, unknown> = {}) {
 
 async function setup(config: BridgeConfig = testConfig()) {
   const reports: JobRecord[] = []
-  const acceptCalls: unknown[] = []
   const claudeCalls: string[] = []
-  const translation = {
-    acceptTrigger: (job: unknown) => {
-      acceptCalls.push(job)
-      return { ok: true }
-    },
-    correlate: () => ({ ok: true, correlation: {} }),
-  } as unknown as NonNullable<NonNullable<Parameters<typeof buildTestApp>[0]>["orchestration"]>["translation"]
   const built = await buildTestApp({
     config,
     reportTerminalJob: async (job) => {
       reports.push(job)
     },
-    orchestration: { translation },
     claudeJobRunner: {
       start: async () => {
         claudeCalls.push("start")
@@ -38,7 +29,7 @@ async function setup(config: BridgeConfig = testConfig()) {
       },
     } as never,
   })
-  return { ...built, reports, acceptCalls, claudeCalls }
+  return { ...built, reports, claudeCalls }
 }
 
 async function flush(): Promise<void> {
@@ -73,7 +64,6 @@ describe("POST /trigger with capability aibr.ping", () => {
     expect(h.reports[0]?.id).toBe("ping-1")
     expect(h.opencode.createdSessions).toBe(0)
     expect(h.opencode.sentPrompts).toBe(0)
-    expect(h.acceptCalls).toEqual([])
     expect(h.claudeCalls).toEqual([])
   })
 

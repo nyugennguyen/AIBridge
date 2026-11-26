@@ -3,7 +3,6 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
 import { FileApprovalLedger, InMemoryApprovalLedger, verifyApprovalLedger } from "../../../src/jobs/approval-ledger.js"
-import { legacyJobProjection } from "../../../src/jobs/legacy-projection.js"
 import { JobManager } from "../../../src/jobs/manager.js"
 import { buildTerminalReport } from "../../../src/jobs/report.js"
 import type { JobRecord } from "../../../src/jobs/types.js"
@@ -84,24 +83,5 @@ describe("buildTerminalReport", () => {
       "me",
     )
     expect(report).toMatchObject({ sha: "a".repeat(40), script_results: [script] })
-  })
-})
-
-describe("legacyJobProjection", () => {
-  it("drops the fields the strict legacy schema does not know and maps awaiting_approval to accepted", () => {
-    const projected = legacyJobProjection({
-      id: "j",
-      trigger: { ...trigger(), repo: "app", ref: "main" },
-      status: "awaiting_approval",
-      approval: { status: "pending", requestedAt: at },
-      checkout: { repo: "app", ref: "main", sha: "a".repeat(40) },
-      createdAt: at,
-      updatedAt: at,
-    })
-    expect(projected.status).toBe("accepted")
-    expect(projected).not.toHaveProperty("approval")
-    expect(projected).not.toHaveProperty("checkout")
-    expect(projected.trigger).not.toHaveProperty("repo")
-    expect(projected.trigger).not.toHaveProperty("ref")
   })
 })

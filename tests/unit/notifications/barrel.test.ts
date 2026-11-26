@@ -124,10 +124,11 @@ describe("the M6.9 surface is reachable through its barrel", () => {
     expect(typeof notifications.describeNotificationAudit).toBe("function")
     expect(typeof notifications.findSeededNotificationSecret).toBe("function")
   })
-  it("exports the orchestration event consumer and refusal translators", () => {
-    expect(typeof notifications.createOrchestrationNotificationConsumer).toBe("function")
-    expect(typeof notifications.orchestrationEventToNotification).toBe("function")
-    expect(typeof notifications.dispatchRefusalToNotification).toBe("function")
+  it("no longer exports the orchestration consumer, which went with the kernel (3.2.0 D5)", () => {
+    const surface = notifications as Record<string, unknown>
+    expect(surface.createOrchestrationNotificationConsumer).toBeUndefined()
+    expect(surface.orchestrationEventToNotification).toBeUndefined()
+    expect(surface.dispatchRefusalToNotification).toBeUndefined()
   })
 
 

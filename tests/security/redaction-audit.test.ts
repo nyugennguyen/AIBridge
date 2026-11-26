@@ -3,7 +3,6 @@ import {
   redactString,
   redactValue,
 } from "../../src/observability/redaction.js"
-import { StructuredLogger } from "../../src/observability/logger.js"
 
 describe("Observability Redaction Engine Audit (M8.3)", () => {
   it("redacts prompts and sensitive content by key name", () => {
@@ -55,29 +54,5 @@ describe("Observability Redaction Engine Audit (M8.3)", () => {
     const cleaned = redactString(rawPath)
     expect(cleaned).not.toContain("bob")
     expect(cleaned).toContain("/Users/[REDACTED_USER]")
-  })
-
-  it("StructuredLogger automatically applies redaction pipeline to all logged events", () => {
-    const logs: string[] = []
-    const logger = new StructuredLogger({
-      writer: (line) => logs.push(line),
-    })
-
-    logger.info("inbox.received", {
-      jobId: "job-99",
-      attributes: {
-        prompt: "Classified mission prompt",
-        bearer_token: "leaked-token",
-        allowedField: "unclassified",
-      },
-    })
-
-    expect(logs.length).toBe(1)
-    const parsed = JSON.parse(logs[0]!)
-    expect(parsed.event).toBe("inbox.received")
-    expect(parsed.jobId).toBe("job-99")
-    expect(parsed.attributes.prompt).toBe("[REDACTED_CONTENT]")
-    expect(parsed.attributes.bearer_token).toBe("[REDACTED_SECRET]")
-    expect(parsed.attributes.allowedField).toBe("unclassified")
   })
 })

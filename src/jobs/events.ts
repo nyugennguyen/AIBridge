@@ -8,6 +8,8 @@
  *
  * - `seq` starts at 1 and grows by one per stored event, per job, across
  *   restarts of the bridge;
+ * - jobs are told apart by their exact id: ids that differ only in case are
+ *   different jobs and never see each other's events;
  * - `read(jobId, after, limit)` returns the stored events with `seq > after`,
  *   oldest first, at most `limit`, and `next` is the `after` to pass next time
  *   (the last returned `seq`, or `after` itself when nothing was returned);
@@ -18,17 +20,20 @@
  * - `subscribe` is told about each stored event, in order, in this process.
  *
  * The 3.2.0 implementation is `FileJobEventLog`: one append-only JSON-lines
- * file per job, `<jobsDir>/<id>.events.jsonl`, next to the job records.
- * `JsonFileJobStore` loads only `*.json`, so it never mistakes it for a job.
+ * file per job, `<jobsDir>/<sha256(id)>.events.jsonl`, next to the job
+ * records. `JsonFileJobStore` loads only `*.json`, so it never mistakes it for
+ * a job.
  */
 import { createHash } from "node:crypto"
 import { EventEmitter } from "node:events"
-import { appendFile, mkdir, readFile } from "node:fs/promises"
+import { appendFile, mkdir, open } from "node:fs/promises"
 import { join } from "node:path"
 
 export type JobEventType = "status" | "message" | "tool" | "result" | "truncated"
 
 export interface JobEvent {
+  /** The exact job id the event belongs to. */
+  readonly job_id: string
   readonly seq: number
   /** ISO timestamp of the append. */
   readonly at: string
@@ -62,7 +67,7 @@ export const DEFAULT_MAX_BYTES_PER_JOB = 1_048_576
 /** Longest string kept in an event's data, cut AFTER redaction so a cut secret leaves no prefix. */
 export const MAX_EVENT_STRING_LENGTH = 4_000
 /** Room kept free for the `truncated` line itself. */
-const TRUNCATED_RESERVE_BYTES = 256
+const TRUNCATED_RESERVE_BYTES = 512
 
 export interface BoundedJobEventLogOptions {
   /** Applied to every string in `data` before it is stored (`redactSecretsFromText` in production). */
@@ -78,9 +83,15 @@ interface JobLogState {
   closed: boolean
 }
 
+/** What a storage returns for one job: its events (in `seq` order) and the bytes they take. */
+export interface StoredJobEvents {
+  readonly events: readonly JobEvent[]
+  readonly bytes: number
+}
+
 /**
  * The bounds, numbering, redaction and notification shared by every
- * implementation; subclasses store and load lines.
+ * implementation; subclasses store lines and load events.
  */
 abstract class BoundedJobEventLog implements JobEventLog {
   readonly #redact: (text: string) => string
@@ -100,7 +111,8 @@ abstract class BoundedJobEventLog implements JobEventLog {
     this.#emitter.setMaxListeners(0)
   }
 
-  protected abstract loadLines(jobId: string): Promise<string[]>
+  /** The job's stored events, only those whose `job_id` is exactly `jobId`. */
+  protected abstract loadEvents(jobId: string): Promise<StoredJobEvents>
   protected abstract storeLine(jobId: string, line: string): Promise<void>
 
   append(jobId: string, input: JobEventInput): Promise<JobEvent | undefined> {
@@ -123,27 +135,33 @@ abstract class BoundedJobEventLog implements JobEventLog {
   async read(jobId: string, after: number, limit: number): Promise<JobEventPage> {
     const from = Number.isFinite(after) && after > 0 ? Math.floor(after) : 0
     const count = Math.max(0, Math.floor(limit))
-    const events = parseLines(await this.loadLines(jobId))
-      .filter((event) => event.seq > from)
-      .slice(0, count)
+    const { events: all } = await this.loadEvents(jobId)
+    const start = firstAfter(all, from)
+    const events = all.slice(start, start + count)
     return { events, next: events.at(-1)?.seq ?? from }
   }
 
   subscribe(jobId: string, listener: (event: JobEvent) => void): () => void {
-    const channel = `job:${jobId}`
+    const channel = channelOf(jobId)
     this.#emitter.on(channel, listener)
     return () => this.#emitter.off(channel, listener)
+  }
+
+  /** How many subscribers the job has right now (diagnostics and tests). */
+  subscriberCount(jobId: string): number {
+    return this.#emitter.listenerCount(channelOf(jobId))
   }
 
   async #append(jobId: string, input: JobEventInput): Promise<JobEvent | undefined> {
     const state = await this.#state(jobId)
     if (state.closed) return undefined
-    const event: JobEvent = { seq: state.seq + 1, at: this.#now(), type: input.type, data: this.#clean(input.data) }
+    const event: JobEvent = { job_id: jobId, seq: state.seq + 1, at: this.#now(), type: input.type, data: this.#clean(input.data) }
     const line = `${JSON.stringify(event)}\n`
     const size = Buffer.byteLength(line, "utf8")
     // The last line of a full log is always the `truncated` marker.
     if (event.seq >= this.#maxEvents || state.bytes + size > this.#maxBytes - TRUNCATED_RESERVE_BYTES) {
       const marker: JobEvent = {
+        job_id: jobId,
         seq: state.seq + 1,
         at: event.at,
         type: "truncated",
@@ -154,13 +172,13 @@ abstract class BoundedJobEventLog implements JobEventLog {
       state.seq = marker.seq
       state.bytes += Buffer.byteLength(markerLine, "utf8")
       state.closed = true
-      this.#emitter.emit(`job:${jobId}`, marker)
+      this.#emitter.emit(channelOf(jobId), marker)
       return undefined
     }
     await this.storeLine(jobId, line)
     state.seq = event.seq
     state.bytes += size
-    this.#emitter.emit(`job:${jobId}`, event)
+    this.#emitter.emit(channelOf(jobId), event)
     return event
   }
 
@@ -168,14 +186,11 @@ abstract class BoundedJobEventLog implements JobEventLog {
   #state(jobId: string): Promise<JobLogState> {
     let state = this.#states.get(jobId)
     if (state === undefined) {
-      state = this.loadLines(jobId).then((lines) => {
-        const events = parseLines(lines)
-        return {
-          seq: events.reduce((max, event) => Math.max(max, event.seq), 0),
-          bytes: lines.reduce((sum, line) => sum + Buffer.byteLength(`${line}\n`, "utf8"), 0),
-          closed: events.some((event) => event.type === "truncated"),
-        }
-      })
+      state = this.loadEvents(jobId).then(({ events, bytes }) => ({
+        seq: events.reduce((max, event) => Math.max(max, event.seq), 0),
+        bytes,
+        closed: events.some((event) => event.type === "truncated"),
+      }))
       this.#states.set(jobId, state)
       // A failed load is retried on the next append rather than cached.
       state.catch(() => this.#states.delete(jobId))
@@ -187,6 +202,22 @@ abstract class BoundedJobEventLog implements JobEventLog {
     const cleaned = cleanValue(data, this.#redact, 0)
     return cleaned !== null && typeof cleaned === "object" && !Array.isArray(cleaned) ? (cleaned as Record<string, unknown>) : {}
   }
+}
+
+function channelOf(jobId: string): string {
+  return `job:${jobId}`
+}
+
+/** Index of the first event with `seq > after` (events are in `seq` order). */
+function firstAfter(events: readonly JobEvent[], after: number): number {
+  let low = 0
+  let high = events.length
+  while (low < high) {
+    const middle = (low + high) >>> 1
+    if (events[middle]!.seq <= after) low = middle + 1
+    else high = middle
+  }
+  return low
 }
 
 /** Redacts, then bounds, every string; drops what JSON cannot carry. */
@@ -212,91 +243,179 @@ function cleanValue(value: unknown, redact: (text: string) => string, depth: num
 
 const EVENT_TYPES: ReadonlySet<string> = new Set(["status", "message", "tool", "result", "truncated"])
 
-/** Parses stored lines, skipping any that are not whole events (a line cut by a crash). */
-function parseLines(lines: readonly string[]): JobEvent[] {
-  const events: JobEvent[] = []
-  for (const line of lines) {
-    if (line.trim() === "") continue
-    try {
-      const parsed = JSON.parse(line) as Partial<JobEvent>
-      if (
-        typeof parsed.seq === "number" &&
-        typeof parsed.at === "string" &&
-        typeof parsed.type === "string" &&
-        EVENT_TYPES.has(parsed.type) &&
-        parsed.data !== null &&
-        typeof parsed.data === "object"
-      ) {
-        events.push(parsed as JobEvent)
-      }
-    } catch {
-      // a partial line: skipped
+/**
+ * Parses one stored line: a whole event of `jobId`, or `undefined` (a line
+ * cut by a crash, or a line of another job, which is dropped as a defence in
+ * depth against two ids sharing a file).
+ */
+function parseLine(line: string, jobId: string): JobEvent | undefined {
+  if (line.trim() === "") return undefined
+  try {
+    const parsed = JSON.parse(line) as Partial<JobEvent>
+    if (
+      parsed.job_id === jobId &&
+      typeof parsed.seq === "number" &&
+      typeof parsed.at === "string" &&
+      typeof parsed.type === "string" &&
+      EVENT_TYPES.has(parsed.type) &&
+      parsed.data !== null &&
+      typeof parsed.data === "object"
+    ) {
+      return parsed as JobEvent
     }
+  } catch {
+    // a partial line: skipped
   }
-  return events
+  return undefined
 }
 
 /**
- * The events file name of a job. Job ids are chosen by the caller and are not
- * restricted to file-name characters, so an id that is not a plain name
- * (letters, digits, `.`, `_`, `:`, `-`, not starting with `.` or `_`) is
- * replaced by its digest: the file always lands inside the jobs directory.
+ * The events file name of a job: always the SHA-256 of the exact id, so that
+ * ids differing only in case never share a file on a case-insensitive
+ * filesystem (macOS by default), and a caller-chosen id can never name a path
+ * outside the jobs directory.
  */
 export function jobEventsFileName(jobId: string): string {
-  if (/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(jobId)) return `${jobId}.events.jsonl`
-  return `_sha256-${createHash("sha256").update(jobId, "utf8").digest("hex")}.events.jsonl`
+  return `${createHash("sha256").update(jobId, "utf8").digest("hex")}.events.jsonl`
 }
 
-/** `<directory>/<id>.events.jsonl`, appended to; never loaded by `JsonFileJobStore` (it reads `*.json` only). */
+/** Jobs whose parsed events a `FileJobEventLog` keeps in memory (least recently read dropped first). */
+const DEFAULT_CACHED_JOBS = 128
+
+interface FileTail {
+  /** Bytes of the file consumed so far (the remainder included). */
+  offset: number
+  /** Trailing bytes after the last newline: a line still being written, or cut by a crash. */
+  remainder: Buffer
+  readonly events: JobEvent[]
+  /** Bytes of the whole lines read. */
+  bytes: number
+}
+
+/**
+ * `<directory>/<sha256(id)>.events.jsonl`, appended to; never loaded by
+ * `JsonFileJobStore` (it reads `*.json` only).
+ *
+ * Reads are incremental: the parsed events of recently read jobs are kept
+ * with the file offset they reach, and a read parses only the bytes appended
+ * since (by this process or another one), so following a job costs the new
+ * lines, not the whole file, on every wake.
+ */
 export class FileJobEventLog extends BoundedJobEventLog {
-  /** Jobs whose file ends in a partial line (a crash mid-append): the next line starts on a fresh one. */
+  /** Jobs whose file ended in a partial line when first loaded: the next line starts on a fresh one. */
   readonly #unterminated = new Set<string>()
+  readonly #tails = new Map<string, FileTail>()
+  readonly #cachedJobs: number
+  /** Per-job read queue, so two readers never consume the same bytes twice. */
+  readonly #reads = new Map<string, Promise<unknown>>()
+  /** Jobs this instance has appended to: a remainder seen after that is a line in flight, not a crash. */
+  readonly #everAppended = new Set<string>()
+  #bytesRead = 0
 
   constructor(
     private readonly directory: string,
-    options: BoundedJobEventLogOptions = {},
+    options: BoundedJobEventLogOptions & { readonly cachedJobs?: number } = {},
   ) {
     super(options)
+    this.#cachedJobs = Math.max(1, options.cachedJobs ?? DEFAULT_CACHED_JOBS)
   }
 
   pathFor(jobId: string): string {
     return join(this.directory, jobEventsFileName(jobId))
   }
 
-  protected async loadLines(jobId: string): Promise<string[]> {
-    let raw: string
+  /** Total bytes read from events files by this instance (diagnostics and tests). */
+  get bytesRead(): number {
+    return this.#bytesRead
+  }
+
+  protected loadEvents(jobId: string): Promise<StoredJobEvents> {
+    const previous = this.#reads.get(jobId) ?? Promise.resolve()
+    const run = previous.then(
+      () => this.#loadEvents(jobId),
+      () => this.#loadEvents(jobId),
+    )
+    const settled = run.then(
+      () => undefined,
+      () => undefined,
+    )
+    this.#reads.set(jobId, settled)
+    void settled.then(() => {
+      if (this.#reads.get(jobId) === settled) this.#reads.delete(jobId)
+    })
+    return run
+  }
+
+  async #loadEvents(jobId: string): Promise<StoredJobEvents> {
+    let tail = this.#tails.get(jobId)
+    let handle
     try {
-      raw = await readFile(this.pathFor(jobId), "utf8")
+      handle = await open(this.pathFor(jobId), "r")
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return []
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return { events: [], bytes: 0 }
       throw error
     }
-    const lines = raw.split("\n")
-    // The last element is "" after a complete final line, or a partial line.
-    if (lines.at(-1) === "") lines.pop()
-    else this.#unterminated.add(jobId)
-    return lines
+    try {
+      const { size } = await handle.stat()
+      // A file that shrank was replaced: start over.
+      if (tail === undefined || size < tail.offset) tail = { offset: 0, remainder: Buffer.alloc(0), events: [], bytes: 0 }
+      this.#remember(jobId, tail)
+      if (size > tail.offset) {
+        const fresh = Buffer.alloc(size - tail.offset)
+        const { bytesRead } = await handle.read(fresh, 0, fresh.length, tail.offset)
+        this.#bytesRead += bytesRead
+        tail.offset += bytesRead
+        let buffer = Buffer.concat([tail.remainder, fresh.subarray(0, bytesRead)])
+        for (let newline = buffer.indexOf(0x0a); newline !== -1; newline = buffer.indexOf(0x0a)) {
+          const line = buffer.subarray(0, newline)
+          tail.bytes += line.length + 1
+          const event = parseLine(line.toString("utf8"), jobId)
+          if (event !== undefined && (tail.events.at(-1)?.seq ?? 0) < event.seq) tail.events.push(event)
+          buffer = buffer.subarray(newline + 1)
+        }
+        tail.remainder = Buffer.from(buffer)
+      }
+      if (tail.remainder.length > 0 && !this.#everAppended.has(jobId)) this.#unterminated.add(jobId)
+      return { events: tail.events, bytes: tail.bytes + tail.remainder.length }
+    } finally {
+      await handle.close()
+    }
   }
 
   protected async storeLine(jobId: string, line: string): Promise<void> {
     await mkdir(this.directory, { recursive: true })
     const prefix = this.#unterminated.delete(jobId) ? "\n" : ""
+    this.#everAppended.add(jobId)
     await appendFile(this.pathFor(jobId), `${prefix}${line}`, { encoding: "utf8", mode: 0o600 })
+  }
+
+  /** Keeps `tail` as the most recently used; drops the least recently used beyond the cap. */
+  #remember(jobId: string, tail: FileTail): void {
+    this.#tails.delete(jobId)
+    this.#tails.set(jobId, tail)
+    while (this.#tails.size > this.#cachedJobs) {
+      const oldest = this.#tails.keys().next().value
+      if (oldest === undefined) break
+      this.#tails.delete(oldest)
+    }
   }
 }
 
 /** The same contract in memory: the default when an app is built without a log (tests, embedders). */
 export class InMemoryJobEventLog extends BoundedJobEventLog {
-  readonly #lines = new Map<string, string[]>()
+  readonly #events = new Map<string, { events: JobEvent[]; bytes: number }>()
 
-  protected async loadLines(jobId: string): Promise<string[]> {
-    return [...(this.#lines.get(jobId) ?? [])]
+  protected async loadEvents(jobId: string): Promise<StoredJobEvents> {
+    const stored = this.#events.get(jobId)
+    return stored === undefined ? { events: [], bytes: 0 } : { events: [...stored.events], bytes: stored.bytes }
   }
 
   protected async storeLine(jobId: string, line: string): Promise<void> {
-    const lines = this.#lines.get(jobId) ?? []
-    lines.push(line.replace(/\n$/, ""))
-    this.#lines.set(jobId, lines)
+    const stored = this.#events.get(jobId) ?? { events: [], bytes: 0 }
+    const event = parseLine(line.replace(/\n$/, ""), jobId)
+    if (event !== undefined) stored.events.push(event)
+    stored.bytes += Buffer.byteLength(line, "utf8")
+    this.#events.set(jobId, stored)
   }
 }
 

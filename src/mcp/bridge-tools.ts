@@ -166,7 +166,7 @@ export const TOOL_DEFINITIONS: readonly ToolDefinition[] = [
   {
     name: "bridge_events",
     description:
-      "Read what a dispatched job has done so far, in order: status changes, messages, tool use and the final result (secrets are redacted on the worker). Returns one page of events and `next`; pass `next` back as `after` to read on. `final: true` means the job has ended. Use it to follow a long job between bridge_await calls or to see why a job failed.",
+      "Read what a dispatched job has done so far, in order: status changes, messages, tool use and the final result (secrets are redacted on the worker). Returns one page of events and `next`; pass `next` back as `after` to read on. `final: true` means the job has ended and this page reaches its last event, so there is nothing more to read; `final: false` with an ended `status` means read on. Use it to follow a long job between bridge_await calls or to see why a job failed.",
     inputSchema: {
       type: "object",
       properties: {
@@ -537,7 +537,8 @@ export class BridgeTools {
       job_id: jobId,
       target,
       status,
-      final: TERMINAL_STATUSES.has(status),
+      // The worker decides: an ended job whose page misses its last events is not final yet.
+      final: typeof payload.final === "boolean" ? payload.final && TERMINAL_STATUSES.has(status) : false,
       events: Array.isArray(payload.events) ? payload.events : [],
       next: typeof payload.next === "number" ? payload.next : after,
     }

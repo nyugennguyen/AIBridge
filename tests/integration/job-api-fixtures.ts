@@ -36,6 +36,7 @@ export interface JobApiAppOptions {
   readonly opencodeClient?: FakeOpencodeClient
   readonly reportTerminalJob?: (job: JobRecord) => Promise<void>
   readonly cancelStopWaitMs?: number
+  readonly jobEventStreamLimits?: AppDependencies["jobEventStreamLimits"]
 }
 
 export async function jobApiApp(options: JobApiAppOptions = {}) {
@@ -88,6 +89,7 @@ export async function jobApiApp(options: JobApiAppOptions = {}) {
     log: (level, message) => logLines.push(`${level} ${message}`),
     ...(options.claudeJobRunner !== undefined ? { claudeJobRunner: options.claudeJobRunner } : {}),
     ...(options.cancelStopWaitMs !== undefined ? { cancelStopWaitMs: options.cancelStopWaitMs } : {}),
+    ...(options.jobEventStreamLimits !== undefined ? { jobEventStreamLimits: options.jobEventStreamLimits } : {}),
   })
 
   /** A request from `peer`: bearer plus that peer's node signature. */
@@ -114,6 +116,11 @@ export async function jobApiApp(options: JobApiAppOptions = {}) {
       payload: body,
     })
   }
+  /** The headers of a signed request from `peer` for `path` (for a real HTTP client). */
+  const peerHeaders = (peer: Peer, method: "GET" | "POST", path: string): Record<string, string> => ({
+    authorization: "Bearer secret",
+    ...signedRequestHeaders({ key: keys[peer], agentId: peer, method, url: `${WORKER_URL}${path}`, body: null, now: Date.now() }),
+  })
   /** A request with the operator credential, from this host unless `remoteAddress` says otherwise. */
   const asOperator = (method: "GET" | "POST", path: string, init: { remoteAddress?: string; headers?: Record<string, string> } = {}) =>
     app.inject({
@@ -141,5 +148,5 @@ export async function jobApiApp(options: JobApiAppOptions = {}) {
     return jobManager.getJob(id)
   }
 
-  return { app, config, jobManager, events, keys, reports, logLines, ledger, opencode, taskGraphSyncer, asPeer, asOperator, triggerAs, seedJob }
+  return { app, config, jobManager, events, keys, reports, logLines, ledger, opencode, taskGraphSyncer, asPeer, peerHeaders, asOperator, triggerAs, seedJob }
 }

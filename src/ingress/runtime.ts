@@ -146,7 +146,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     options.operatorToken,
     opencodeConfig !== undefined ? options.environment[opencodeConfig.password_env] : undefined,
   ].filter((value): value is string => typeof value === "string" && value.length > 0)
-  // `GET /jobs/:id/events`: `<state>/jobs/<id>.events.jsonl`, redacted like
+  // `GET /jobs/:id/events`: `<state>/jobs/<sha256(id)>.events.jsonl`, redacted like
   // job results (block R) before anything is written.
   const jobEvents = new FileJobEventLog(join(options.stateDir, "jobs"), {
     redact: (text) => redactSecretsFromText(text, knownSecrets),

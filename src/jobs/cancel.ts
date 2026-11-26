@@ -20,13 +20,20 @@
  *
  * The OpenCode order matters: the job is ended BEFORE the session is aborted,
  * so the session monitor (which sees the aborted session go idle) finds the
- * job terminal and cannot report it as completed.
+ * job terminal and cannot report it as completed. Because that monitor then
+ * stops, a job this module ends also fails (and reports) its local
+ * dependents itself (`failDependentsOf`).
+ *
+ * The job's error is the cancel reason: `cancelled by requester`, or
+ * `cancelled by operator` when the operator credential cancelled it.
  */
 import type { JobManager } from "./manager.js"
 import type { JobRecord, JobStatus } from "./types.js"
 
-/** The error a cancelled job ends with, and its report summary. */
+/** The error a job cancelled by its requester ends with, and its report summary. */
 export const CANCELLED_BY_REQUESTER = "cancelled by requester"
+/** The error a job cancelled with the operator credential ends with. */
+export const CANCELLED_BY_OPERATOR = "cancelled by operator"
 
 const TERMINAL: ReadonlySet<JobStatus> = new Set(["completed", "failed", "timed_out", "callback_failed"])
 /** States in which the job provably has not reached a runtime (with no `launchStartedAt`). */
@@ -37,7 +44,9 @@ export function isTerminalStatus(status: JobStatus): boolean {
 }
 
 export interface CancelDependencies {
-  readonly jobManager: Pick<JobManager, "getJob" | "markFailedIf">
+  readonly jobManager: Pick<JobManager, "getJob" | "markFailedIf"> & Partial<Pick<JobManager, "failDependentsOf">>
+  /** The error the job ends with: `CANCELLED_BY_REQUESTER` (default) or `CANCELLED_BY_OPERATOR`. */
+  readonly reason?: string
   /** The Claude runner, when this node runs one. */
   readonly runner?: {
     readonly isActive?: (jobId: string) => boolean
@@ -54,7 +63,7 @@ export interface CancelDependencies {
 }
 
 export type CancelOutcome =
-  /** The job is now `failed` with `CANCELLED_BY_REQUESTER` and its report was handed to the reporter. */
+  /** The job is now `failed` with the cancel reason and its report was handed to the reporter. */
   | { readonly kind: "cancelled"; readonly job: JobRecord }
   /** The stop was requested but the job had not ended within `stopWaitMs`; it ends (and reports) on its own. */
   | { readonly kind: "stopping"; readonly job: JobRecord }
@@ -64,6 +73,7 @@ export type CancelOutcome =
   | { readonly kind: "not_found" }
 
 export async function cancelJob(jobId: string, dependencies: CancelDependencies): Promise<CancelOutcome> {
+  const reason = dependencies.reason ?? CANCELLED_BY_REQUESTER
   let job = await read(dependencies, jobId)
   if (job === undefined) return { kind: "not_found" }
   if (TERMINAL.has(job.status)) return { kind: "finished", job }
@@ -75,7 +85,7 @@ export async function cancelJob(jobId: string, dependencies: CancelDependencies)
   if (job.launchStartedAt === undefined && NOT_LAUNCHED.has(job.status)) {
     const ended = await dependencies.jobManager.markFailedIf(
       jobId,
-      CANCELLED_BY_REQUESTER,
+      reason,
       (current) => current.launchStartedAt === undefined && NOT_LAUNCHED.has(current.status),
     )
     if (ended !== undefined) return await finish(ended, dependencies)
@@ -91,19 +101,19 @@ export async function cancelJob(jobId: string, dependencies: CancelDependencies)
   // write), so this covers launching and running jobs alike.
   const runner = dependencies.runner
   if (runner?.stop !== undefined && runner.isActive?.(jobId) === true) {
-    const stop = await runner.stop(jobId, CANCELLED_BY_REQUESTER, dependencies.stopWaitMs)
+    const stop = await runner.stop(jobId, reason, dependencies.stopWaitMs)
     const after = await read(dependencies, jobId)
     if (after === undefined) return { kind: "not_found" }
     if (!TERMINAL.has(after.status)) {
-      // Still ending. The one that asked first owns the answer.
-      return stop === "stopping" ? { kind: "stopping", job: after } : { kind: "finished", job: after }
+      // Still ending (this stop, or an earlier cancel or kill switch, asked): not finished yet.
+      return { kind: "stopping", job: after }
     }
-    return stop === "stopping" && after.error === CANCELLED_BY_REQUESTER ? { kind: "cancelled", job: after } : { kind: "finished", job: after }
+    return stop === "stopping" && after.error === reason ? { kind: "cancelled", job: after } : { kind: "finished", job: after }
   }
 
   // 3. Launched elsewhere (OpenCode), or a launched job no runner in this
   // process drives: end it, then stop its session.
-  const ended = await dependencies.jobManager.markFailedIf(jobId, CANCELLED_BY_REQUESTER, (current) => current.status !== "awaiting_approval")
+  const ended = await dependencies.jobManager.markFailedIf(jobId, reason, (current) => current.status !== "awaiting_approval")
   if (ended === undefined) {
     const current = await read(dependencies, jobId)
     if (current === undefined) return { kind: "not_found" }
@@ -118,6 +128,14 @@ export async function cancelJob(jobId: string, dependencies: CancelDependencies)
 async function finish(ended: JobRecord, dependencies: CancelDependencies): Promise<CancelOutcome> {
   await dependencies.syncFailedTask?.(ended).catch(() => undefined)
   await dependencies.reportTerminalJob(ended).catch(() => undefined)
+  // Same outcome as any other failure of a dependency: local dependents
+  // waiting on this job fail now (not at the sweep's grace window), and the
+  // ones this call failed are reported by it.
+  const dependents = (await dependencies.jobManager.failDependentsOf?.(ended.id).catch(() => [])) ?? []
+  for (const dependent of dependents) {
+    await dependencies.syncFailedTask?.(dependent).catch(() => undefined)
+    await dependencies.reportTerminalJob(dependent).catch(() => undefined)
+  }
   return { kind: "cancelled", job: ended }
 }
 

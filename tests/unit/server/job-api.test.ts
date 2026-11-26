@@ -3,10 +3,11 @@
  * through `app.inject()`.
  */
 import { describe, expect, it } from "vitest"
-import { CANCELLED_BY_REQUESTER } from "../../../src/jobs/cancel.js"
+import type { TriggerRequest } from "../../../src/config/types.js"
+import { CANCELLED_BY_OPERATOR, CANCELLED_BY_REQUESTER } from "../../../src/jobs/cancel.js"
 import { InMemoryJobEventLog } from "../../../src/jobs/events.js"
 import { decodeJobCursor, encodeJobCursor, pageJobs } from "../../../src/server/routes/job-api.js"
-import { FakeOpencodeClient } from "../../integration/fixtures.js"
+import { FakeOpencodeClient, validTrigger } from "../../integration/fixtures.js"
 import { jobApiApp } from "../../integration/job-api-fixtures.js"
 
 /** Parses an SSE body into its events. */
@@ -22,6 +23,11 @@ function parseSse(body: string): Array<{ id?: string; event?: string; data?: str
       }
       return out
     })
+}
+
+/** Polls `condition` every 2 ms for up to 2 s. */
+async function until(condition: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 1_000 && !condition(); attempt += 1) await new Promise((resolve) => setTimeout(resolve, 2))
 }
 
 class RecordingOpencodeClient extends FakeOpencodeClient {
@@ -197,14 +203,104 @@ describe("GET /jobs/:id/events", () => {
     ])
   })
 
-  it("ends open streams when the bridge closes, so a follower never holds up a stop", async () => {
-    const h = await jobApiApp()
+  it("ends open streams when the bridge closes and releases their subscriptions", async () => {
+    const events = new InMemoryJobEventLog()
+    const h = await jobApiApp({ events })
     await h.seedJob("job_1", "dev-main", "running")
     const streaming = h.asPeer("dev-main", "GET", "/jobs/job_1/events", { accept: "text/event-stream" })
-    await new Promise((resolve) => setTimeout(resolve, 30))
+    await until(() => events.subscriberCount("job_1") === 1)
     await h.app.close()
-    const events = parseSse((await streaming).body)
-    expect(events.map((event) => event.id)).toEqual(["1", "2"])
+    const parsed = parseSse((await streaming).body)
+    expect(parsed.map((event) => event.id)).toEqual(["1", "2"])
+    expect(events.subscriberCount("job_1")).toBe(0)
+  })
+
+  it("releases a stream's subscription and slot when the client disconnects", async () => {
+    const events = new InMemoryJobEventLog()
+    const h = await jobApiApp({ events, jobEventStreamLimits: { perCaller: 1 } })
+    await h.seedJob("job_1", "dev-main", "running")
+    const address = await h.app.listen({ host: "127.0.0.1", port: 0 })
+    try {
+      const path = "/jobs/job_1/events"
+      const controller = new AbortController()
+      const response = await fetch(`${address}${path}`, {
+        headers: { ...h.peerHeaders("dev-main", "GET", path), accept: "text/event-stream" },
+        signal: controller.signal,
+      })
+      expect(response.status).toBe(200)
+      const reader = response.body!.getReader()
+      await reader.read()
+      await until(() => events.subscriberCount("job_1") === 1)
+      // The one slot this caller has is taken.
+      expect((await h.asPeer("dev-main", "GET", path, { accept: "text/event-stream" })).statusCode).toBe(429)
+      controller.abort()
+      await reader.cancel().catch(() => undefined)
+      await until(() => events.subscriberCount("job_1") === 0)
+      expect(events.subscriberCount("job_1")).toBe(0)
+      // The slot is free again: a finished job's stream opens and ends.
+      await h.jobManager.markCompleted("job_1")
+      expect((await h.asPeer("dev-main", "GET", path, { accept: "text/event-stream" })).statusCode).toBe(200)
+    } finally {
+      await h.app.close()
+    }
+  })
+
+  it("caps open streams per caller, per job and in total (429)", async () => {
+    const events = new InMemoryJobEventLog()
+    const h = await jobApiApp({ events, jobEventStreamLimits: { global: 3, perCaller: 2, perJob: 2 } })
+    for (const [id, peer] of [["job_a", "dev-main"], ["job_b", "dev-main"], ["job_q", "qa-node"], ["job_q2", "qa-node"]] as const) {
+      await h.seedJob(id, peer, "running")
+    }
+    const open = (peer: "dev-main" | "qa-node", id: string) => h.asPeer(peer, "GET", `/jobs/${id}/events`, { accept: "text/event-stream" })
+    const streams = [open("dev-main", "job_a"), open("dev-main", "job_b")]
+    await until(() => events.subscriberCount("job_a") === 1 && events.subscriberCount("job_b") === 1)
+    const perCaller = await open("dev-main", "job_a")
+    expect(perCaller.statusCode).toBe(429)
+    expect(perCaller.json().code).toBe("too_many_streams")
+    streams.push(open("qa-node", "job_q"))
+    await until(() => events.subscriberCount("job_q") === 1)
+    // Three are open: the global cap refuses a fourth from a caller with room.
+    expect((await open("qa-node", "job_q2")).statusCode).toBe(429)
+    // The JSON page is not a stream and is never capped.
+    expect((await h.asPeer("qa-node", "GET", "/jobs/job_q2/events")).statusCode).toBe(200)
+    await h.app.close()
+    await Promise.all(streams)
+  })
+
+  it("sends a follower only the events stored after its wake, never a repeat", async () => {
+    const events = new InMemoryJobEventLog()
+    const h = await jobApiApp({ events })
+    await h.seedJob("job_1", "dev-main", "running")
+    const streaming = h.asPeer("dev-main", "GET", "/jobs/job_1/events", { accept: "text/event-stream" })
+    await until(() => events.subscriberCount("job_1") === 1)
+    for (let index = 0; index < 5; index += 1) {
+      await events.append("job_1", { type: "message", data: { index } })
+      await new Promise((resolve) => setTimeout(resolve, 2))
+    }
+    await h.jobManager.markCompleted("job_1")
+    const ids = parseSse((await streaming).body)
+      .filter((event) => event.id !== undefined)
+      .map((event) => Number(event.id))
+    expect(ids).toEqual([1, 2, 3, 4, 5, 6, 7, 8])
+  })
+
+  it("sets `final` only on a page that reaches the ended job's last event", async () => {
+    const h = await jobApiApp()
+    await h.seedJob("job_1", "dev-main", "running")
+    // The job ends, but its terminal event is not in the log yet (the window
+    // between the record's write and the event's append).
+    const append = h.events.append.bind(h.events)
+    h.events.append = async () => undefined
+    await h.jobManager.markCompleted("job_1")
+    const early = (await h.asPeer("dev-main", "GET", "/jobs/job_1/events")).json()
+    expect(early).toMatchObject({ status: "completed", final: false, next: 2 })
+    h.events.append = append
+    await h.events.append("job_1", { type: "status", data: { status: "completed", from: "running" } })
+    // A page cut by `limit` before the terminal event is not final either.
+    expect((await h.asPeer("dev-main", "GET", "/jobs/job_1/events?limit=1")).json().final).toBe(false)
+    expect((await h.asPeer("dev-main", "GET", "/jobs/job_1/events")).json().final).toBe(true)
+    // Past the terminal event: final, with nothing more to read.
+    expect((await h.asPeer("dev-main", "GET", "/jobs/job_1/events?after=3")).json()).toMatchObject({ final: true, events: [], next: 3 })
   })
 
   it("ends a finished job's stream even when it has no events (records older than the log)", async () => {
@@ -318,8 +414,74 @@ describe("POST /jobs/:id/cancel", () => {
     const h = await jobApiApp()
     await h.seedJob("job_1", "qa-node", "accepted")
     expect((await h.asOperator("POST", "/jobs/job_1/cancel", { remoteAddress: "100.64.0.77" })).statusCode).toBe(403)
-    expect((await h.asOperator("POST", "/jobs/job_1/cancel")).statusCode).toBe(200)
+    const response = await h.asOperator("POST", "/jobs/job_1/cancel")
+    expect(response.statusCode).toBe(200)
+    // The operator's cancel says so; it is not recorded as the requester's.
+    expect(response.json().error).toBe(CANCELLED_BY_OPERATOR)
+    expect(h.reports.map((job) => job.error)).toEqual([CANCELLED_BY_OPERATOR])
     expect(h.logLines).toContain("info job job_1 cancel by operator: cancelled (status failed)")
+  })
+
+  it("answers 202 (still stopping), not 409, to a cancel that comes while an earlier stop is still ending the job", async () => {
+    const h = await jobApiApp({
+      claudeJobRunner: {
+        start: async () => {
+          throw new Error("unused")
+        },
+        monitor: async () => undefined,
+        isActive: () => true,
+        // The first stop was asked earlier and the job has not ended yet.
+        stop: async () => "already_stopping" as const,
+      },
+    })
+    await h.seedJob("job_1", "dev-main", "running")
+    const response = await h.asPeer("dev-main", "POST", "/jobs/job_1/cancel")
+    expect(response.statusCode).toBe(202)
+    expect(response.json()).toMatchObject({ status: "running", cancelling: true })
+  })
+
+  it("answers 409 cancel_in_progress to a cancel made while another is in flight", async () => {
+    let release: () => void = () => undefined
+    const held = new Promise<void>((resolve) => (release = resolve))
+    let stops = 0
+    const h = await jobApiApp({
+      claudeJobRunner: {
+        start: async () => {
+          throw new Error("unused")
+        },
+        monitor: async () => undefined,
+        isActive: () => true,
+        stop: async () => {
+          stops += 1
+          await held
+          return "stopping" as const
+        },
+      },
+    })
+    await h.seedJob("job_1", "dev-main", "running")
+    const first = h.asPeer("dev-main", "POST", "/jobs/job_1/cancel")
+    for (let attempt = 0; attempt < 100 && stops === 0; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 2))
+    expect(stops).toBe(1)
+    const second = await h.asPeer("dev-main", "POST", "/jobs/job_1/cancel")
+    expect(second.statusCode).toBe(409)
+    expect(second.json().code).toBe("cancel_in_progress")
+    release()
+    expect((await first).statusCode).toBe(202)
+    expect(stops).toBe(1)
+  })
+
+  it("fails and reports the local dependents of a cancelled job at once", async () => {
+    const opencode = new RecordingOpencodeClient()
+    const h = await jobApiApp({ opencodeClient: opencode })
+    await h.seedJob("job_1", "dev-main", "running")
+    await h.jobManager.createJob(validTrigger({ job_id: "job_2", depends_on: ["job_1"] }) as TriggerRequest)
+    await h.jobManager.markBlocked("job_2", ["job_1"])
+    await h.jobManager.createJob(validTrigger({ job_id: "job_3", depends_on: ["job_2"] }) as TriggerRequest)
+    await h.jobManager.markBlocked("job_3", ["job_2"])
+    expect((await h.asPeer("dev-main", "POST", "/jobs/job_1/cancel")).statusCode).toBe(200)
+    expect(await h.jobManager.getJob("job_2")).toMatchObject({ status: "failed", error: "Dependency job_1 failed" })
+    expect(await h.jobManager.getJob("job_3")).toMatchObject({ status: "failed", error: "Dependency job_2 failed" })
+    expect(h.reports.map((job) => job.id)).toEqual(["job_1", "job_2", "job_3"])
   })
 
   it("refuses another peer (403), an unsigned peer, and an unknown job (404)", async () => {

@@ -328,6 +328,30 @@ export class JobManager {
     return unblocked
   }
 
+  /**
+   * Fails the local dependents of a job that ended unsuccessfully, as
+   * `unblockDependents` does, but each under its job's lock and only while it
+   * is still `blocked`: a dependent that another path (the sweep) ended
+   * meanwhile is left alone. Returns the dependents THIS call failed, so the
+   * caller reports exactly those.
+   */
+  async failDependentsOf(failedJobId: string, now = new Date().toISOString()): Promise<JobRecord[]> {
+    const failed: JobRecord[] = []
+    for (const job of await this.store.list()) {
+      if (job.status !== "blocked" || !(job.depends_on ?? []).includes(failedJobId)) continue
+      const outcome = await this.dependencyOutcome(job, now)
+      if (outcome.kind !== "failed") continue
+      const ended = await this.transitionIf(job.id, "failed", now, { error: this.redactError(outcome.error) }, (current) => current.status === "blocked").catch(
+        () => undefined,
+      )
+      if (ended === undefined) continue
+      failed.push(ended)
+      // A failed dependent fails its own dependents in turn.
+      failed.push(...(await this.failDependentsOf(ended.id, now)))
+    }
+    return failed
+  }
+
   async getJob(id: string): Promise<JobRecord> {
     const job = await this.store.get(id)
     if (!job) throw new Error(`Unknown job: ${id}`)

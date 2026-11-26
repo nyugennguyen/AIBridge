@@ -36,6 +36,26 @@ export function describeJobEventLogContract(name: string, create: (options: Cont
       expect(page.next).toBe(2)
     })
 
+    it("keeps ids that differ only in case apart: separate numbering, events and subscribers", async () => {
+      const subject = await create({})
+      const lower: JobEvent[] = []
+      subject.log.subscribe("abc", (event) => lower.push(event))
+      await subject.log.append("abc", { type: "message", data: { owner: "A" } })
+      await subject.log.append("ABC", { type: "message", data: { owner: "B" } })
+      await subject.log.append("ABC", { type: "message", data: { owner: "B" } })
+      const readers = [subject.log, ...(subject.reopen !== undefined ? [subject.reopen()] : [])]
+      for (const reader of readers) {
+        const a = await reader.read("abc", 0, 10)
+        const b = await reader.read("ABC", 0, 10)
+        expect(a.events.map((event) => [event.job_id, event.seq, event.data.owner])).toEqual([["abc", 1, "A"]])
+        expect(b.events.map((event) => [event.job_id, event.seq, event.data.owner])).toEqual([
+          ["ABC", 1, "B"],
+          ["ABC", 2, "B"],
+        ])
+      }
+      expect(lower.map((event) => event.data.owner)).toEqual(["A"])
+    })
+
     it("reads after a cursor, at most `limit`, oldest first; `next` continues the read", async () => {
       const { log } = await create({})
       for (let index = 0; index < 5; index += 1) await log.append("job", { type: "message", data: { index } })

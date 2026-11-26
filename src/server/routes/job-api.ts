@@ -3,7 +3,9 @@
  *
  *   GET  /jobs               the caller's jobs, newest first (compact: no prompt, no result)
  *   GET  /jobs/:id/events    what a job did, in order: JSON pages, or SSE with Last-Event-ID
- *   POST /jobs/:id/cancel    ends one job: `failed`, "cancelled by requester", reported once
+ *   POST /jobs/:id/cancel    ends one job: `failed`, "cancelled by requester" (or "by operator"), reported once
+ *
+ * Open SSE streams are capped (`jobEventStreamLimits`); one more answers 429.
  *
  * Who may call (`resolveJobCaller`):
  * - the OPERATOR credential, under the same rules as `aibr approve`
@@ -23,8 +25,8 @@
  */
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify"
 import { z } from "zod"
-import { CANCELLED_BY_REQUESTER, cancelJob, isTerminalStatus, type CancelOutcome } from "../../jobs/cancel.js"
-import { InMemoryJobEventLog, type JobEvent, type JobEventLog } from "../../jobs/events.js"
+import { CANCELLED_BY_OPERATOR, CANCELLED_BY_REQUESTER, cancelJob, isTerminalStatus, type CancelOutcome } from "../../jobs/cancel.js"
+import { InMemoryJobEventLog, type JobEvent, type JobEventLog, type JobEventPage } from "../../jobs/events.js"
 import type { JobRecord, JobStatus } from "../../jobs/types.js"
 import { requireIdentityGuard } from "../../pairing/verifier.js"
 import { bearerTokenMatches, createAuthProvider } from "../../security/auth-provider.js"
@@ -155,6 +157,7 @@ export function registerJobApiRoutes(app: FastifyInstance, dependencies: AppDepe
   app.addHook("preClose", async () => {
     for (const end of streams) end()
   })
+  const streamSlots = new StreamSlots({ ...DEFAULT_STREAM_LIMITS, ...dependencies.jobEventStreamLimits })
 
   const resolveJobCaller = async (request: FastifyRequest): Promise<CallerResolution> => {
     const authorization = request.headers.authorization
@@ -240,15 +243,26 @@ export function registerJobApiRoutes(app: FastifyInstance, dependencies: AppDepe
     let after = query.data.after ?? 0
 
     if (!acceptsEventStream(request)) {
-      const page = await events.read(jobId, after, limit)
+      // The job first: if it ends between the two reads, its terminal event
+      // is in the page or `final` stays false; never `final` on a page that
+      // misses the job's last events.
       const job = await dependencies.jobManager.getJob(jobId).catch(() => loaded.job)
-      return { job_id: jobId, status: job.status, final: isTerminalStatus(job.status), events: page.events, next: page.next }
+      const page = await events.read(jobId, after, limit)
+      const final = isTerminalStatus(job.status) && (await pageIsFinal(events, jobId, page, limit))
+      return { job_id: jobId, status: job.status, final, events: page.events, next: page.next }
     }
 
     // SSE: resumes after `Last-Event-ID` (the `seq` of the last event seen).
     const lastEventId = Number.parseInt(String(request.headers["last-event-id"] ?? ""), 10)
     if (Number.isInteger(lastEventId) && lastEventId >= 0) after = lastEventId
-    await streamJobEvents({ jobId, after, events, dependencies, reply, pollMs, streams })
+    const callerKey = resolved.caller.kind === "operator" ? "operator" : `requester:${resolved.caller.agentId}`
+    const refusal = streamSlots.acquire(callerKey, jobId)
+    if (refusal !== undefined) return reply.code(429).send({ error: refusal, code: "too_many_streams" })
+    try {
+      await streamJobEvents({ jobId, after, events, dependencies, reply, pollMs, streams })
+    } finally {
+      streamSlots.release(callerKey, jobId)
+    }
     return reply
   })
 
@@ -270,6 +284,7 @@ export function registerJobApiRoutes(app: FastifyInstance, dependencies: AppDepe
         ...(dependencies.claudeJobRunner !== undefined ? { runner: dependencies.claudeJobRunner } : {}),
         abortOpencodeSession: (sessionId) => dependencies.opencodeClient.abortSession(sessionId),
         reportTerminalJob: report,
+        reason: caller.kind === "operator" ? CANCELLED_BY_OPERATOR : CANCELLED_BY_REQUESTER,
         syncFailedTask: (job) => dependencies.taskGraphSyncer.syncJobToTask(job.trigger.task_id ?? `#${job.id}`, "failed"),
         ...(dependencies.cancelStopWaitMs !== undefined ? { stopWaitMs: dependencies.cancelStopWaitMs } : {}),
       })
@@ -302,6 +317,69 @@ export function registerJobApiRoutes(app: FastifyInstance, dependencies: AppDepe
         return reply.code(404).send({ error: "Job not found" })
     }
   })
+}
+
+export interface JobEventStreamLimits {
+  /** Open SSE streams on this bridge. */
+  readonly global: number
+  /** Open SSE streams per caller (the operator, or one requester). */
+  readonly perCaller: number
+  /** Open SSE streams per job. */
+  readonly perJob: number
+}
+
+export const DEFAULT_STREAM_LIMITS: JobEventStreamLimits = { global: 64, perCaller: 8, perJob: 16 }
+
+/** Counts open SSE streams; a stream past any limit is refused (429) before it opens. */
+class StreamSlots {
+  #total = 0
+  readonly #byCaller = new Map<string, number>()
+  readonly #byJob = new Map<string, number>()
+
+  constructor(private readonly limits: JobEventStreamLimits) {}
+
+  /** Takes a slot, or returns why not. */
+  acquire(caller: string, jobId: string): string | undefined {
+    if (this.#total >= this.limits.global) return `This node already serves ${this.limits.global} event streams; retry later or read pages instead.`
+    if ((this.#byCaller.get(caller) ?? 0) >= this.limits.perCaller) {
+      return `The caller already has ${this.limits.perCaller} open event streams; close one or read pages instead.`
+    }
+    if ((this.#byJob.get(jobId) ?? 0) >= this.limits.perJob) return `This job already has ${this.limits.perJob} open event streams.`
+    this.#total += 1
+    this.#byCaller.set(caller, (this.#byCaller.get(caller) ?? 0) + 1)
+    this.#byJob.set(jobId, (this.#byJob.get(jobId) ?? 0) + 1)
+    return undefined
+  }
+
+  release(caller: string, jobId: string): void {
+    this.#total -= 1
+    decrement(this.#byCaller, caller)
+    decrement(this.#byJob, jobId)
+  }
+}
+
+function decrement(counts: Map<string, number>, key: string): void {
+  const next = (counts.get(key) ?? 1) - 1
+  if (next <= 0) counts.delete(key)
+  else counts.set(key, next)
+}
+
+function endsLog(event: JobEvent): boolean {
+  return event.type === "truncated" || (event.type === "status" && typeof event.data.status === "string" && isTerminalStatus(event.data.status as JobStatus))
+}
+
+/**
+ * Whether a page of a job already known to be terminal holds its last
+ * events: the page is the tail of the log, and the log's terminal event (its
+ * terminal `status`, or `truncated`) is in the page or before it. A log with
+ * no status event at all (records older than the log) is final at its tail.
+ */
+async function pageIsFinal(events: JobEventLog, jobId: string, page: JobEventPage, limit: number): Promise<boolean> {
+  if (page.events.length >= limit) return false
+  if (page.events.some(endsLog)) return true
+  const whole = await events.read(jobId, 0, Number.MAX_SAFE_INTEGER)
+  if (whole.events.some((event) => endsLog(event) && event.seq <= page.next)) return true
+  return !whole.events.some((event) => event.type === "status")
 }
 
 function acceptsEventStream(request: FastifyRequest): boolean {

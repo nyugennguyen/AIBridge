@@ -1,6 +1,6 @@
 /**
  * v3.2.0 block B, security:
- * - the per-job event log (`<jobs>/<id>.events.jsonl`, `GET /jobs/:id/events`)
+ * - the per-job event log (`<jobs>/<sha256(id)>.events.jsonl`, `GET /jobs/:id/events`)
  *   never carries a token or secret, even when the agent prints them into the
  *   places the adapter does not redact itself (tool names, system subtypes);
  * - a peer can neither list, follow nor cancel another peer's jobs, and cannot
@@ -13,7 +13,7 @@ import { join } from "node:path"
 import { PassThrough } from "node:stream"
 import { describe, expect, it } from "vitest"
 import type { BridgeConfig } from "../../src/config/types.js"
-import { FileJobEventLog } from "../../src/jobs/events.js"
+import { FileJobEventLog, jobEventsFileName } from "../../src/jobs/events.js"
 import { JobManager } from "../../src/jobs/manager.js"
 import { JsonFileJobStore } from "../../src/jobs/store.js"
 import type { JobRecord } from "../../src/jobs/types.js"
@@ -146,7 +146,7 @@ describe("job events never carry a secret", () => {
     expect((await monitors[0])?.status).toBe("completed")
 
     const files = (await readdir(jobsDir)).filter((name) => name.endsWith(".events.jsonl"))
-    expect(files).toEqual(["job_1.events.jsonl"])
+    expect(files).toEqual([jobEventsFileName("job_1")])
     const onDisk = await readFile(join(jobsDir, files[0]!), "utf8")
     expect(onDisk).toContain('"type":"tool"')
     expect(onDisk).toContain('"type":"result"')

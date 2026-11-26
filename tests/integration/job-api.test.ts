@@ -10,7 +10,7 @@ import { join } from "node:path"
 import { describe, expect, it } from "vitest"
 import type { BridgeConfig } from "../../src/config/types.js"
 import { CANCELLED_BY_REQUESTER } from "../../src/jobs/cancel.js"
-import { InMemoryJobEventLog } from "../../src/jobs/events.js"
+import { InMemoryJobEventLog, jobEventsFileName } from "../../src/jobs/events.js"
 import { JobManager } from "../../src/jobs/manager.js"
 import { JsonFileJobStore } from "../../src/jobs/store.js"
 import type { JobRecord } from "../../src/jobs/types.js"
@@ -18,6 +18,11 @@ import { BridgeTools, type BridgeToolDeps } from "../../src/mcp/bridge-tools.js"
 import { ClaudeJobRunner, STOPPED_BY_OPERATOR, type ClaudeRuntimeAdapterPort } from "../../src/runtime/claude-job-runner.js"
 import { FakeOpencodeClient, testConfig, validTrigger } from "./fixtures.js"
 import { jobApiApp, WORKER_URL, type Peer } from "./job-api-fixtures.js"
+
+/** Polls `condition` every 2 ms for up to 2 s. */
+async function until(condition: () => boolean | Promise<boolean>): Promise<void> {
+  for (let attempt = 0; attempt < 1_000 && !(await condition()); attempt += 1) await new Promise((resolve) => setTimeout(resolve, 2))
+}
 
 class FakeClaudeAdapter {
   state: "working" | "completed" | "failed" = "working"
@@ -107,7 +112,7 @@ describe("trigger -> events -> cancel (Claude runtime)", () => {
     const h = await claudeHarness()
     expect((await h.triggerAs("dev-main", { job_id: "job_1", capability: "testing" })).statusCode).toBe(202)
     h.adapter.pending.push("Tool call: Bash")
-    await new Promise((resolve) => setTimeout(resolve, 20))
+    await until(async () => (await h.events.read("job_1", 0, 100)).events.some((event) => event.type === "tool"))
 
     const listed = (await h.asPeer("dev-main", "GET", "/jobs")).json()
     expect(listed.jobs).toEqual([expect.objectContaining({ job_id: "job_1", status: "running", final: false })])
@@ -133,7 +138,32 @@ describe("trigger -> events -> cancel (Claude runtime)", () => {
     expect(h.ledger.lines).toEqual([])
   })
 
-  it("two concurrent cancels: one 200, the other 409, one report", async () => {
+  it("a cancel made while another is in flight gets 409 cancel_in_progress; one stop, one report", async () => {
+    const h = await claudeHarness()
+    await h.triggerAs("dev-main", { job_id: "job_1", capability: "testing" })
+    // Hold the first cancel inside the runner's stop.
+    const realStop = h.runner.stop.bind(h.runner)
+    let release: () => void = () => undefined
+    const gate = new Promise<void>((resolve) => (release = resolve))
+    let stops = 0
+    h.runner.stop = async (...args: Parameters<ClaudeJobRunner["stop"]>) => {
+      stops += 1
+      await gate
+      return realStop(...args)
+    }
+    const first = h.asPeer("dev-main", "POST", "/jobs/job_1/cancel")
+    await until(() => stops === 1)
+    const second = await h.asPeer("dev-main", "POST", "/jobs/job_1/cancel")
+    expect(second.statusCode).toBe(409)
+    expect(second.json()).toMatchObject({ code: "cancel_in_progress", status: "running" })
+    release()
+    expect((await first).statusCode).toBe(200)
+    await h.settle()
+    expect(stops).toBe(1)
+    expect(h.reports).toHaveLength(1)
+  })
+
+  it("two cancels sent together (20 rounds): one 200, the other 409, one report", async () => {
     for (let round = 0; round < 20; round += 1) {
       const h = await claudeHarness()
       await h.triggerAs("dev-main", { job_id: "job_1", capability: "testing" })
@@ -183,7 +213,7 @@ describe("trigger -> events -> cancel (OpenCode runtime)", () => {
 })
 
 describe("startBridge wiring", () => {
-  it("writes each job's events to <state>/jobs/<id>.events.jsonl and serves them", async () => {
+  it("writes each job's events to <state>/jobs/<sha256(id)>.events.jsonl and serves them", async () => {
     const directory = await mkdtemp(join(tmpdir(), "aibr-job-api-bridge-"))
     const stateDir = join(directory, "state")
     const configPath = join(directory, "config.json")
@@ -199,7 +229,7 @@ describe("startBridge wiring", () => {
     try {
       const triggered = await bridge.app.inject({ method: "POST", url: "/trigger", headers: { authorization: "Bearer secret" }, payload: validTrigger() })
       expect(triggered.statusCode).toBe(202)
-      expect((await readdir(join(stateDir, "jobs"))).sort()).toEqual(["job_1.events.jsonl", "job_1.json"])
+      expect((await readdir(join(stateDir, "jobs"))).sort()).toEqual([jobEventsFileName("job_1"), "job_1.json"].sort())
       const events = await bridge.app.inject({ method: "GET", url: "/jobs/job_1/events", headers: { authorization: "Bearer operator-secret" } })
       expect(events.statusCode).toBe(200)
       expect(events.json().events.map((event: { data: { status: string } }) => event.data.status)).toEqual(["accepted", "session_created", "running"])

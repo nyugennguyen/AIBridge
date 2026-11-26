@@ -46,7 +46,7 @@ src/
                        (list, events, cancel), operator (approve/reject), health, enroll;
                        claude-dispatch and opencode-dispatch
   jobs/              - JobManager, JsonFileJobStore (`<stateDir>/jobs/`), job event log
-                       (`<id>.events.jsonl`, `JobEventLog`), cancel, approval ledger,
+                       (`<sha256(id)>.events.jsonl`, `JobEventLog`), cancel, approval ledger,
                        report handling
   runtime/           - Claude Code job runner and adapter, OpenCode adapter, repo-workspace
                        (job pinned to repo@sha in its own git worktree), script runner,
@@ -138,7 +138,7 @@ Environment variables:
 - Process management: `aibr start` installs a per-profile user service (launchd `com.aibridge.<profile>` / systemd `aibridge-<profile>.service`) running `aibr serve`; `aibr start --foreground` runs the same in tmux for development; `aibr stop` stops both. Logs: `<stateDir>/logs/aibridge.log` (`aibr logs -f`).
 - Terminal supervision is tmux. The `terminal` config key was removed in 3.2.0 (a profile that still has it loads and warns).
 - Presentation: there is no TUI. Claude Code with the AIBridge plugin is the main interface; operator actions (`aibr jobs pending`, `aibr approve`, `aibr stop --all-jobs`, `aibr logs`) run on the worker. `aibr tui` was removed in 3.2.0.
-- Job state persisted as JSON files under `<stateDir>/jobs/` (by default `~/.local/state/aibridge/<profile>/jobs/` in profile deployments, or `.aibridge/jobs/` in local legacy dev runs), with orchestration state managed in SQLite event stores. Each job's events (`GET /jobs/:id/events`) are appended next to it as `<id>.events.jsonl`, redacted and capped per job; neither file is ever pruned.
+- Job state persisted as JSON files under `<stateDir>/jobs/` (by default `~/.local/state/aibridge/<profile>/jobs/` in profile deployments, or `.aibridge/jobs/` in local legacy dev runs), with orchestration state managed in SQLite event stores. Each job's events (`GET /jobs/:id/events`) are appended next to it as `<sha256(id)>.events.jsonl`, redacted and capped per job; neither file is ever pruned.
 - Bridge port (8787) must be Tailscale-only. Never expose opencode serve publicly.
 - opencode serve defaults to port 4096 (`OPENCODE_PORT` or setup wizard prompt).
 

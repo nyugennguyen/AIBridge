@@ -387,11 +387,17 @@ describe("bridge_events", () => {
     expect(new Headers(calls[0]!.headers).get("accept")).toBe("application/json")
   })
 
-  it("caps the page size and marks a finished job final", async () => {
-    const { deps, calls } = makeDeps(() => json({ status: "completed", events: [], next: 7 }))
+  it("caps the page size and takes `final` from the worker", async () => {
+    const { deps, calls } = makeDeps(() => json({ status: "completed", final: true, events: [], next: 7 }))
     const body = JSON.parse(textOf(await toolsFor(deps).call("bridge_events", { job_id: "j1", target: "staging", after: 7, limit: 10_000 })))
     expect(body).toMatchObject({ final: true, next: 7, events: [] })
     expect(calls[0]?.url).toContain("limit=200")
+  })
+
+  it("is not final for an ended job whose page misses its last events", async () => {
+    const { deps } = makeDeps(() => json({ status: "completed", final: false, events: [], next: 2 }))
+    const body = JSON.parse(textOf(await toolsFor(deps).call("bridge_events", { job_id: "j1", target: "staging" })))
+    expect(body).toMatchObject({ status: "completed", final: false })
   })
 
   it("rejects a negative cursor without calling the worker", async () => {

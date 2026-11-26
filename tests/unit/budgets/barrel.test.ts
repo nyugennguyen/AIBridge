@@ -72,7 +72,6 @@ const UPWARD_FORBIDDEN: readonly string[] = [
 
 /** Directories that must not import `src/budgets/**`. */
 const DOWNWARD_FORBIDDEN: readonly string[] = [
-  "application",
   "orchestration",
   "routing",
   "rules",

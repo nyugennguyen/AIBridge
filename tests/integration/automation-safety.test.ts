@@ -21,8 +21,8 @@
  *
  *   1. Preview diverging from runtime — `rule-preview.test.ts` section 1, and
  *      `dry-run.test.ts` section 3. Not repeated here.
- *   2. A rule edit affecting an active dispatch or approval — section 6 below, over
- *      the REAL M3 application service.
+ *   2. A rule edit affecting an active dispatch or approval — formerly section 6, over
+ *      the application service, which was removed in 3.1.1.
  *   3. Budget reservation not being atomic with eligibility — section 4 below.
  *   4. A user rule granting a floor- or role-removed capability — section 2 below.
  *   5. A compiled set admitting an action wider than the disclosed bounds —
@@ -47,15 +47,12 @@
  * ## Discipline
  *
  * One injected clock, one seeded generator, no `Date.now`, no `Math.random`, no real
- * network, no real subprocess, no filesystem writes. The runtime and terminal
- * adapters are real implementations of the shipped interfaces that record what they
- * were handed, so the M3 path under test is the production path.
+ * network, no real subprocess, no filesystem writes.
  */
 
 import { describe, expect, it } from "vitest"
 import {
   ALL_SCOPES,
-  applicationService,
   auditForCanaries,
   budgetDocument,
   budgetLedger,
@@ -69,9 +66,6 @@ import {
   dispatchEnvelope,
   everyCanary,
   FIXED_NOW,
-  kernelRuleSnapshotAtVersion,
-  launchApprovedProposal,
-  MutableProjectRegistry,
   NODE_A,
   NODE_B,
   NODE_UNAUTHORIZED,
@@ -80,7 +74,6 @@ import {
   notificationHarness,
   notificationRequest,
   occupiedUnits,
-  operationIdFactory,
   planFor,
   POLICY_EVALUATOR,
   preApprovalDocument,
@@ -95,7 +88,6 @@ import {
   roleSnapshot,
   routingDocument,
   SAFETY_FLOOR_MAXIMUM_TIMEOUT_SECONDS,
-  serviceProjectDefinition,
   simulationPorts,
   simulationRequest,
   templateRepository,
@@ -118,8 +110,6 @@ import { assertNoRetainedSideEffects, readSinkCounters, simulateDryRun } from ".
 import { rankNodes } from "../../src/routing/index.js"
 import { NON_UNIVERSAL_PREDICATE_FIELDS, compileRuleSet as compileFromSource } from "../../src/rules/index.js"
 import { canonicalJson } from "../../src/orchestration/digest.js"
-import type { CommandId, RunId } from "../../src/orchestration/identifiers.js"
-import type { InMemoryLocalApplicationService } from "../../src/application/service.js"
 
 // ===========================================================================
 // Helpers
@@ -129,79 +119,6 @@ import type { InMemoryLocalApplicationService } from "../../src/application/serv
 function ok<T>(result: { ok: true; value: T } | { ok: false; error: { code: string; message: string } }): T {
   if (!result.ok) throw new Error(`${result.error.code}: ${result.error.message}`);
   return result.value;
-}
-
-/**
- * A run driven to an APPROVED but unlaunched proposal, over the real service.
- *
- * The state a retroactive rule edit could do damage in, and the only one that can:
- * a proposal the operator has already approved. Written here rather than in the
- * fixtures because the SEQUENCE is the claim under test, and a fixture that other
- * files also drive would make a change to it change this file's evidence.
- */
-async function approvedRun(registry: MutableProjectRegistry) {
-  const { service, launches } = applicationService(registry);
-  const op = operationIdFactory();
-  ok(await service.execute({ type: "projects.select", projectId: PROJECT_ID, correlationId: CORRELATION_ID }));
-  const draft = ok(
-    await service.execute({ type: "draft.create", operationId: op(), correlationId: CORRELATION_ID, projectId: PROJECT_ID }),
-  );
-  const edited = ok(
-    await service.execute({
-      type: "draft.edit",
-      operationId: op(),
-      correlationId: CORRELATION_ID,
-      runId: draft.runId,
-      expectedRevision: draft.revision,
-      patch: {
-        goal: "Ship the frozen release",
-        taskTitle: "Run one task",
-        taskDescription: "Exercise the vertical slice.",
-        prompt: "Inspect the project and report a verified result.",
-        model: "fixture-model",
-        timeoutSeconds: 600,
-      },
-    }),
-  );
-  const proposed = ok(
-    await service.execute({
-      type: "proposal.create",
-      operationId: op(),
-      correlationId: CORRELATION_ID,
-      runId: edited.runId,
-      expectedRevision: edited.revision,
-    }),
-  );
-  const proposal = proposed.currentProposal;
-  if (proposal === undefined) throw new Error("the service created a run with no proposal");
-  const decided = ok(
-    await service.execute({
-      type: "proposal.decide",
-      operationId: op(),
-      correlationId: CORRELATION_ID,
-      runId: proposed.draft.runId,
-      dispatchId: proposal.dispatch.envelope.dispatchId,
-      attempt: proposal.dispatch.envelope.attempt,
-      envelopeDigest: proposal.dispatch.envelopeDigest,
-      decision: "approved",
-      userId: USER_ID,
-    }),
-  );
-  const approved = decided.currentProposal;
-  if (approved === undefined || approved.approval === undefined) {
-    throw new Error("the approval was not recorded");
-  }
-  return { service, launches, op, runId: decided.draft.runId, approved };
-}
-
-/** The launch command for an approved proposal, with the ids read off it. */
-function launchCommand(
-  service: InMemoryLocalApplicationService,
-  op: () => CommandId,
-  runId: RunId,
-  approved: Parameters<typeof launchApprovedProposal>[3],
-) {
-  return launchApprovedProposal(service, op(), runId, approved);
 }
 
 // ===========================================================================
@@ -1004,106 +921,6 @@ describe("M6.10 — a rule cannot route to a node the hard checks excluded", () 
 });
 
 // ===========================================================================
-// 6. A rule edit cannot affect an active dispatch or an existing approval
-// ===========================================================================
-
-describe("M6.10 — a rule edit cannot retroactively affect an active dispatch or an approval", () => {
-  it("leaves a launched dispatch byte-identical and invalidates an open proposal instead of re-evaluating it", async () => {
-    // The REAL M3 machinery: `InMemoryLocalApplicationService` over scripted runtime
-    // and terminal adapters, taking the production propose → approve → launch path.
-    const registry = new MutableProjectRegistry();
-    const { service, launches, op, runId, approved } = await approvedRun(registry);
-    const approvedDigest = approved.dispatch.envelopeDigest;
-    const approvedSnapshots = approved.dispatch.envelope.ruleSnapshots;
-    expect(approvedSnapshots, "the fixture launched a run with no rule snapshots to preserve").toEqual([]);
-
-    // The run launches. A launched dispatch is the strongest case: it is ALREADY
-    // running, so a retroactive edit would have to rewrite live state.
-    const launched = ok(await launchCommand(service, op, runId, approved));
-    expect(launched.outcome).toBe("started");
-    expect(launches).toHaveLength(1);
-
-    // ---- THE RULE EDIT. A new rule version enters the project definition, and
-    // `ruleSnapshots` is a member of the service's material-definition fingerprint.
-    const eventsBefore = canonicalJson(service.events(runId));
-    registry.current = { ...registry.current, ruleSnapshots: [kernelRuleSnapshotAtVersion(2)] };
-
-    // The RUNNING dispatch's own digest is unchanged: the envelope it was launched
-    // with is digest-bound, and nothing about an edit can reach it.
-    const afterEdit = ok(await service.execute({ type: "run.get", runId, correlationId: CORRELATION_ID }));
-    expect(afterEdit.currentProposal?.dispatch.envelopeDigest).toBe(approvedDigest);
-    expect(afterEdit.currentProposal?.dispatch.envelope.ruleSnapshots).toEqual(approvedSnapshots);
-    expect(afterEdit.currentProposal?.approval?.approvalId).toEqual(approved.approval?.approvalId);
-    expect(afterEdit.currentProposal?.approval?.state).toEqual(approved.approval?.state);
-    // And the event log gained nothing: the edit changed nothing about the run, so it
-    // is not an orchestration event.
-    expect(canonicalJson(service.events(runId))).toBe(eventsBefore);
-    // The launch is not repeated, because the edit did not re-evaluate anything.
-    expect(launches).toHaveLength(1);
-  });
-
-  it("refuses a stale launch after a rule edit with `application.proposal.configuration_changed`", async () => {
-    // The case the invalidation exists for: an approval recorded against the
-    // PRE-edit configuration must not authorise a launch against the post-edit one.
-    // Refused by name, and the proposal is marked as needing a fresh review — which is
-    // the alternative to silently re-evaluating it.
-    const registry = new MutableProjectRegistry();
-    const { service, launches, op, runId, approved } = await approvedRun(registry);
-    const before = ok(await service.execute({ type: "run.get", runId, correlationId: CORRELATION_ID }));
-    const digestBefore = before.currentProposal?.dispatch.envelopeDigest;
-    expect(digestBefore).toBe(approved.dispatch.envelopeDigest);
-
-    registry.current = { ...registry.current, ruleSnapshots: [kernelRuleSnapshotAtVersion(7)] };
-
-    const stale = await launchCommand(service, op, runId, approved);
-    expect(stale.ok, "a launch against a pre-edit configuration was admitted").toBe(false);
-    if (stale.ok) return;
-    expect(stale.error.category).toBe("approval_required");
-    expect(stale.error.code).toBe("application.proposal.configuration_changed");
-
-    // The dispatch is still exactly the one that was approved — the edit did not
-    // re-write it — and the run is flagged for a fresh proposal.
-    const after = ok(await service.execute({ type: "run.get", runId, correlationId: CORRELATION_ID }));
-    expect(after.currentProposal?.dispatch.envelopeDigest).toBe(digestBefore);
-    expect(after.draft.proposalRequired).toBe(true);
-    expect(launches, "the runtime was launched anyway").toHaveLength(0);
-  });
-
-  it("re-authorizes the launch path immediately before the effect, and fails closed when it is revoked", async () => {
-    // The same bypass shape as the rule edit, one layer down: the approval is real and
-    // the path is not, so the launch re-checks against the registry rather than
-    // trusting the approval.
-    const registry = new MutableProjectRegistry();
-    const { service, launches, op, runId, approved } = await approvedRun(registry);
-    registry.launchAuthorized = false;
-    const refused = await launchCommand(service, op, runId, approved);
-    expect(refused.ok, "a launch on a revoked path was admitted").toBe(false);
-    if (refused.ok) return;
-    expect(refused.error.code).toBe("fixture.path_denied");
-    expect(launches, "the runtime was launched anyway").toHaveLength(0);
-  });
-
-  it("leaves the approval standing when the definition changed outside the material fingerprint", async () => {
-    // The converse, so the invalidation is not simply "any change refuses". The
-    // fingerprint covers a named list of members; the project's own DISPLAY NAME is
-    // not one of them, so renaming it leaves the approval and the launch authority
-    // intact — which is the difference between invalidating on a material change and
-    // invalidating on every keystroke.
-    const registry = new MutableProjectRegistry();
-    const { service, launches, op, runId, approved } = await approvedRun(registry);
-    registry.current = {
-      ...registry.current,
-      project: { ...registry.current.project, name: "A Renamed M6 Fixture Project" },
-    };
-    const launched = await launchCommand(service, op, runId, approved);
-    expect(launched.ok, "a cosmetic project rename invalidated a material approval").toBe(true);
-    if (!launched.ok) return;
-    expect(launched.value.outcome).toBe("started");
-    expect(launches).toHaveLength(1);
-  });
-});
-
-// ===========================================================================
 // 7. Notifications: advisory, deduplicated, and free of content
 // ===========================================================================
 
@@ -1204,15 +1021,7 @@ describe("M6.10 — notification delivery cannot affect orchestration state, and
     expect(harness.store.pendingCount()).toBe(0);
   });
 
-  it("leaves an orchestration run byte-identical while notifications are emitted, delivered, deduplicated and muted", async () => {
-    // The orchestration half, over the real service. The notification path is handed a
-    // bus and a store and never the service, so there is nothing for it to call; this
-    // makes that structural fact observable by comparing the run before and after.
-    const registry = new MutableProjectRegistry();
-    const { service, runId } = await approvedRun(registry);
-    const before = canonicalJson(ok(await service.execute({ type: "run.get", runId, correlationId: CORRELATION_ID })));
-    const eventsBefore = canonicalJson(service.events(runId));
-
+  it("emits, delivers, deduplicates and mutes across all four dispositions", async () => {
     // Four emissions covering all four dispositions, so "nothing changed" cannot be
     // satisfied by a bus that did nothing: one delivered, one deduplicated away, one
     // muted, one stored-then-quieted.
@@ -1225,12 +1034,7 @@ describe("M6.10 — notification delivery cannot affect orchestration state, and
     harness.bus.setQuieting({ categories: ["run_blocked"], severities: [], pairs: [] });
     await harness.bus.emit(notificationRequest({ dedupeKey: "rule_conflict:run-m6-1:rule-m6-deny" }));
 
-    const after = canonicalJson(ok(await service.execute({ type: "run.get", runId, correlationId: CORRELATION_ID })));
-    expect(after, "a notification changed the run").toBe(before);
-    expect(canonicalJson(service.events(runId)), "a notification appended an event").toBe(eventsBefore);
-    // The notifications themselves were real, so "nothing changed" is not "nothing
-    // happened" — otherwise this test would pass against a bus that had been replaced
-    // by a no-op.
+    // The notifications were real, so the counters prove the bus was not a no-op.
     expect(harness.bus.counters().emitted).toBeGreaterThan(0);
     expect(harness.bus.counters().delivered).toBeGreaterThan(0);
     expect(harness.bus.counters().muted).toBeGreaterThan(0);
@@ -1348,11 +1152,6 @@ describe("M6.10 — notification delivery cannot affect orchestration state, and
 
 describe("M6.10 — a dry run over a real project changes nothing about it", () => {
   it("plans a rule-bearing run and leaves the project definition, the runtime and the sinks untouched", async () => {
-    const registry = new MutableProjectRegistry(serviceProjectDefinition());
-    const definitionBefore = canonicalJson(registry.current);
-    const { service, launches } = applicationService(registry);
-    const { runId } = await approvedRun(registry);
-    const eventsBefore = canonicalJson(service.events(runId));
 
     const ports = simulationPorts({ templates: templateRepository([canariedTemplateInput()]) });
     const plan = await planFor(
@@ -1370,14 +1169,6 @@ describe("M6.10 — a dry run over a real project changes nothing about it", () 
     expect(assertNoRetainedSideEffects(readSinkCounters(ports.tally))).toEqual([]);
     expect(ports.probe.counters.retained).toBe(0);
     expect(ports.templates.mutations).toEqual({ create: 0, update: 0, clear: 0 });
-    // The project definition is byte-identical, so a plan that had written a template
-    // or touched the registry would show up here.
-    expect(canonicalJson(registry.current)).toBe(definitionBefore);
-    // The runtime was not launched by the plan: the approval flow in this test never
-    // launched either, so the launch log is empty.
-    expect(launches).toHaveLength(0);
-    // And the run's event log gained nothing.
-    expect(canonicalJson(service.events(runId))).toBe(eventsBefore);
   });
 
   it("carries no canary from a canaried project, template, role and node set", async () => {

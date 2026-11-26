@@ -6,21 +6,16 @@ import {
   MAX_EVENT_PAYLOAD_BYTES,
   MAX_HEARTBEAT_AGE_MS,
   MAX_RULE_PATTERN_LENGTH,
-  MAX_TERMINAL_BUFFER_BYTES,
-  MAX_TERMINAL_FRAME_BYTES,
-  MAX_TERMINAL_FRAMES_PER_SECOND,
-  MAX_VIEWERS_PER_TERMINAL,
   REPLAY_WINDOW_MS,
   canonicalByteLength,
 } from "../../../src/mesh/protocol/bounds.js"
-import { ARRAY_MAX, decodedBase64Bytes, protocolVersionListSchema } from "../../../src/mesh/protocol/identifiers.js"
+import { ARRAY_MAX, protocolVersionListSchema } from "../../../src/mesh/protocol/identifiers.js"
 import { MAX_BOUNDED_NESTING_DEPTH, MAX_RULE_MATCH_SUBJECT_LENGTH, checkSafePattern } from "../../../src/mesh/protocol/safe-pattern.js"
 import { evaluateReplayWindow } from "../../../src/mesh/protocol/envelope.js"
 import { evaluateHeartbeatFreshness, meshHeartbeatSchema } from "../../../src/mesh/protocol/heartbeat.js"
 import { safeParseMeshEnvelope } from "../../../src/mesh/protocol/registry.js"
 import { mintMeshCommand } from "../../../src/mesh/protocol/command.js"
 import { mintMeshEvent } from "../../../src/mesh/protocol/event.js"
-import { evaluateBufferPressure, evaluateFrameRate, evaluateFrameSize, evaluateViewerCount, framesToDrop, terminalDataSchema } from "../../../src/mesh/protocol/terminal.js"
 import {
   T1,
   T2,
@@ -30,7 +25,6 @@ import {
   makeRunCreateCommand,
   rawEnvelope,
   sampleEnvelope,
-  terminalDataPayload,
   WORKER_ID,
 } from "./fixtures.js"
 
@@ -54,10 +48,6 @@ describe("the §6 table, value for value", () => {
     // spec being edited alongside it fails HERE rather than in a gate report.
     const stated: Record<string, number> = {
       MAX_ENVELOPE_BYTES: 262_144,
-      MAX_TERMINAL_FRAME_BYTES: 65_536,
-      MAX_TERMINAL_BUFFER_BYTES: 1_048_576,
-      MAX_TERMINAL_FRAMES_PER_SECOND: 512,
-      MAX_VIEWERS_PER_TERMINAL: 16,
       MAX_COMMAND_PAYLOAD_BYTES: 131_072,
       MAX_EVENT_PAYLOAD_BYTES: 131_072,
       REPLAY_WINDOW_MS: 300_000,
@@ -66,10 +56,6 @@ describe("the §6 table, value for value", () => {
     }
     const actual: Record<string, number> = {
       MAX_ENVELOPE_BYTES,
-      MAX_TERMINAL_FRAME_BYTES,
-      MAX_TERMINAL_BUFFER_BYTES,
-      MAX_TERMINAL_FRAMES_PER_SECOND,
-      MAX_VIEWERS_PER_TERMINAL,
       MAX_COMMAND_PAYLOAD_BYTES,
       MAX_EVENT_PAYLOAD_BYTES,
       REPLAY_WINDOW_MS,
@@ -80,12 +66,8 @@ describe("the §6 table, value for value", () => {
   })
 
   it("keeps the derived bounds the same table implies", () => {
-    // A terminal frame has to fit inside the envelope it travels in, and the
-    // rule analyser is only argued safe within its own subject bound. Neither
+    // The rule analyser is only argued safe within its own subject bound. Neither
     // fact is in the table, so both are asserted here rather than assumed.
-    expect(MAX_TERMINAL_FRAME_BYTES).toBeLessThan(MAX_ENVELOPE_BYTES)
-    expect(MAX_TERMINAL_BUFFER_BYTES).toBeGreaterThan(MAX_TERMINAL_FRAME_BYTES)
-    expect(MAX_TERMINAL_BUFFER_BYTES % MAX_TERMINAL_FRAME_BYTES).toBe(0)
     expect(MAX_RULE_PATTERN_LENGTH).toBeLessThan(MAX_RULE_MATCH_SUBJECT_LENGTH)
     expect(MAX_BOUNDED_NESTING_DEPTH).toBeGreaterThanOrEqual(2)
   })
@@ -195,40 +177,6 @@ describe("MAX_RULE_PATTERN_LENGTH", () => {
     const result = checkSafePattern(over)
     expect(result.ok).toBe(false)
     expect(result.ok === false && result.refusal).toBe("too_long")
-  })
-})
-
-describe("the terminal bounds", () => {
-  it("MAX_TERMINAL_FRAME_BYTES is applied to the DECODED size, decided on the string", () => {
-    const atBound = Buffer.alloc(MAX_TERMINAL_FRAME_BYTES, 0x61).toString("base64")
-    expect(decodedBase64Bytes(atBound)).toBe(MAX_TERMINAL_FRAME_BYTES)
-    expect(terminalDataSchema.safeParse({ ...terminalDataPayload(), chunk: atBound }).success).toBe(true)
-    const overBound = Buffer.alloc(MAX_TERMINAL_FRAME_BYTES + 1, 0x61).toString("base64")
-    expect(decodedBase64Bytes(overBound)).toBe(MAX_TERMINAL_FRAME_BYTES + 1)
-    expect(terminalDataSchema.safeParse({ ...terminalDataPayload(), chunk: overBound }).success).toBe(false)
-    expect(evaluateFrameSize(MAX_TERMINAL_FRAME_BYTES).admitted).toBe(true)
-    expect(evaluateFrameSize(MAX_TERMINAL_FRAME_BYTES + 1).admitted).toBe(false)
-  })
-
-  it("MAX_TERMINAL_FRAMES_PER_SECOND is applied over a caller-supplied window", () => {
-    expect(evaluateFrameRate(MAX_TERMINAL_FRAMES_PER_SECOND, 1_000).admitted).toBe(true)
-    expect(evaluateFrameRate(MAX_TERMINAL_FRAMES_PER_SECOND + 1, 1_000).admitted).toBe(false)
-  })
-
-  it("MAX_TERMINAL_BUFFER_BYTES is applied as a DROP, not a disconnect", () => {
-    // Disconnecting everyone over one slow consumer turns a resource bound into
-    // a denial of service against the whole terminal.
-    expect(evaluateBufferPressure(MAX_TERMINAL_BUFFER_BYTES).admitted).toBe(true)
-    expect(evaluateBufferPressure(MAX_TERMINAL_BUFFER_BYTES + 1).admitted).toBe(false)
-    expect(framesToDrop(MAX_TERMINAL_BUFFER_BYTES, 1_024)).toBe(0)
-    expect(framesToDrop(MAX_TERMINAL_BUFFER_BYTES + 1_024, 1_024)).toBe(1)
-  })
-
-  it("MAX_VIEWERS_PER_TERMINAL is applied to the viewer that would be the one too many", () => {
-    for (let viewers = 0; viewers < MAX_VIEWERS_PER_TERMINAL; viewers += 1) {
-      expect(evaluateViewerCount(viewers).admitted, String(viewers)).toBe(true)
-    }
-    expect(evaluateViewerCount(MAX_VIEWERS_PER_TERMINAL).admitted).toBe(false)
   })
 })
 

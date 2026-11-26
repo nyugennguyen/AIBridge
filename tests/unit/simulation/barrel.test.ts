@@ -69,7 +69,6 @@ const FORBIDDEN_IMPORTERS = [
   "routing",
   "workflows",
   "budgets",
-  "application",
   "context",
   "memory",
   "mesh",

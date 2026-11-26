@@ -386,31 +386,6 @@ export function ackPayload(overrides: Record<string, unknown> = {}): Record<stri
   }
 }
 
-export function terminalControlPayload(overrides: Record<string, unknown> = {}): Record<string, unknown> {
-  return {
-    terminalId: "terminal-1",
-    projectId: PROJECT_ID,
-    sessionId: "session-1",
-    nodeId: WORKER_ID,
-    clientId: "client-1",
-    operation: "attach",
-    epoch: EPOCH,
-    ...overrides,
-  }
-}
-
-export function terminalDataPayload(overrides: Record<string, unknown> = {}): Record<string, unknown> {
-  return {
-    terminalId: "terminal-1",
-    clientId: "client-1",
-    direction: "to_viewer",
-    encoding: "base64",
-    chunk: "aGVsbG8=",
-    sequence: 1,
-    ...overrides,
-  }
-}
-
 export function reconciliationRequestPayload(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     reconcileId: "rec-1",
@@ -443,7 +418,7 @@ export function reconciliationResponsePayload(overrides: Record<string, unknown>
 // --- One valid envelope per family ---------------------------------------
 
 /**
- * A structurally VALID envelope for each of the eleven `recordType` values.
+ * A structurally VALID envelope for each of the nine `recordType` values.
  *
  * The tests that need a wrong record build it by taking one of these and breaking
  * exactly one thing, so a failure names the defect rather than the difference
@@ -484,10 +459,6 @@ export function sampleEnvelope(recordType: MeshRecordType, overrides: EnvelopeOv
       return rawEnvelope(recordType, reconciliationRequestPayload(), { correlationId: "rec-1", ...overrides })
     case "mesh.reconciliation.response":
       return rawEnvelope(recordType, reconciliationResponsePayload(), { correlationId: "rec-1", ...overrides })
-    case "mesh.terminal.control":
-      return rawEnvelope(recordType, terminalControlPayload(), { correlationId: "client-1", ...overrides })
-    case "mesh.terminal.data":
-      return rawEnvelope(recordType, terminalDataPayload(), { correlationId: "client-1", ...overrides })
   }
 }
 

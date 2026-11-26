@@ -3,15 +3,12 @@
  */
 
 import type { AgentRuntimeAdapter } from "../runtime/types.js"
-import type { TerminalBackend, TerminalChannel } from "../terminal/types.js"
 import type { SdkContractError, SdkResult } from "./errors.js"
 
 export const AIBRIDGE_SDK_VERSION = "1.0.0"
 
 export type {
   AgentRuntimeAdapter,
-  TerminalBackend,
-  TerminalChannel,
   SdkContractError,
   SdkResult,
 }
@@ -32,17 +29,6 @@ export type {
 } from "../runtime/schemas.js"
 
 export type {
-  CreateTerminalRequest,
-  InputTakeoverRequest,
-  TerminalDimensions,
-  TerminalInputOwnership,
-  TerminalControlOperationContext,
-  TerminalOperationContext,
-  TerminalReference,
-  TerminalSnapshot,
-} from "../terminal/schemas.js"
-
-export type {
   InstallationId,
   EventId,
   SessionId,
@@ -55,7 +41,6 @@ export type {
   LeaseId,
   ApprovalId,
   MeshId,
-  TerminalClientId,
 } from "../orchestration/identifiers.js"
 
 export interface ExtensionMetadata {
@@ -69,11 +54,6 @@ export interface ExtensionMetadata {
 export interface AdapterRegistration {
   readonly metadata: ExtensionMetadata
   readonly adapter: AgentRuntimeAdapter
-}
-
-export interface TerminalBackendRegistration {
-  readonly metadata: ExtensionMetadata
-  readonly backend: TerminalBackend
 }
 
 export function assertSdkVersionCompatible(extensionSdkVersion: string): void {

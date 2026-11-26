@@ -62,7 +62,7 @@ bun run test:unit
 bun run test:integration
 
 # Run a specific test file
-bun test tests/unit/orchestration/roundtable.test.ts
+bun test tests/integration/trigger-flow.test.ts
 
 # Test installer scripts (shellcheck, syntax, unit tests)
 bun run test:installer
@@ -139,6 +139,6 @@ This gate executes:
 
 - **ESM Only:** All local TypeScript imports must use the `.js` extension (e.g., `import { foo } from "./bar.js"`).
 - **Zod-First Typing:** Define schemas in `config/schemas.ts` and infer types via `z.infer<>` in `config/types.ts`. Never write duplicate interface definitions by hand.
-- **Single Source of Truth:** Kernel state changes commit exclusively to `SqliteEventStore`. Projections and UI consumers are strictly read-only subscribers.
-- **The Immutable Core:** Policy modifications cannot relax the safety floor, input fencing, budget ceilings, or kernel authority (`assertCharterDoesNotRelaxCore`).
+- **Dependency Injection:** Routes get what they need from the `AppDependencies` passed to `createApp()`; no global state. Integration tests use `app.inject()`.
+- **Humans approve:** No agent or peer can approve a job, including through trigger metadata; approval is an operator action on the worker (ADR 0013).
 - **No Semicolons:** Semicolons are omitted in TypeScript files.

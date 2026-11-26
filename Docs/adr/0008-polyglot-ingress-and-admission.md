@@ -180,7 +180,7 @@ Tier 2 retains the complete existing ordering in
 `assertSourceAuthorized`
 ([`src/security/source-authorization.ts:4`](../../src/security/source-authorization.ts)),
 `assertProjectAllowed`, `ConfigPlanReviewProvider`, opencode health, dependency
-resolution, duplicate rejection, and the orchestration kernel seam. The worker
+resolution, duplicate rejection, and (until 3.2.0) the orchestration kernel seam. The worker
 **re-runs `triggerRequestSchema.safeParse` on the delivered payload.**
 
 This asymmetry is deliberate and is not an oversight to be optimised away. ADR

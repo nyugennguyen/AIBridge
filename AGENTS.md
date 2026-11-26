@@ -1,6 +1,6 @@
 # AIBridge - Agent Instructions
 
-Distributed multi-agent orchestration runtime connecting OpenCode, Claude Code, and Codex agents across machines via Tailscale mesh networking, governed by an event-sourced kernel, versioned charters, and immutable safety policies. Claude Code with the AIBridge plugin is the operator interface (ADR 0014).
+Job dispatch between agent machines (Claude Code and OpenCode workers today, Codex planned) over a Tailscale network: signed requests, operator approval on the worker, and a durable outbox for reports. Claude Code with the AIBridge plugin is the operator interface (ADR 0014).
 
 ## Commands
 
@@ -22,8 +22,8 @@ bun run test:integration     # run integration tests only (tests/integration)
 bun run test:installer       # shellcheck, bash syntax, and installer tests
 
 # Run a single test file
-bun test tests/unit/orchestration/roundtable.test.ts
-bun test tests/integration/remote-roundtable.test.ts
+bun test tests/unit/jobs/manager.test.ts
+bun test tests/integration/trigger-flow.test.ts
 
 # Code Generation & Parity Checks
 bun run generate:contracts   # regenerate JSON schemas and Rust contracts
@@ -35,7 +35,7 @@ bun run release:check        # full pre-release gate (frozen install, build, tes
 
 ## Architecture
 
-The system dispatches jobs between machines. **Claude Code (or another MCP-capable agent) dispatches and follows work; humans approve in the `aibr` CLI on the worker.** What actually runs is the Fastify bridge (`aibr serve`), the job manager and runner, the approval ledger, signed requests and the MCP server. Roughly 55,000 of the 98,000 lines in `src/` are not reachable from `src/cli.ts` or `src/index.ts` (see "Not yet wired" below); `bun run docs:reachability` measures this.
+The system dispatches jobs between machines. **Claude Code (or another MCP-capable agent) dispatches and follows work; humans approve in the `aibr` CLI on the worker.** What actually runs is the Fastify bridge (`aibr serve`), the job manager and runner, the approval ledger, signed requests and the MCP server. Roughly 11,000 of the 50,000 lines in `src/` are not reachable from `src/cli.ts` or `src/index.ts`, all of it kept on purpose with deadlines (see "Not yet wired" below); `bun run docs:reachability` measures this.
 
 ```
 src/
@@ -68,8 +68,12 @@ src/
   host/              - Host probes, binary detection, service (launchd/systemd) generators, paths
   diagnostics/       - Diagnostics bundle and health probes
   tasks/             - Task file parser and syncer
-  notifications/     - Bus and store. Wired into `createApp` but fed only by the unused
-                       orchestration route, so nothing is delivered today (V5, 3.5.0)
+  orchestration/     - What is left after 3.2.0 D5: the Zod schemas behind `contracts/v1`
+                       (`schemas.ts`), identifiers, errors, digests, session transitions,
+                       role snapshot digests used by `runtime/binder.ts`, and the event
+                       store (`event-store/`, not yet wired; `sqlite-driver.ts` is shared
+                       with the egress outbox and the drain worker)
+  notifications/     - Bus, store and payload types; not yet wired (V5, 3.5.0)
 ```
 
 ### Rust Workspace (`router/`)
@@ -89,16 +93,15 @@ Code that is built and tested but not reachable from the entry points. Decisions
 | `src/context` | V3 context snapshot | 3.4.0 | 3.5.0 |
 | `src/notifications` | V5 Discord and Telegram | 3.5.0 | 3.6.0 |
 
-Scheduled for removal in 3.2.0 (block D5, ADR 0016): the orchestration kernel (coordinator, scheduler, charter and roundtable runtime, `routes/orchestration.ts`), together with `src/mesh/protocol/negotiation.ts`, which only the kernel coordinator still imports. (The dead part of `src/mesh` (leases, inbox, registry, gateway, outbox transport, record families, fault harness) was removed in D4; `src/rules` in D2; `src/budgets`, `src/workflows`, `src/simulation`, `src/routing`, `src/registry`, `src/sdk` and `src/upgrade` in D1. The design stays in the `archive/kernel-mesh-3.1.1` tag.) Until D5 merges the kernel is still in the tree, and the "Key Patterns" below about kernel authority, the immutable core, and roundtables describe that unwired code, not the running system.
+Removed in 3.2.0 (blocks D1 to D5, ADR 0016): the orchestration kernel (coordinator, scheduler, projections, charter and roundtable runtime, policy evaluation and immutable core, legacy translation and migration, `POST /orchestration/*`) and the notification consumer in D5; the dead part of `src/mesh` (leases, inbox, registry, gateway, outbox transport, record families, fault harness, protocol negotiation) in D4 and D5; `src/rules` in D2; `src/budgets`, `src/workflows`, `src/simulation`, `src/routing`, `src/registry`, `src/sdk` and `src/upgrade` in D1. The design stays in the `archive/kernel-mesh-3.1.1` tag. `src/orchestration/schemas.ts` still holds the kernel's command, event, charter and roundtable schemas because `contracts/v1` is generated from it; nothing running uses those record types.
 
 ## Key Patterns
 
 - **ESM only**: `"type": "module"`. All local imports MUST use `.js` extension: `import { foo } from "./bar.js"`.
 - **Zod-first config**: Types are inferred from Zod schemas in `config/schemas.ts`, not hand-written. `config/types.ts` re-exports `z.infer<>` types.
-- **Kernel as Single Source of Truth**: All orchestration lifecycle changes are committed to the append-only event store (`SqliteEventStore`).
-- **The Immutable Core**: `assertCharterDoesNotRelaxCore` strictly refuses any charter proposal attempting to modify the safety floor, input fencing, security perimeter, advisory roundtable invariant, budget limits, or kernel authority.
-- **Advisory-Only Deliberation & Notifications**: Roundtable deliberations and notifications are strictly advisory. `roundtable.closed` appears in zero `COMMAND_EVENT_ALLOWLIST` entries; deliberation produces recommendations, never direct state transitions. Notifications never throw into or branch orchestration logic.
-- **Deterministic Prompt & Capability Compilation**: Prompts are deterministically compiled and digest-stamped: $\text{Charter} + \text{primaryRole} + \sum\text{secondaryRole.addenda} + \text{policy} + \text{taskPrompt}$. Capability envelopes enforce strict intersection ($\text{allowed} \cap \text{roleAllowed} \cap \neg\text{denied}$).
+- **Job state is the JSON job store**: a job's lifecycle lives in `JsonFileJobStore` (`<stateDir>/jobs/`) and its event log; the approval ledger records approvals, decisions and kill-switch use (ADR 0013). The SQLite event store is not wired yet (V4).
+- **Humans approve**: no agent, peer or trigger field (e.g. `metadata.plan_status`) can approve a job; only an operator on the worker can (`aibr approve`, operator token, same-host check).
+- **Deterministic prompt binding**: the runtime adapters build the prompt and tool policy through `RoleBinder` (`src/runtime/binder.ts`): byte-identical output for the same inputs, digest-stamped. Capability envelopes are a strict intersection ($\text{allowed} \cap \text{roleAllowed} \cap \neg\text{denied}$, `computeCapabilityEnvelope`).
 - **Interface adapters**: External services (runtimes, network probes) are wrapped behind interfaces defined in `types.ts`. Tests use fakes.
 - **Dependency injection**: `createApp()` takes an `AppDependencies` object. No global state in routes.
 - **Fastify inject**: Integration tests use `app.inject()` — no real HTTP server needed.
@@ -131,14 +134,14 @@ Environment variables:
 - Optional / conditional:
   - `AIBRIDGE_AGENT_ID` — identifier required only by `scripts/tmux-start.sh` (forwarded when set in `src/host/tmux.ts`)
   - `OPENCODE_SERVER_PASSWORD` — for opencode serve auth; falls back to secrets file `secrets/opencode_password` (`src/cli.ts`)
-  - `AIBRIDGE_OPERATOR_TOKEN` — operator credential token granting user-kind `actor` claims for charter approval authority (`src/bridge.ts`)
+  - `AIBRIDGE_OPERATOR_TOKEN` — operator credential for `aibr approve`, reject, `aibr stop --all-jobs` and reading any job (`src/bridge.ts`, `src/security/operator-auth.ts`)
   - `OPENCODE_PORT` — port for opencode serve (defaults to 4096; prompted by setup wizard)
 ## Operational
 
 - Process management: `aibr start` installs a per-profile user service (launchd `com.aibridge.<profile>` / systemd `aibridge-<profile>.service`) running `aibr serve`; `aibr start --foreground` runs the same in tmux for development; `aibr stop` stops both. Logs: `<stateDir>/logs/aibridge.log` (`aibr logs -f`).
 - Terminal supervision is tmux. The `terminal` config key was removed in 3.2.0 (a profile that still has it loads and warns).
 - Presentation: there is no TUI. Claude Code with the AIBridge plugin is the main interface; operator actions (`aibr jobs pending`, `aibr approve`, `aibr stop --all-jobs`, `aibr logs`) run on the worker. `aibr tui` was removed in 3.2.0.
-- Job state persisted as JSON files under `<stateDir>/jobs/` (by default `~/.local/state/aibridge/<profile>/jobs/` in profile deployments, or `.aibridge/jobs/` in local legacy dev runs), with orchestration state managed in SQLite event stores. Each job's events (`GET /jobs/:id/events`) are appended next to it as `<sha256(id)>.events.jsonl`, redacted and capped per job; neither file is ever pruned.
+- Job state persisted as JSON files under `<stateDir>/jobs/` (by default `~/.local/state/aibridge/<profile>/jobs/` in profile deployments, or `.aibridge/jobs/` in local legacy dev runs). Each job's events (`GET /jobs/:id/events`) are appended next to it as `<sha256(id)>.events.jsonl`, redacted and capped per job; neither file is ever pruned.
 - Bridge port (8787) must be Tailscale-only. Never expose opencode serve publicly.
 - opencode serve defaults to port 4096 (`OPENCODE_PORT` or setup wizard prompt).
 

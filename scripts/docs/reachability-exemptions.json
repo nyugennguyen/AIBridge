@@ -1,5 +1,5 @@
 {
-  "$comment": "Directories or files under src/ that are kept but not reachable from src/cli.ts or src/index.ts. Each entry needs a wire deadline (the release by which it must be reachable) and a delete deadline (the release by which it is removed if still unwired). See ADR 0016 and Docs/implementation-plans/v3.2.0-plan.md section 5.6. The src/notifications entry is added by block D5.",
+  "$comment": "Directories or files under src/ that are kept but not reachable from src/cli.ts or src/index.ts. Each entry needs a wire deadline (the release by which it must be reachable) and a delete deadline (the release by which it is removed if still unwired). See ADR 0016 and Docs/implementation-plans/v3.2.0-plan.md section 5.6.",
   "exemptions": [
     {
       "path": "src/memory",
@@ -34,6 +34,13 @@
       "reason": "Roadmap V3: context snapshot attached to a job, built from project memory.",
       "wireDeadline": "3.4.0",
       "deleteDeadline": "3.5.0",
+      "adr": "ADR 0016"
+    },
+    {
+      "path": "src/notifications",
+      "reason": "Roadmap V5: job notifications to Discord or Telegram (bus, store with dedupe and quieting, no-secret audit). The kernel consumer and the unused createApp wiring were removed in 3.2.0 block D5.",
+      "wireDeadline": "3.5.0",
+      "deleteDeadline": "3.6.0",
       "adr": "ADR 0016"
     }
   ]

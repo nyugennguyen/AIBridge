@@ -75,27 +75,42 @@ describe("analyze", () => {
     expect(byDir["src/dead"]?.unreachableLines).toBe(600)
     expect(byDir["src/kept"]).toMatchObject({ unreachableLines: 800, exemptLines: 800, unexemptedLines: 0 })
     expect(byDir["src/live"]?.unreachableLines).toBe(0)
-    expect(result.warnings).toHaveLength(1)
-    expect(result.warnings[0]).toContain("src/dead")
+    const directoryWarnings = result.warnings.filter((w) => w.includes("not exempt"))
+    expect(directoryWarnings).toHaveLength(1)
+    expect(directoryWarnings[0]).toContain("src/dead")
   })
 
   it("does not warn below the threshold", () => {
     const small = new Map(sources)
     small.set("src/dead/big.ts", lines(499))
-    expect(analyze(small, [exemption], "3.1.1").warnings).toEqual([])
+    expect(analyze(small, [exemption], "3.1.1").warnings.filter((w) => w.includes("not exempt"))).toEqual([])
   })
 
-  it("warns when an exemption is past its wire or delete deadline", () => {
-    const wire = analyze(new Map(sources), [exemption], "3.3.0").warnings.filter((w) => w.startsWith("src/kept"))
-    expect(wire).toHaveLength(1)
-    expect(wire[0]).toContain("wire deadline 3.3.0 passed")
-    const del = analyze(new Map(sources), [exemption], "3.4.0").warnings.filter((w) => w.startsWith("src/kept"))
-    expect(del[0]).toContain("delete deadline 3.4.0 passed")
+  const keptWarnings = (r: { warnings: readonly string[] }) => r.warnings.filter((w) => w.startsWith("src/kept"))
+
+  it("before the wire deadline an unreachable exemption only warns", () => {
+    const result = analyze(new Map(sources), [exemption], "3.2.9")
+    expect(result.failures).toEqual([])
+    expect(keptWarnings(result)).toHaveLength(1)
+    expect(keptWarnings(result)[0]).toContain("wire by 3.3.0")
   })
 
-  it("ignores an exemption whose code became reachable", () => {
+  it("past the wire deadline and still unreachable fails, naming the entry and the three choices", () => {
+    const result = analyze(new Map(sources), [exemption], "3.3.0")
+    expect(result.failures).toHaveLength(1)
+    expect(result.failures[0]).toContain("src/kept")
+    expect(result.failures[0]).toContain("wire it")
+    expect(result.failures[0]).toContain("extend")
+    expect(result.failures[0]).toContain("delete it")
+  })
+
+  it("past the wire deadline but now reachable is ok and reported as removable", () => {
     const wired = new Map(sources)
     wired.set("src/cli.ts", `import "./live/a.js"\nimport "./kept/small.js"\nimport "./kept/exempt.js"\n`)
-    expect(analyze(wired, [exemption], "3.4.0").warnings.filter((w) => w.startsWith("src/kept"))).toEqual([])
+    const result = analyze(wired, [exemption], "3.4.0")
+    expect(result.failures).toEqual([])
+    expect(keptWarnings(result)).toEqual([])
+    expect(result.removable).toHaveLength(1)
+    expect(result.removable[0]).toContain("src/kept")
   })
 })

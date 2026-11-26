@@ -25,7 +25,7 @@ The product direction (3.2.0 plan section 2) is an orchestrator per project, mem
 
    `src/memory/redaction` is wired in 3.2.0 (secret filter on job results) and needs no entry.
 3. Tag the last commit that still contains the removed kernel and mesh as `archive/kernel-mesh-3.1.1`, so the design can be recovered.
-4. Add a reachability check (`bun run docs:reachability`, part of `docs:check`) with an exemption list in `scripts/docs/reachability-exemptions.json`. It warns when a directory has 500 or more unreachable lines that no exemption covers, and when an exemption is past a deadline while still unreachable. Turning past-deadline warnings into failures is deferred.
+4. Add a reachability check (`bun run docs:reachability`, part of `docs:check`) with an exemption list in `scripts/docs/reachability-exemptions.json`. It warns when a directory has 500 or more unreachable lines that no exemption covers. It fails when an exemption is past its wire deadline (compared with the `package.json` version) and its code is still unreachable: wire it, extend the deadline with a reason, or delete it.
 
 ## Consequences
 

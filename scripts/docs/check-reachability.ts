@@ -6,9 +6,11 @@
  * the two runtime entry points (`src/cli.ts`, `src/index.ts`) and reports, per
  * `src/` directory, how many lines of TypeScript can never run.
  *
- * It WARNS and never fails (ADR 0016). A warning is raised when a directory has
- * at least 500 unreachable lines that no exemption covers, or when an exemption
- * is past its wire or delete deadline while its code is still unreachable.
+ * A directory with at least 500 unreachable lines that no exemption covers only
+ * WARNS. An exemption whose wire deadline has passed (compared with the version in
+ * package.json) while its code is still unreachable FAILS (exit 1): wire it,
+ * extend the deadline with a reason, or delete it (ADR 0016). A past-deadline
+ * exemption that is now reachable is reported as removable.
  * Exemptions live in `reachability-exemptions.json`.
  *
  * Usage: bun scripts/docs/check-reachability.ts
@@ -44,6 +46,10 @@ export interface DirectoryReport {
 export interface ReachabilityResult {
   readonly directories: readonly DirectoryReport[]
   readonly warnings: readonly string[]
+  /** Past-deadline exemptions that are still unreachable; these fail the check. */
+  readonly failures: readonly string[]
+  /** Past-deadline exemptions whose code is now reachable. */
+  readonly removable: readonly string[]
   readonly totalLines: number
   readonly unreachableLines: number
 }
@@ -171,19 +177,27 @@ export function analyze(
       )
     }
   }
+  const failures: string[] = []
+  const removable: string[] = []
   for (const exemption of exemptions) {
     const dead = exemptDead.get(exemption.path) ?? 0
-    if (dead === 0) continue
-    if (isDeadlinePassed(currentVersion, exemption.deleteDeadline)) {
-      warnings.push(`${exemption.path}: delete deadline ${exemption.deleteDeadline} passed (current ${currentVersion}) and ${dead} lines are still unreachable (${exemption.adr}).`)
-    } else if (isDeadlinePassed(currentVersion, exemption.wireDeadline)) {
-      warnings.push(`${exemption.path}: wire deadline ${exemption.wireDeadline} passed (current ${currentVersion}) and ${dead} lines are still unreachable (${exemption.adr}).`)
+    const passed = isDeadlinePassed(currentVersion, exemption.wireDeadline)
+    if (dead === 0) {
+      if (passed) removable.push(`${exemption.path}: now reachable; remove it from scripts/docs/reachability-exemptions.json.`)
+    } else if (passed) {
+      failures.push(
+        `${exemption.path}: wire deadline ${exemption.wireDeadline} passed (current ${currentVersion}) and ${dead} lines are still unreachable (${exemption.adr}). Choose one: wire it, extend the deadline in scripts/docs/reachability-exemptions.json with a reason, or delete it.`,
+      )
+    } else {
+      warnings.push(`${exemption.path}: ${dead} lines unreachable, wire by ${exemption.wireDeadline}, delete by ${exemption.deleteDeadline} (${exemption.adr}).`)
     }
   }
 
   return {
     directories,
     warnings,
+    failures,
+    removable,
     totalLines: directories.reduce((sum, d) => sum + d.totalLines, 0),
     unreachableLines: directories.reduce((sum, d) => sum + d.unreachableLines, 0),
   }
@@ -205,8 +219,7 @@ function collectSources(root: string): Map<string, string> {
 function main(): void {
   const sources = collectSources(REPOSITORY_ROOT)
   const exemptions = (JSON.parse(readFileSync(join(REPOSITORY_ROOT, "scripts/docs/reachability-exemptions.json"), "utf8")) as { exemptions: Exemption[] }).exemptions
-  const versionText = readFileSync(join(REPOSITORY_ROOT, "src/version.ts"), "utf8")
-  const version = /CLI_VERSION\s*=\s*"([^"]+)"/.exec(versionText)?.[1] ?? "0.0.0"
+  const version = (JSON.parse(readFileSync(join(REPOSITORY_ROOT, "package.json"), "utf8")) as { version: string }).version
   for (const exemption of exemptions) {
     if (!existsSync(join(REPOSITORY_ROOT, exemption.path))) console.warn(`reachability: exemption path does not exist: ${exemption.path}`)
   }
@@ -219,6 +232,9 @@ function main(): void {
   }
   console.log(`total ${result.totalLines} lines, ${result.unreachableLines} unreachable`)
   for (const warning of result.warnings) console.warn(`warning: ${warning}`)
+  for (const note of result.removable) console.log(`removable: ${note}`)
+  for (const failure of result.failures) console.error(`FAIL: ${failure}`)
+  if (result.failures.length > 0) process.exit(1)
   if (result.warnings.length === 0) console.log("reachability: no warnings")
 }
 

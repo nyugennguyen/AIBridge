@@ -3,8 +3,8 @@
 ## [Unreleased]
 
 ### Added
-- **ADR 0015 and ADR 0016.** ADR 0015 records that the orchestrator is chosen per project (Claude, Codex or OpenCode, over MCP) and that every node will run `aibr serve`; it amends ADR 0014. ADR 0016 keeps the unwired memory, event store, Codex adapter, context and notifications code with wire and delete deadlines and removes the rest; it supersedes ADR 0004 and ADR 0007, and ADR 0003 stays Accepted with a "not yet wired, deadline 3.3.0" note. No code behaviour changes.
-- **Reachability check** (`bun run docs:reachability`, also run by `docs:check`). It walks the imports from `src/cli.ts` and `src/index.ts`, reports unreachable lines per directory and warns (never fails) when a directory has 500 or more unreachable lines without an entry in `scripts/docs/reachability-exemptions.json`, or when an entry is past its deadline.
+- **ADR 0015 and ADR 0016.** ADR 0015 records that the orchestrator is chosen per project (Claude, Codex or OpenCode, over MCP) and that every node will run `aibr serve`; it amends ADR 0014. ADR 0016 keeps the unwired memory, event store, Codex adapter, context and notifications code with wire and delete deadlines and removes the rest; it is to supersede ADR 0004 and ADR 0007 once block D1 merges, and ADR 0003 stays Accepted with a "not yet wired, deadline 3.3.0" note. No code behaviour changes.
+- **Reachability check** (`bun run docs:reachability`, also run by `docs:check`). It walks the imports from `src/cli.ts` and `src/index.ts`, reports unreachable lines per directory and warns when a directory has 500 or more unreachable lines without an entry in `scripts/docs/reachability-exemptions.json`, and fails when an entry is past its wire deadline while its code is still unreachable.
 
 ### Documentation
 - `AGENTS.md` Architecture and the `README.md` architecture section describe what actually runs, and list the kept-but-unwired code and its deadlines under "Not yet wired".

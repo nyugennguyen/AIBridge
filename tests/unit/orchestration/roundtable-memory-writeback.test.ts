@@ -12,7 +12,7 @@
  */
 
 import { describe, expect, it } from "vitest"
-import { durable, reopen } from "../mesh/outbox/helpers.js"
+import { durable, reopen } from "../event-store/durable-db.js"
 import { SqliteEventStore } from "../../../src/orchestration/event-store/index.js"
 import { InMemoryMemoryRepository } from "../../../src/memory/in-memory-repository.js"
 import type { AppendMemoryInput, AppendMemoryResult, MemoryRepository } from "../../../src/memory/ports.js"

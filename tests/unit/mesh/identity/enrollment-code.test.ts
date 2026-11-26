@@ -9,7 +9,6 @@ import {
   verifyEnrollmentCode,
   type EnrollmentCodeStore,
 } from "../../../../src/mesh/identity/enrollment-code.js"
-import { wireRejectionReasonFor } from "../../../../src/mesh/identity/enrollment.js"
 import { sha256Digest } from "../../../../src/mesh/identity/crypto.js"
 import type { MeshId } from "../../../../src/orchestration/identifiers.js"
 import type { ProvisionalNodeId } from "../../../../src/mesh/identity/wire-ids.js"
@@ -303,23 +302,6 @@ describe("verifyEnrollmentCode", () => {
     // The internal reasons still differ, because the operator's audit log has to be
     // able to say which.
     expect(new Set([unknown.reason, expired.reason, reused.reason]).size).toBe(3)
-  })
-
-  it("maps every code-state reason onto one wire rejection, and keeps key_mismatch distinct", () => {
-    // The protocol's ENROLLMENT_REJECTION_REASONS distinguishes code_expired and
-    // code_already_used from code_unknown. This module does not, because a peer
-    // that can tell them apart can enumerate the operator's code ledger.
-    expect(wireRejectionReasonFor("code_unknown")).toBe("code_unknown")
-    expect(wireRejectionReasonFor("code_expired")).toBe("code_unknown")
-    expect(wireRejectionReasonFor("code_already_used")).toBe("code_unknown")
-    expect(wireRejectionReasonFor("code_bound_to_another_mesh")).toBe("code_unknown")
-    expect(wireRejectionReasonFor("code_provisional_mismatch")).toBe("code_unknown")
-    // A pin violation is disclosed: the peer just supplied the key, so telling it
-    // the key is not the pinned one adds nothing it did not already know.
-    expect(wireRejectionReasonFor("pin_key_mismatch")).toBe("key_mismatch")
-    expect(wireRejectionReasonFor("pin_key_id_unknown")).toBe("key_mismatch")
-    // An unmapped internal reason narrows to the LEAST informative value.
-    expect(wireRejectionReasonFor("some_future_reason")).toBe("code_unknown")
   })
 
   it("compares code hashes in constant time, and an unknown hash costs the same work as a known one", async () => {

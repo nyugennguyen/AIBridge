@@ -297,7 +297,7 @@ caller retries.
 
 Claim and acknowledge remain **two separate durable writes**, per the ordering
 argument at
-[`deliverer.ts:54`](../../src/mesh/outbox/deliverer.ts). Collapsing them makes the
+`src/mesh/outbox/deliverer.ts:54` (removed in 3.2.0; kept in the `archive/kernel-mesh-3.1.1` tag). Collapsing them makes the
 crash-between case unrepresentable.
 
 ### 2.6 Credential binding is decided at enqueue
@@ -452,7 +452,7 @@ the invariant to preserve is that there is exactly one.
 (`src/mesh/gateway/terminal/route.ts:216`, removed in 3.1.1)
 is a WebSocket with single-input-owner semantics (`SF-10`) and a manual takeover
 protocol. `GET /v1/mesh/events`
-([`src/mesh/gateway/events/route.ts:66`](../../src/mesh/gateway/events/route.ts))
+(`src/mesh/gateway/events/route.ts:66`, removed in 3.2.0; kept in the `archive/kernel-mesh-3.1.1` tag)
 is a long-lived SSE stream with snapshot re-base and cursor resume.
 
 **A queue cannot be interposed between a peer and a stateful connection.** The

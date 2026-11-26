@@ -92,7 +92,7 @@ For OpenCode workers that need a hardened, durable admission tier, `bridge.ingre
 
 ### Not yet wired
 
-Roughly 55,000 of the 98,000 lines in `src/` cannot be reached from the `aibr` and bridge entry points; `bun run docs:reachability` measures it. Some of that code is the base for the roadmap and is kept with deadlines ([ADR 0016](Docs/adr/0016-keep-selected-unwired-code-with-deadlines.md)); the rest (the orchestration kernel, mesh leases and gateway) is removed in 3.2.0; rules, budgets, workflows, simulation, routing, registry, sdk and upgrade are already gone.
+Roughly 17,000 of the 61,000 lines in `src/` cannot be reached from the `aibr` and bridge entry points; `bun run docs:reachability` measures it. Some of that code is the base for the roadmap and is kept with deadlines ([ADR 0016](Docs/adr/0016-keep-selected-unwired-code-with-deadlines.md)); the rest (the orchestration kernel) is removed in 3.2.0. Rules, budgets, workflows, simulation, routing, registry, sdk, upgrade and the dead part of the mesh (leases, gateway, inbox, outbox transport) are already gone; what remains of `src/mesh` is node identity and request signing, the wire ids and replay window, and the delivery backoff policy.
 
 | Path | Serves | Wire by | Delete by |
 |---|---|---|---|

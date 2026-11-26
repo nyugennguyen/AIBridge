@@ -10,11 +10,9 @@ import {
   type RotateNodeKeyInput,
 } from "../../../../src/mesh/identity/peer-key-pins.js"
 import { InMemoryEnrollmentCodeStore, issueEnrollmentCode, verifyEnrollmentCode } from "../../../../src/mesh/identity/enrollment-code.js"
-import { buildEnrollmentRequest, decideEnrollment } from "../../../../src/mesh/identity/enrollment.js"
-import { InMemoryNodeTrustStore } from "../../../../src/mesh/identity/node-trust.js"
 import { NodeKeyPair, publicNodeKeyOf } from "../../../../src/mesh/identity/node-key.js"
 import { nodeKeyIdSchema } from "../../../../src/mesh/identity/wire-ids.js"
-import { MESH_ID, OTHER_MESH_ID, PENDING_SENDER_ID, PROVISIONAL_ID, STRANGER_ID, WORKER_ID, at } from "./fixtures.js"
+import { MESH_ID, OTHER_MESH_ID, PROVISIONAL_ID, STRANGER_ID, WORKER_ID, at } from "./fixtures.js"
 
 function pinInput(keyPair: NodeKeyPair, nodeId = WORKER_ID) {
   return {
@@ -294,110 +292,6 @@ describe("PeerKeyPinStore.rotate", () => {
 
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.error.code).toBe("identity.rotate_wrong_mesh")
-  })
-})
-
-describe("decideEnrollment pinning", () => {
-  it("pins on accept and refuses the same code presented with a different key", async () => {
-    const codes = new InMemoryEnrollmentCodeStore()
-    const pins = new InMemoryPeerKeyPinStore()
-    const trust = new InMemoryNodeTrustStore()
-    const issued = await issueEnrollmentCode({ meshId: MESH_ID, issuedBy: "user-1", now: at(0) }, codes)
-    if (!issued.ok) throw new Error(issued.error.message)
-
-    const honest = NodeKeyPair.generate()
-    const request = buildEnrollmentRequest({
-      meshId: MESH_ID,
-      enrollmentId: issued.value.enrollmentId,
-      codeHash: issued.value.codeHash,
-      keyPair: honest,
-      nodeDisplayName: "worker-1",
-      provisionalNodeId: PROVISIONAL_ID,
-      requestedAt: new Date(at(1)).toISOString(),
-      codeExpiresAt: new Date(issued.value.expiresAt).toISOString(),
-      senderNodeId: PENDING_SENDER_ID,
-    })
-
-    const accepted = await decideEnrollment({ request, now: at(1) }, { codes, pins, trust })
-    expect(accepted.outcome).toBe("accepted")
-    expect(accepted.nodeKeyId).toBe(honest.keyId)
-
-    // The same code, a different key. §4.1: "a later request presenting the same code
-    // with a different key is refused". The pin is not rewritten.
-    const attacker = NodeKeyPair.generate()
-    const replay = buildEnrollmentRequest({
-      meshId: MESH_ID,
-      enrollmentId: issued.value.enrollmentId,
-      codeHash: issued.value.codeHash,
-      keyPair: attacker,
-      nodeDisplayName: "attacker",
-      provisionalNodeId: PROVISIONAL_ID,
-      requestedAt: new Date(at(2)).toISOString(),
-      codeExpiresAt: new Date(issued.value.expiresAt).toISOString(),
-      senderNodeId: PENDING_SENDER_ID,
-    })
-    const refused = await decideEnrollment({ request: replay, now: at(2) }, { codes, pins, trust })
-
-    expect(refused.outcome).toBe("rejected")
-    const current = await pins.current(accepted.nodeId)
-    expect(current.ok && current.value?.nodeKeyId).toBe(honest.keyId)
-  })
-
-  it("converges a retry of the same code and key, without re-pinning", async () => {
-    const codes = new InMemoryEnrollmentCodeStore()
-    const pins = new InMemoryPeerKeyPinStore()
-    const trust = new InMemoryNodeTrustStore()
-    const issued = await issueEnrollmentCode({ meshId: MESH_ID, issuedBy: "user-1", now: at(0) }, codes)
-    if (!issued.ok) throw new Error(issued.error.message)
-    const keyPair = NodeKeyPair.generate()
-    const request = buildEnrollmentRequest({
-      meshId: MESH_ID,
-      enrollmentId: issued.value.enrollmentId,
-      codeHash: issued.value.codeHash,
-      keyPair,
-      nodeDisplayName: "worker-1",
-      provisionalNodeId: PROVISIONAL_ID,
-      requestedAt: new Date(at(1)).toISOString(),
-      codeExpiresAt: new Date(issued.value.expiresAt).toISOString(),
-      senderNodeId: PENDING_SENDER_ID,
-    })
-
-    const first = await decideEnrollment({ request, now: at(1) }, { codes, pins, trust })
-    const retry = await decideEnrollment({ request, now: at(2) }, { codes, pins, trust })
-
-    // The at-least-once case, end to end. A second `pin` would be refused by the
-    // store, so a service that re-pinned on retry would report a failure for a
-    // request that had already succeeded.
-    expect(first.outcome).toBe("accepted")
-    expect(retry.outcome).toBe("accepted")
-    expect(retry.converged).toBe(true)
-    expect(retry.nodeId).toBe(first.nodeId)
-    expect(pins.size).toBe(1)
-  })
-
-  it("refuses a key that is not 32 bytes before it reaches the code store", async () => {
-    const codes = new InMemoryEnrollmentCodeStore()
-    const before = codes.redemptions
-    const request = buildEnrollmentRequest({
-      meshId: MESH_ID,
-      enrollmentId: "enr-1",
-      codeHash: `sha256:${"a".repeat(64)}`,
-      keyPair: NodeKeyPair.generate(),
-      nodeDisplayName: "worker-1",
-      provisionalNodeId: PROVISIONAL_ID,
-      requestedAt: new Date(at(1)).toISOString(),
-      codeExpiresAt: new Date(at(600)).toISOString(),
-      senderNodeId: PENDING_SENDER_ID,
-    })
-    const tampered = { ...request, nodePublicKey: "AAAA" }
-
-    const decision = await decideEnrollment(
-      { request: tampered, now: at(1) },
-      { codes, pins: new InMemoryPeerKeyPinStore(), trust: new InMemoryNodeTrustStore() },
-    )
-
-    expect(decision.outcome).toBe("rejected")
-    expect(codes.redemptions).toBe(before)
   })
 })
 

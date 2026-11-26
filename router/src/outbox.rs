@@ -51,7 +51,7 @@
 //! cannot be, because the work happens between them. What makes it survivable is
 //! that the gap is *representable*: [`IngressOutbox::recover_stale`] finds the row
 //! by its claim lease, requeues it, and **preserves `attempts`**. See
-//! [`deliverer.rs:54`](../../../src/mesh/outbox/deliverer.rs) for the ordering
+//! `src/mesh/outbox/deliverer.ts:54` (tag `archive/kernel-mesh-3.1.1`) for the ordering
 //! argument being ported.
 //!
 //! # Terminal records are retained
@@ -669,7 +669,7 @@ impl IngressOutbox {
     /// that decides [`AdmissionOutcome`]. They are not two statements, because a
     /// check and a write with a gap between them are exactly where a redelivered
     /// request gets two rows — the same argument as
-    /// [`sqlite-outbox-store.ts`](../../../src/mesh/outbox/sqlite-outbox-store.ts),
+    /// `src/mesh/outbox/sqlite-outbox-store.ts` (tag `archive/kernel-mesh-3.1.1`),
     /// and the reason the outcome comes from a `changes` count rather than from
     /// "a row exists".
     ///
@@ -885,7 +885,7 @@ impl IngressOutbox {
     /// At [`MESH_OUTBOX_MAX_ATTEMPTS`] the record goes terminal, `next_attempt_at_ms`
     /// is cleared **in the same statement**, and the row is retained. Clearing it
     /// there mirrors the mesh store's `exhaust`
-    /// ([`sqlite-outbox-store.ts:159`](../../../src/mesh/outbox/sqlite-outbox-store.ts)):
+    /// (`src/mesh/outbox/sqlite-outbox-store.ts:159`, tag `archive/kernel-mesh-3.1.1`):
     /// a terminal row carrying a future retry deadline is a lie to an operator and
     /// a wake-up for any scheduler that reads that column.
     ///

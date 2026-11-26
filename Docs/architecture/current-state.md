@@ -103,27 +103,17 @@ Two-Machine Starter Topology:
 │                            │              │ opencode serve (127.0.0.1) │
 └────────────────────────────┘              └────────────────────────────┘
 
-Distributed N-Node Mesh Topology (src/mesh/):
-┌────────────────┐     Heartbeats & Leases      ┌────────────────┐
-│ Mesh Node A    │◄────────────────────────────►│ Mesh Node B    │
-│ (Controller)   │                              │ (Worker)       │
-│                │     SSE State Gateway (SSE)  │                │
-│ Ed25519 Keys   ├─────────────────────────────►│ Ed25519 Keys   │
-│ Leases & Epochs│     Durable Outbox / Inbox   │ Mesh Inbox     │
-│ Registry Store │◄─────────────────────────────┤                │
-└────────────────┘                              └────────────────┘
 ```
 
 ### Two-machine starter topology
 - **Client/Caller Node:** Initiates jobs using HTTP POST to `/trigger` on the execution node's tailnet address. Receives completion callbacks at a configured callback URL.
 - **Execution Node:** Runs `aibr-router` (or `aibr serve`) listening on `bridge.host:8787`, accompanied by `aibr worker` and `opencode serve` on `127.0.0.1:4096`.
 
-### N-node distributed mesh topology (`src/mesh/*`)
-- **Node identity and enrollment (`src/mesh/identity/`):** Each node generates an Ed25519 identity key (`crypto.ts`). Nodes join via time-limited enrollment codes (`enrollment-code.ts`). Cross-node requests are signed and verified with replay guards (`request-signature.ts`, `replay-guard.ts`).
-- **Registry and heartbeats (`src/mesh/registry/`):** Peer nodes register their capabilities and announce presence with periodic heartbeats (`src/mesh/protocol/heartbeat.ts`). Stale nodes expire automatically.
-- **Distributed controller leases and epochs (`src/mesh/lease/`, ADR 0004):** Coordination uses monotonic epoch counters and durable controller leases to guarantee single-master execution for task graphs and avoid split-brain states (`command-gate.ts`, `sqlite-lease-store.ts`).
-- **Mesh inbox and outbox (`src/mesh/inbox/`, `src/mesh/outbox/`):** Commands are dispatched through durable outboxes and received by target inboxes, decoupling inter-node latency from execution.
-- **Real-time gateways (`src/mesh/gateway/`):** Server-Sent Events (SSE) gateways (`gateway/events/sse.ts`) stream state projections to remote consumers. The terminal gateway was removed in 3.1.1 (ADR 0014).
+### Node identity and request signing (`src/mesh/`)
+- **Node identity (`src/mesh/identity/`):** Each node generates an Ed25519 identity key (`node-key.ts`, `crypto.ts`). Peers are paired with one-time codes (`aibr enroll`, `src/pairing/`, built on `enrollment-code.ts`) and their keys pinned (`peer-key-pins.ts`). Cross-node requests are signed and verified with a replay guard (`request-signature.ts`, `replay-guard.ts`, ADR 0012).
+- **Wire ids and replay window (`src/mesh/protocol/{identifiers,envelope,bounds}.ts`):** The id grammars and the replay window that request signing uses.
+- **Delivery policy (`src/mesh/outbox/policy.ts`):** The backoff schedule and attempt threshold shared by the egress outbox (`src/callback/egress-outbox.ts`), the ingress drainer (`src/ingress/drainer.ts`) and the Rust router (`router/src/policy.rs`).
+- The rest of the 3.1.1 mesh (controller leases, registry and heartbeats, inbox, outbox transport, SSE gateway, fault harness) was never wired into `aibr serve` and was removed in 3.2.0; the design is in the `archive/kernel-mesh-3.1.1` tag. Nodes talk to each other over `/trigger`, `/report`, the egress outbox and signed requests.
 - **Orchestration charter and advisory roundtables (`src/orchestration/`):** Multi-agent coordination supports deliberation sessions (`roundtable/aggregate.ts`). Deliberations and charter proposals are strictly advisory (`src/orchestration/policy/immutable-core.ts:53,95`): deliberation outcomes (`RoundtableOutcome`) never mutate external task lifecycles directly.
 
 ## 4. Request and event flow
@@ -173,9 +163,7 @@ AIBridge separates persistence into distinct durable stores with explicit invari
 | Store | Implementation | Location | Invariant |
 |---|---|---|---|
 | Ingress outbox | SQLite (WAL mode, `synchronous=FULL`) | `AIBRIDGE_INGRESS_OUTBOX` | Commit-before-202: HTTP 202 requires committed WAL row (`router/src/outbox.rs:5`) |
-| Mesh inbox | SQLite table `mesh_inbox_commands` | `src/mesh/inbox/migrations.ts:64` | Durable effect state: `not_started`, `runtime_accepted`, `result_recorded` (`src/mesh/inbox/types.ts:66`) |
 | Event store | SQLite `SqliteEventStore` | `src/orchestration/event-store/` | Append-only event sequence, immutable monotonic revisions (ADR 0003) |
-| Controller leases | SQLite `SqliteLeaseStore` | `src/mesh/lease/sqlite-lease-store.ts` | Monotonic epoch fencing; split-brain prevention (ADR 0004) |
 | Jobs store | `JsonFileJobStore` | `${stateDir}/jobs/${job.id}.json` | Atomic write via temporary file (`.json.tmp` rename, `src/jobs/store.ts:36-40`) |
 
 ### Profile directory resolution
@@ -279,12 +267,10 @@ Five binary targets are compiled by `scripts/build-matrix.sh:31-37`:
 |---|---|---|
 | Ingress bind preflight & address validation | `router/src/bind.rs:5-8`, `router/src/config.rs:146-148` | `router/tests/bind.rs`, `tests/unit/host/preflight.test.ts` |
 | Ingress body ceiling (1 MiB) & inflight cap (64) | `router/src/validate.rs:72`, `router/src/routes.rs:279-291`, `src/server/app.ts:80` | `router/tests/bounds.rs`, `tests/unit/server/route-boundary.test.ts` |
-| Commit-before-202 WAL persistence | `router/src/outbox.rs:5-13`, `router/src/routes.rs:10-21` | `router/tests/crash_matrix.rs`, `tests/unit/mesh/outbox/crash-boundaries.test.ts` |
-| Outbox delivery retries & backoff schedule | `router/src/policy.rs:21-29` | `router/tests/backoff.rs`, `tests/unit/mesh/outbox/backoff-parity.test.ts` |
+| Commit-before-202 WAL persistence | `router/src/outbox.rs:5-13`, `router/src/routes.rs:10-21` | `router/tests/crash_matrix.rs` |
+| Outbox delivery retries & backoff schedule | `router/src/policy.rs:21-29` | `router/tests/backoff.rs`, `tests/unit/mesh/outbox/backoff-parity.test.ts`, `tests/unit/mesh/outbox/policy.test.ts` |
 | Bearer token authentication & security | `router/src/auth.rs`, `src/config/schemas.ts:23`, `src/bridge.ts:94-99` | `router/tests/auth.rs`, `tests/integration/auth-mode.test.ts`, `tests/unit/security/auth-provider.test.ts` |
 | Secret redaction and scrubbing | `src/security/`, `src/memory/redaction/` | `tests/security/redaction-audit.test.ts`, `tests/security/golden-logs.test.ts` |
-| Mesh inbox command states & effect boundaries | `src/mesh/inbox/migrations.ts:64`, `src/mesh/inbox/types.ts:66` | `tests/unit/mesh/inbox/inbox-store.test.ts`, `tests/unit/mesh/inbox/launch-outcome.test.ts` |
-| Controller leases and epoch fencing | `src/mesh/lease/lease.ts`, `src/mesh/lease/sqlite-lease-store.ts` | `tests/unit/mesh/lease/claim-renew-release.test.ts`, `tests/unit/mesh/lease/split-brain.test.ts` |
 | Advisory roundtable deliberation invariant | `src/orchestration/policy/immutable-core.ts:53,95`, `src/orchestration/roundtable/aggregate.ts:19` | `tests/unit/orchestration/roundtable.test.ts`, `tests/unit/orchestration/immutable-core.test.ts` |
 | Jobs file store atomic persistence | `src/jobs/store.ts:12-60`, `src/host/paths.ts:95-113` | `tests/unit/jobs/manager.test.ts` |
 | Router CLI modes & argument validation | `router/src/main.rs:95-117` | `router/tests/cli_modes.rs` |

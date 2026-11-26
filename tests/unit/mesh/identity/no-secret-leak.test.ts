@@ -27,7 +27,6 @@ import { InMemoryKeyStore } from "../../../../src/mesh/identity/memory-key-store
 import { NodeKeyPair, parsePublicNodeKey, publicNodeKeyOf } from "../../../../src/mesh/identity/node-key.js"
 import { parseStoredNodeKey, type StoredNodeKey } from "../../../../src/mesh/identity/key-store.js"
 import { InMemoryEnrollmentCodeStore, issueEnrollmentCode, verifyEnrollmentCode } from "../../../../src/mesh/identity/enrollment-code.js"
-import { decideEnrollment } from "../../../../src/mesh/identity/enrollment.js"
 import { InMemoryNodeTrustStore, UnavailableNodeTrustStore, parseTrustedNode, revokeNode, verifyKeyNotRevoked, verifyNodeTrust } from "../../../../src/mesh/identity/node-trust.js"
 import { InMemoryPeerKeyPinStore, parsePeerKeyPin, resolvePinnedKey, verifyPinnedKey } from "../../../../src/mesh/identity/peer-key-pins.js"
 import { verifyMeshRequest, signMeshRequest, MAX_REQUEST_AGE_MS } from "../../../../src/mesh/identity/request-signature.js"
@@ -150,7 +149,7 @@ describe("every error path in the module is swept for secret material", () => {
     if (!overTtl.ok) assertNoSecret(overTtl.error, secrets, "an over-long TTL refusal")
   })
 
-  it("node trust, pins and enrollment: the refusals that quote ids and keys", async () => {
+  it("node trust and pins: the refusals that quote ids and keys", async () => {
     const keyPair = NodeKeyPair.generate()
     const trust = new InMemoryNodeTrustStore()
     const pins = new InMemoryPeerKeyPinStore()
@@ -188,47 +187,6 @@ describe("every error path in the module is swept for secret material", () => {
     expect(parseTrustedNode({ nodeId: "not a wire id", meshId: MESH_ID, nodeKeyId: keyPair.keyId, enrolledAt: 0, displayName: "w" }).ok).toBe(false)
     expect(parsePeerKeyPin({ nodeId: "not a wire id" }).ok).toBe(false)
     expect(parsePublicNodeKey({ nodeKeyId: "key-1", publicKey: "AAAA" }).ok).toBe(false)
-
-    // The enrollment refusal, which is the one a peer provokes on purpose.
-    const codes = new InMemoryEnrollmentCodeStore()
-    const issued = await issueEnrollmentCode({ meshId: MESH_ID, issuedBy: "user-1", now: at(0) }, codes)
-    if (!issued.ok) throw new Error(issued.error.message)
-    const fresh = NodeKeyPair.generate()
-    const decided = await decideEnrollment(
-      {
-        request: {
-          meshId: MESH_ID,
-          enrollmentId: issued.value.enrollmentId,
-          enrollmentCodeHash: issued.value.codeHash,
-          nodePublicKey: fresh.publicKey,
-          nodeDisplayName: "worker",
-          provisionalNodeId: PROVISIONAL_ID,
-          requestedAt: new Date(at(1)).toISOString(),
-          codeExpiresAt: new Date(issued.value.expiresAt).toISOString(),
-        },
-        now: at(1),
-      },
-      { codes, pins, trust },
-    )
-    expect(decided.outcome).toBe("accepted")
-
-    const bad = await decideEnrollment(
-      {
-        request: {
-          meshId: MESH_ID,
-          enrollmentId: issued.value.enrollmentId,
-          enrollmentCodeHash: issued.value.codeHash,
-          nodePublicKey: "AAAA",
-          nodeDisplayName: "worker",
-          provisionalNodeId: PROVISIONAL_ID,
-          requestedAt: new Date(at(1)).toISOString(),
-          codeExpiresAt: new Date(issued.value.expiresAt).toISOString(),
-        },
-        now: at(1),
-      },
-      { codes, pins, trust },
-    )
-    expect(bad.outcome).toBe("rejected")
   })
 
   it("request signature: the refusals a forged or replayed request provokes", async () => {

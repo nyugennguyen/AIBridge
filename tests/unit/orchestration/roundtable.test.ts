@@ -1,5 +1,5 @@
 /**
- * Roundtable Deliberation & Controller Relay Unit & Invariant Tests.
+ * Roundtable Deliberation Unit & Invariant Tests.
  *
  * Exercises:
  * 1. Advisory-Only Invariant (§7.5, §11 row):
@@ -14,24 +14,12 @@
  *    - Inject human: `authorRoleId: "human"`, refusal if non-human author.
  *    - Close: advisory outcome recorded, closing twice refused.
  *
- * 3. Controller Relay (§6.3 transport, Acceptance):
- *    - Post from one member relays to every other member through the controller relay.
- *    - Sender node is never re-sent its own post.
- *    - Ingest path test with fakes.
- *    - Total order preserved: SSE gateway is sole total-order authority (`position`),
- *      per-discussion `seq` is strictly monotonic.
- *
- * 4. Durable-Before-Effect (Acceptance):
+ * 3. Durable-Before-Effect (Acceptance):
  *    - Outbox record is appended inside transaction BEFORE relay delivery occurs.
  *    - Simulated crash before delivery + redelivery is idempotent and does not double-relay.
  */
 
 import { describe, expect, it } from "vitest"
-import { MeshEventGateway } from "../../../src/mesh/gateway/events/gateway.js"
-import { DefaultRoundtablePostRelay, MeshEventIngestor, type EventIngestStore } from "../../../src/mesh/outbox/ingest.js"
-import { meshCommandSchema } from "../../../src/mesh/protocol/command.js"
-import { meshEventSchema, type MeshEvent } from "../../../src/mesh/protocol/event.js"
-import { CURRENT_MESH_PROTOCOL_VERSION } from "../../../src/mesh/protocol/negotiation.js"
 import {
   COMMAND_EVENT_ALLOWLIST,
   CoordinatorContractError,
@@ -41,7 +29,6 @@ import {
   type CoordinatorDependencies,
   type EffectTransport,
 } from "../../../src/orchestration/coordinator/index.js"
-import { digestJson } from "../../../src/orchestration/digest.js"
 import type { EventInput, OutboxRecordInput } from "../../../src/orchestration/event-store/types.js"
 import {
   commandIdSchema,
@@ -59,13 +46,11 @@ import {
   closeRoundtable,
   openRoundtable,
   RoundtableRepository,
-  type Post,
   type Roundtable,
   type RoundtableOutcome,
 } from "../../../src/orchestration/roundtable/index.js"
 import {
   orchestrationCommandSchema,
-  orchestrationEventSchema,
 } from "../../../src/orchestration/schemas.js"
 import type { OrchestrationCommand, OrchestrationEvent } from "../../../src/orchestration/types.js"
 
@@ -556,288 +541,7 @@ describe("Roundtable Aggregate Operations & Error Discipline", () => {
 })
 
 // ============================================================================
-// 3. Controller Relay (§6.3 Transport)
-// ============================================================================
-
-describe("Controller Relay (§6.3 Transport & Mesh Ingest)", () => {
-  it("relays a member post to all other members, excluding the sender node", async () => {
-    const repository = new RoundtableRepository()
-    const roundtable = makeSampleRoundtable({
-      members: [
-        { nodeId: nodeIdSchema.parse("node-chair"), roleId: "chair-role" },
-        { nodeId: nodeIdSchema.parse("node-worker-a"), roleId: "proposer-role" },
-        { nodeId: nodeIdSchema.parse("node-worker-b"), roleId: "reviewer-role" },
-      ],
-    })
-    repository.open(roundtable)
-
-    const delivered: { destination: string; event: MeshEvent }[] = []
-    const fakeTransport = {
-      async deliver(record: { destination: string; event: MeshEvent }) {
-        delivered.push(record)
-      },
-    }
-
-    const relay = new DefaultRoundtablePostRelay({
-      roundtables: repository,
-      transport: fakeTransport,
-    })
-
-    // Suppose worker-a posts to the controller
-    const postResult = repository.post({
-      postId: "post-worker-a-1",
-      discussionId: roundtable.id,
-      authorNodeId: nodeIdSchema.parse("node-worker-a"),
-      authorRoleId: "proposer-role",
-      kind: "proposal",
-      body: "RFC proposal from worker A",
-      createdAt: NOW,
-    })
-    expect(postResult.ok).toBe(true)
-    if (!postResult.ok) return
-
-    const postEvent: OrchestrationEvent = {
-      schemaVersion: 1,
-      eventId: eventIdSchema.parse("evt-post-1"),
-      sequence: 1,
-      type: "roundtable.posted",
-      projectId: PROJECT,
-      runId: RUN,
-      actor: { kind: "node", nodeId: "node-worker-a" },
-      controllerEpoch: 1,
-      occurredAt: NOW,
-      correlationId: "corr-1",
-      causation: null,
-      payload: { post: postResult.value.post },
-    } as OrchestrationEvent
-
-    const incomingMeshEvent: MeshEvent = {
-      meshProtocolVersion: CURRENT_MESH_PROTOCOL_VERSION,
-      eventId: eventIdSchema.parse("mevt-incoming-1"),
-      sourceNodeId: nodeIdSchema.parse("node-worker-a"),
-      commandCorrelation: null,
-      localSequence: 1,
-      observedAt: NOW,
-      runProjectScope: { projectId: PROJECT, runId: RUN },
-      eventType: "roundtable.posted",
-      event: postEvent,
-    }
-
-    const relayOutcome = await relay.relay(incomingMeshEvent)
-    expect(relayOutcome.ok).toBe(true)
-    if (relayOutcome.ok) {
-      // Recipient nodes are node-chair and node-worker-b
-      expect([...relayOutcome.value].sort()).toEqual(["node-chair", "node-worker-b"].sort())
-    }
-
-    // Assert delivered records
-    expect(delivered).toHaveLength(2)
-    const destinations = delivered.map((d) => d.destination).sort()
-    expect(destinations).toEqual(["node-chair", "node-worker-b"].sort())
-
-    // CRITICAL: Sender node 'node-worker-a' is NOT re-sent its own post
-    expect(destinations).not.toContain("node-worker-a")
-  })
-
-  it("relays through MeshEventIngestor path with fakes, preserving total order on SSE gateway", async () => {
-    const repository = new RoundtableRepository()
-    const roundtable = makeSampleRoundtable({
-      chairNodeId: nodeIdSchema.parse("node-worker-a"),
-      members: [
-        { nodeId: nodeIdSchema.parse("node-worker-a"), roleId: "role-a" },
-        { nodeId: nodeIdSchema.parse("node-worker-b"), roleId: "role-b" },
-      ],
-    })
-    const openRes = repository.open(roundtable)
-    expect(openRes.ok).toBe(true)
-
-    // Ingest stores on nodes
-    const controllerStoreSeen = new Set<string>()
-    const controllerStore: EventIngestStore = {
-      async seen(eventId) {
-        return { ok: true, value: controllerStoreSeen.has(eventId) }
-      },
-      async apply(event) {
-        controllerStoreSeen.add(event.eventId)
-        return { ok: true, value: undefined }
-      },
-    }
-
-    const workerBStoreSeen = new Set<string>()
-    const workerBStore: EventIngestStore = {
-      async seen(eventId) {
-        return { ok: true, value: workerBStoreSeen.has(eventId) }
-      },
-      async apply(event) {
-        workerBStoreSeen.add(event.eventId)
-        return { ok: true, value: undefined }
-      },
-    }
-
-    const workerBIngestor = new MeshEventIngestor({ store: workerBStore })
-
-    // Transport on controller delivers to worker B's ingestor
-    const transport = {
-      async deliver(record: { destination: string; event: MeshEvent }) {
-        if (record.destination === "node-worker-b") {
-          const outcome = await workerBIngestor.ingest(record.event)
-          expect(outcome.ok).toBe(true)
-        }
-      },
-    }
-
-    const controllerRelay = new DefaultRoundtablePostRelay({
-      roundtables: repository,
-      transport,
-    })
-
-    const controllerIngestor = new MeshEventIngestor({
-      store: controllerStore,
-      relay: controllerRelay,
-    })
-
-    // SSE Event Gateway on controller
-    let clock = 1000
-    const gateway = new MeshEventGateway({
-      now: () => (clock += 10),
-    })
-
-    // Worker A produces post 1
-    const p1 = repository.post({
-      postId: "p-a-1",
-      discussionId: roundtable.id,
-      authorNodeId: nodeIdSchema.parse("node-worker-a"),
-      authorRoleId: "role-a",
-      kind: "proposal",
-      body: "First post",
-      createdAt: NOW,
-    })
-    expect(p1.ok).toBe(true)
-    if (!p1.ok) return
-    expect(p1.value.post.seq).toBe(1)
-
-    const event1: MeshEvent = {
-      meshProtocolVersion: CURRENT_MESH_PROTOCOL_VERSION,
-      eventId: eventIdSchema.parse("mevt-a-1"),
-      sourceNodeId: nodeIdSchema.parse("node-worker-a"),
-      commandCorrelation: null,
-      localSequence: 1,
-      observedAt: NOW,
-      runProjectScope: { projectId: PROJECT, runId: RUN },
-      eventType: "roundtable.posted",
-      event: {
-        schemaVersion: 1,
-        eventId: eventIdSchema.parse("mevt-a-1"),
-        sequence: 1,
-        type: "roundtable.posted",
-        projectId: PROJECT,
-        runId: RUN,
-        actor: { kind: "node", nodeId: "node-worker-a" },
-        controllerEpoch: 1,
-        occurredAt: NOW,
-        correlationId: "corr-1",
-        causation: null,
-        payload: { post: p1.value.post },
-      } as OrchestrationEvent,
-    }
-
-    // Ingest at controller -> triggers relay to worker B
-    const outcome1 = await controllerIngestor.ingest(event1)
-    expect(outcome1.ok).toBe(true)
-    if (outcome1.ok) expect(outcome1.value.status).toBe("applied")
-
-    function makeMeshEnvelope(evt: MeshEvent) {
-      return {
-        schemaVersion: 2,
-        recordType: "mesh.event",
-        messageId: `msg-${evt.eventId}`,
-        senderNodeId: evt.sourceNodeId,
-        recipientNodeId: "node-chair",
-        protocolVersion: CURRENT_MESH_PROTOCOL_VERSION,
-        issuedAt: evt.observedAt,
-        expiresAt: new Date(Date.parse(evt.observedAt) + 3_600_000).toISOString(),
-        correlationId: evt.eventId,
-        causation: null,
-        payload: evt,
-      }
-    }
-
-    // Publish to SSE gateway: gets total-order position 1
-    const pub1 = await gateway.publish(makeMeshEnvelope(event1))
-    expect(pub1.ok).toBe(true)
-    let pos1 = 0
-    if (pub1.ok && pub1.outcome.accepted) {
-      pos1 = pub1.outcome.entry.position
-      expect(pos1).toBe(1)
-    }
-    // Verify worker B received post 1
-    expect(workerBStoreSeen.size).toBe(1)
-
-    // Worker A produces post 2
-    const p2 = repository.post({
-      postId: "p-a-2",
-      discussionId: roundtable.id,
-      authorNodeId: nodeIdSchema.parse("node-worker-a"),
-      authorRoleId: "role-a",
-      kind: "note",
-      body: "Second post",
-      createdAt: NOW,
-    })
-    expect(p2.ok).toBe(true)
-    if (!p2.ok) return
-    expect(p2.value.post.seq).toBe(2)
-
-    const event2: MeshEvent = {
-      meshProtocolVersion: CURRENT_MESH_PROTOCOL_VERSION,
-      eventId: eventIdSchema.parse("mevt-a-2"),
-      sourceNodeId: nodeIdSchema.parse("node-worker-a"),
-      commandCorrelation: null,
-      localSequence: 2,
-      observedAt: NOW,
-      runProjectScope: { projectId: PROJECT, runId: RUN },
-      eventType: "roundtable.posted",
-      event: {
-        schemaVersion: 1,
-        eventId: eventIdSchema.parse("mevt-a-2"),
-        sequence: 2,
-        type: "roundtable.posted",
-        projectId: PROJECT,
-        runId: RUN,
-        actor: { kind: "node", nodeId: "node-worker-a" },
-        controllerEpoch: 1,
-        occurredAt: NOW,
-        correlationId: "corr-2",
-        causation: null,
-        payload: { post: p2.value.post },
-      } as OrchestrationEvent,
-    }
-
-    const outcome2 = await controllerIngestor.ingest(event2)
-    expect(outcome2.ok).toBe(true)
-    if (outcome2.ok) expect(outcome2.value.status).toBe("applied")
-
-    // Publish to SSE gateway: gets total-order position 2
-    const pub2 = await gateway.publish(makeMeshEnvelope(event2))
-    expect(pub2.ok).toBe(true)
-    let pos2 = 0
-    if (pub2.ok && pub2.outcome.accepted) {
-      pos2 = pub2.outcome.entry.position
-      expect(pos2).toBe(2)
-    }
-
-    // Total order preserved:
-    // 1. Post seq monotonicity verified (1 then 2)
-    expect(p1.value.post.seq).toBe(1)
-    expect(p2.value.post.seq).toBe(2)
-    // 2. Gateway position monotonicity verified (1 then 2)
-    expect(pos1).toBeLessThan(pos2)
-    expect(pos1).toBe(1)
-    expect(pos2).toBe(2)
-  })
-})
-
-// ============================================================================
-// 4. Durable-Before-Effect & Crash-Safety Trace Test
+// 3. Durable-Before-Effect & Crash-Safety Trace Test
 // ============================================================================
 
 describe("Durable-Before-Effect & Outbox Redelivery Trace Tests", () => {
@@ -988,92 +692,5 @@ describe("Durable-Before-Effect & Outbox Redelivery Trace Tests", () => {
     for (const count of Object.values(deliveredCount)) {
       expect(count).toBeLessThanOrEqual(1)
     }
-  })
-})
-
-// ============================================================================
-// 5. Wire Protocol Payload Variants (No new wire family)
-// ============================================================================
-
-describe("Mesh Protocol Payload Variants (§6.3 Transport)", () => {
-  it("transports roundtable.post as a payload variant of meshCommandSchema without new wire family", () => {
-    const postCmd = baseCommand("roundtable.post", {
-      post: {
-        postId: "p-wire-1",
-        discussionId: "disc-1",
-        seq: 1,
-        authorNodeId: "node-worker-a",
-        authorRoleId: "proposer-role",
-        kind: "proposal",
-        body: "Wire payload test",
-        createdAt: NOW,
-      },
-    })
-
-    const meshCmd = {
-      meshProtocolVersion: CURRENT_MESH_PROTOCOL_VERSION,
-      commandId: postCmd.commandId,
-      projectId: postCmd.projectId,
-      runId: postCmd.runId,
-      dispatchId: null, // Roundtable commands are not scoped to a single dispatch
-      targetNodeId: "node-worker-a",
-      controllerNodeId: postCmd.controllerNodeId,
-      controllerEpoch: postCmd.controllerEpoch,
-      leaseId: postCmd.leaseId,
-      issuedAt: postCmd.issuedAt,
-      expiresAt: postCmd.expiresAt,
-      commandType: "roundtable.post",
-      payloadDigest: digestJson(postCmd),
-      command: postCmd,
-    }
-
-    const parsed = meshCommandSchema.safeParse(meshCmd)
-    expect(parsed.success).toBe(true)
-  })
-
-  it("transports roundtable.posted as a payload variant of meshEventSchema without new wire family", () => {
-    const postEvt: OrchestrationEvent = {
-      schemaVersion: 1,
-      eventId: eventIdSchema.parse("evt-wire-post"),
-      sequence: 1,
-      type: "roundtable.posted",
-      projectId: PROJECT,
-      runId: RUN,
-      actor: ACTOR,
-      controllerEpoch: 1,
-      occurredAt: NOW,
-      correlationId: "corr-1",
-      causation: null,
-      payload: {
-        post: {
-          postId: "p-wire-1",
-          discussionId: "disc-1",
-          seq: 1,
-          authorNodeId: "node-worker-a",
-          authorRoleId: "proposer-role",
-          kind: "proposal",
-          body: "Wire event payload test",
-          createdAt: NOW,
-        },
-      },
-    } as OrchestrationEvent
-
-    const meshEvt = {
-      meshProtocolVersion: CURRENT_MESH_PROTOCOL_VERSION,
-      eventId: postEvt.eventId,
-      sourceNodeId: "node-chair",
-      commandCorrelation: null,
-      localSequence: 1,
-      observedAt: NOW,
-      runProjectScope: {
-        projectId: PROJECT,
-        runId: RUN,
-      },
-      eventType: "roundtable.posted",
-      event: postEvt,
-    }
-
-    const parsed = meshEventSchema.safeParse(meshEvt)
-    expect(parsed.success).toBe(true)
   })
 })

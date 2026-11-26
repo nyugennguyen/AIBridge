@@ -2,8 +2,9 @@ import type { PlatformInspector, ProcessRunner } from "../host/types.js"
 import type { AgentDiscoveryDeps, AgentDiscoveryResult } from "./setup-step-widgets.js"
 import { resolveProfilePaths, type ProfilePaths } from "../host/paths.js"
 import { readConfig } from "../host/profile-store.js"
+import { tmuxInstallHint } from "../host/tmux.js"
 import { planPreflight } from "../host/preflight.js"
-import { nodeRoleFromConfig, parseNodeRole, prereqsFor } from "../host/node-role.js"
+import { nodeRoleFromConfig, optionalPrereqsFor, parseNodeRole, prereqsFor } from "../host/node-role.js"
 import { bridgeConfigSchema } from "../config/schemas.js"
 import type { BridgeConfig } from "../config/types.js"
 import { lstat, readFile, access } from "node:fs/promises"
@@ -131,7 +132,7 @@ export async function runVerify(profileName: string, deps?: VerifyDeps): Promise
   // ── Config, read once up front ──────────────────────────────────────
   //
   // Read before the prerequisite check because what is required depends on the
-  // profile's role: an orchestrator needs neither tmux nor opencode, a Claude
+  // profile's role: an orchestrator needs no opencode, a Claude
   // Code worker needs `claude` instead of `opencode`. The config checks are still
   // reported in their usual place below.
   const fileOps: VerifyFileOps = deps?.fileOps ?? {
@@ -190,6 +191,22 @@ export async function runVerify(profileName: string, deps?: VerifyDeps): Promise
         status: "fail",
         message: `Dependency ${check.name}: missing`,
         detail: check.installCmd ? `Install with: ${check.installCmd.join(" ")}` : undefined,
+      })
+    }
+  }
+
+  // Optional binaries: reported, never failing. A missing one is a `warn` so the
+  // operator learns what a feature needs without the install reading as broken.
+  for (const name of optionalPrereqsFor(role)) {
+    const found = (await processRunner.exec(["which", name])).exitCode === 0
+    if (found) {
+      checks.push({ name, status: "pass", message: `${name}: installed (optional)` })
+    } else {
+      checks.push({
+        name,
+        status: "warn",
+        message: `${name}: not found (optional — only "aibr start --foreground" uses it)`,
+        detail: `Install with: ${tmuxInstallHint(platformInspector.inspect().platform)}`,
       })
     }
   }

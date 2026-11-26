@@ -13,7 +13,7 @@ This guide details the development toolchain, local workflows, test suites, cont
 AIBridge is a hybrid polyglot codebase:
 
 - **TypeScript / Bun Engine & CLI:** Requires [Bun](https://bun.sh) `>= 1.3.0`.
-- **Rust Ingress Router & IPC:** Implemented under `router/` and `crates/`. Requires Rust MSRV `1.94`, with toolchain `1.99.0` pinned via `rust-toolchain.toml`.
+- **Rust Ingress Router:** Implemented under `router/`. Requires Rust MSRV `1.94`, with toolchain `1.99.0` pinned via `rust-toolchain.toml`.
 - **Shell Scripts:** Validated using `shellcheck` and `bash -n`.
 
 ### Quick Setup
@@ -79,12 +79,11 @@ AIBridge maintains synchronized wire contracts across TypeScript, JSON Schema, a
 
 ```
 src/config/schemas.ts  ──▶  contracts/v1/*.schema.json  ──▶  router/src/contracts.rs
-src/ipc/schemas.ts     ──▶  crates/aibr-ipc/src/contracts.rs
 ```
 
 ### Regeneration & Parity Checks
 
-Whenever TypeScript schemas in `src/config/schemas.ts` or `src/ipc/schemas.ts` are updated:
+Whenever TypeScript schemas in `src/config/schemas.ts` are updated:
 
 ```bash
 # 1. Regenerate JSON schemas and Rust contracts

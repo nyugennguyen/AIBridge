@@ -3,7 +3,7 @@
 - **Branch:** `dev-2.2.0`
 - **Base:** `64f642b`
 - **Commits:** `b2f5c00`, `a68c579`, `7223df1`, `5613826`
-- **Scope:** B1, B2, B3 of `Docs/aibridge-herdr-orchestration.md`. **B4 (the 2.2.0 release) is deliberately not started.**
+- **Scope:** B1, B2, B3 of `Docs/archive/aibridge-herdr-orchestration.md`. **B4 (the 2.2.0 release) is deliberately not started.**
 - **Diff:** 48 files changed, 5443 insertions, 102 deletions
   (src 18 · tests 13 · contracts 10 · router 2)
 

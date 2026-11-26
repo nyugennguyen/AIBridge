@@ -341,13 +341,13 @@ describe("runSetupWizard", () => {
 
   it("blocks when prereqs are missing", async () => {
     const { outcome } = await runWizard(
-      { inputs: ["", ""], confirms: ["n"] }, // profile, role; decline installing tmux
-      { processRunner: makeFakeProcessRunner({ tmux: false }) },
+      { inputs: ["", "", "opencode"], confirms: [] }, // profile, role, runtime; opencode has no auto-install
+      { processRunner: makeFakeProcessRunner({ opencode: false }) },
     )
 
     expect(outcome.kind).toBe("blocked")
     if (outcome.kind !== "blocked") return
-    expect(outcome.reason).toContain("Prerequisites missing: tmux")
+    expect(outcome.reason).toContain("Prerequisites missing: opencode")
   })
 
   it("blocks when Tailscale is inactive", async () => {
@@ -782,7 +782,7 @@ describe("node role and runtime", () => {
     expect(fileOps.writtenConfigs[CONFIG("w")]?.runtime).toEqual({ kind: "claude" })
   })
 
-  it("both: requires tmux, the runtime, claude and tailscale", async () => {
+  it("both: requires the runtime, claude and tailscale (not tmux)", async () => {
     const { outcome } = await runWizard(
       { inputs: ["b", "both"], confirms: [] },
       { processRunner: makeFakeProcessRunner({ claude: false, opencode: true }) },
@@ -1123,7 +1123,8 @@ describe("Service Daemonizer & Preflight Outbox", () => {
   it("keeps the router drain worker for router ingress mode (launchd)", () => {
     const plist = generateLaunchdPlist({ profile: "dev", ingressMode: "router" })
     expect(plist).toContain("<string>worker</string>")
-    expect(plist).toContain("<string>--ipc-publish</string>")
+    // 3.1.1 removed the IPC bus, so new units no longer carry the (now ignored) flag.
+    expect(plist).not.toContain("--ipc-publish")
   })
 
   it("runs `aibr serve` in engine mode and the worker in router mode (systemd)", () => {
@@ -1136,12 +1137,12 @@ describe("Service Daemonizer & Preflight Outbox", () => {
 
     const router = generateSystemdUnit({ profile: "prod", ingressMode: "router" })
     expect(router).toContain("Description=AIBridge Ingress Drain Worker (prod)")
-    expect(router).toContain("ExecStart=aibr worker --profile prod --ipc-publish")
+    expect(router).toContain("ExecStart=aibr worker --profile prod")
   })
 
   it("matches what `aibr start` runs in its bridge window", () => {
     expect(daemonCommandArgs("dev")).toEqual(["serve", "--profile", "dev"])
-    expect(daemonCommandArgs("dev", "router")).toEqual(["worker", "--profile", "dev", "--ipc-publish"])
+    expect(daemonCommandArgs("dev", "router")).toEqual(["worker", "--profile", "dev"])
   })
 
   it("refuses a profile name it cannot represent safely in a unit file", () => {

@@ -1,6 +1,11 @@
 # AIBridge × Herdr — Orchestration Architecture Implementation Plan
 
-- **Status:** Approved for execution
+> **Status:** Historical
+>
+> Archived in 3.1.1. The Herdr, TUI, terminal gateway and IPC parts of this plan were removed in 3.1.1; the kernel and charter parts are not wired into `aibr serve`. See [ADR 0014](../adr/0014-claude-is-the-operator-interface.md).
+
+
+- **Plan status (at the time):** Approved for execution
 - **Date:** 2026-10-11
 - **Supersedes:** `Docs/adr/0009-herdr-terminal-backend-evaluation.md` (partially — see §2)
 - **Target version:** `3.0.0` (breaking: `aibr-tui` retired, config schema gains `charter`)

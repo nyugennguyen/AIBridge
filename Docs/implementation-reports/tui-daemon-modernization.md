@@ -5,7 +5,7 @@
 > This document targets the retired `aibr-tui` and `src/tui` components (retired per [ADR 0011](../adr/0011-herdr-orchestration-architecture.md)).
 
 Implements Phases 2 through 6 of
-[`AIBridge_TUI_and_Daemon_Modernization_Plan.md`](../implementation-plans/AIBridge_TUI_and_Daemon_Modernization_Plan.md).
+[`AIBridge_TUI_and_Daemon_Modernization_Plan.md`](../archive/AIBridge_TUI_and_Daemon_Modernization_Plan.md).
 
 Branch: `aibr-v2`. Base: `origin/aibr-v2`. Thirteen commits, 101 files,
 +40289 / −888 lines. Not merged to `main`.

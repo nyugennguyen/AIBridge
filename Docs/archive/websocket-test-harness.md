@@ -1,5 +1,10 @@
 # Test-harness notes: WebSocket in this repository
 
+> **Status:** Historical
+>
+> Archived in 3.1.1. Test notes for the terminal WebSocket gateway, removed in 3.1.1. See [ADR 0014](../adr/0014-claude-is-the-operator-interface.md).
+
+
 Discovered while preparing M4.7. Every claim here was measured on this machine
 (Bun 1.3.14, Node 26.9.0, `@fastify/websocket@11.3.1`, `ws@8.22.0`, Fastify 5.8.5).
 Re-measure before changing any of it — these are observations, not guarantees.

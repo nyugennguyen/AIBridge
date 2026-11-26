@@ -63,21 +63,21 @@ describe("install.sh — role and runtime prereqs", () => {
   const stub = (present: string[]) =>
     `has_cmd() { case " ${present.join(" ")} " in *" $1 "*) return 0;; *) return 1;; esac; }\n`
 
-  it("worker needs tailscale, tmux and opencode (auto, nothing installed)", () => {
+  it("worker needs tailscale and opencode, not tmux (auto, nothing installed)", () => {
     const r = sourced(`${stub([])}ROLE=worker RUNTIME=auto; required_tools`)
-    expect(r.stdout.trim()).toBe("tailscale tmux opencode")
+    expect(r.stdout.trim()).toBe("tailscale opencode")
   })
 
   it("auto prefers opencode when both runtimes exist, claude when only it exists", () => {
     expect(sourced(`${stub(["opencode", "claude"])}ROLE=worker; required_tools`).stdout.trim()).toBe(
-      "tailscale tmux opencode",
+      "tailscale opencode",
     )
-    expect(sourced(`${stub(["claude"])}ROLE=worker; required_tools`).stdout.trim()).toBe("tailscale tmux claude")
+    expect(sourced(`${stub(["claude"])}ROLE=worker; required_tools`).stdout.trim()).toBe("tailscale claude")
   })
 
   it("--runtime forces the choice", () => {
     expect(sourced(`${stub(["opencode"])}ROLE=worker RUNTIME=claude; required_tools`).stdout.trim()).toBe(
-      "tailscale tmux claude",
+      "tailscale claude",
     )
   })
 
@@ -86,8 +86,8 @@ describe("install.sh — role and runtime prereqs", () => {
     expect(out).toBe("tailscale claude")
   })
 
-  it("both needs tmux, the worker runtime and claude", () => {
-    expect(sourced(`${stub([])}ROLE=both; required_tools`).stdout.trim()).toBe("tailscale tmux opencode claude")
+  it("both needs the worker runtime and claude, not tmux", () => {
+    expect(sourced(`${stub([])}ROLE=both; required_tools`).stdout.trim()).toBe("tailscale opencode claude")
   })
 
   it("reports a missing runtime in the final summary with the install hint", () => {
@@ -97,6 +97,21 @@ describe("install.sh — role and runtime prereqs", () => {
     expect(r.stdout).toContain("claude.ai/install.sh")
     const w = sourced(`${stub(["tailscale", "tmux"])}ROLE=worker; check_prereqs >/dev/null; print_summary`)
     expect(w.stdout).toContain("bun install -g opencode-ai")
+  })
+
+  it("prints a one-line optional tmux note for worker/both when tmux is absent, and none otherwise", () => {
+    const w = sourced(`${stub(["tailscale", "opencode"])}OS=macos ROLE=worker; check_prereqs`)
+    expect(w.stdout).toContain("note: tmux not found (optional, only for 'aibr start --foreground'); install with: brew install tmux")
+    expect(w.stdout).not.toContain("✗ tmux")
+    expect(sourced(`${stub(["tailscale", "opencode", "claude"])}OS=ubuntu ROLE=both; check_prereqs`).stdout).toContain(
+      "apt-get install -y tmux",
+    )
+    expect(sourced(`${stub(["tailscale", "opencode", "tmux"])}OS=macos ROLE=worker; check_prereqs`).stdout).not.toContain("note: tmux")
+    expect(sourced(`${stub(["tailscale", "claude"])}OS=macos ROLE=orchestrator; check_prereqs`).stdout).not.toContain("tmux")
+  })
+
+  it("does not offer to install tmux", () => {
+    expect(script).not.toContain("Install tmux?")
   })
 
   it("rejects bad --role / --runtime values", () => {

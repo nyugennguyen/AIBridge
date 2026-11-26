@@ -1,7 +1,7 @@
 /**
  * Deterministic prerequisite inspection and install planning.
  *
- * Checks the role-dependent prerequisites (by default tmux, opencode, and
+ * Checks the role-dependent prerequisites (by default opencode and
  * tailscale; see `prereqsFor` in `./node-role.js`) on macOS, Debian, and Ubuntu.
  * Install commands are fixed argv arrays — never shell commands.
  * User confirmation is required before any install executes.
@@ -125,13 +125,14 @@ function getInstallCmd(os: OsFamily, tool: string): readonly string[] | null {
 // ── Which check ────────────────────────────────────────────────────────
 
 /**
- * The released prerequisite list: a worker node running OpenCode.
+ * The default prerequisite list: a worker node running OpenCode. tmux is optional
+ * (only `aibr start --foreground` uses it) and is not required.
  *
  * Callers that know the node's role pass `prereqs` (see `prereqsFor` in
  * `./node-role.js`) instead; this stays the default so a caller that does not
- * know -- and every existing test -- checks exactly what it always checked.
+ * know -- and every existing test -- checks the same thing.
  */
-export const DEFAULT_PREREQS: readonly string[] = ["tmux", "opencode", "tailscale"]
+export const DEFAULT_PREREQS: readonly string[] = ["opencode", "tailscale"]
 
 async function isInstalled(runner: ProcessRunner, name: string): Promise<boolean> {
   const result = await runner.exec(["which", name])

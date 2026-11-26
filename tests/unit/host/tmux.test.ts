@@ -24,6 +24,7 @@ import {
  */
 class SequenceProcessRunner implements ProcessRunner {
   public calls: Array<{ argv: readonly string[]; options?: ProcessOptions }> = []
+  public whichCalls: string[] = []
   private readonly resultMap: Map<string, ProcessResult>
   private readonly fallback?: (argv: readonly string[]) => ProcessResult
 
@@ -36,10 +37,15 @@ class SequenceProcessRunner implements ProcessRunner {
   }
 
   async exec(argv: readonly string[], options?: ProcessOptions): Promise<ProcessResult> {
-    this.calls.push({ argv, options })
+    // `which` probes are tracked apart so index-based assertions on the tmux
+    // commands below do not shift.
+    if (argv[0] === "which") this.whichCalls.push(argv.join(" "))
+    else this.calls.push({ argv, options })
     const key = argv.join(" ")
     const mapped = this.resultMap.get(key)
     if (mapped !== undefined) return mapped
+    // tmux is installed unless a test says otherwise.
+    if (key === "which tmux") return { exitCode: 0, stdout: "/usr/bin/tmux", stderr: "" }
     if (this.fallback !== undefined) return this.fallback(argv)
     return { exitCode: 1, stdout: "", stderr: "unmapped command" }
   }
@@ -328,6 +334,25 @@ describe("startProfile", () => {
 })
 
 // ── statusProfile ───────────────────────────────────────────────────────
+
+describe("startProfile without tmux installed", () => {
+  it("returns tmux_missing and runs no tmux command", async () => {
+    const runner = new SequenceProcessRunner(
+      entries([
+        ["tmux has-session -t aibridge-test-profile", failureResult()],
+        ["which tmux", failureResult()],
+      ]),
+      () => successResult(),
+    )
+    const result = await startProfile(testDeps({ runner }), testProfile())
+
+    expect(result.kind).toBe("tmux_missing")
+    const spawned = runner.calls.filter((c) => c.argv[0] === "tmux" && c.argv[1] !== "has-session")
+    expect(spawned).toEqual([])
+    expect(runner.calls.map((c) => c.argv.join(" "))).toEqual(["tmux has-session -t aibridge-test-profile"])
+    expect(runner.whichCalls).toEqual(["which tmux"])
+  })
+})
 
 describe("statusProfile", () => {
   it("returns session_missing when tmux session does not exist", async () => {

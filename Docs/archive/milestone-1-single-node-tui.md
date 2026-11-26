@@ -2,7 +2,7 @@
 
 > **Status:** Historical
 >
-> This document is a completed milestone work order. The shipped behavior is described by [`Docs/architecture/current-state.md`](../architecture/current-state.md) and [`CHANGELOG.md`](../../CHANGELOG.md).
+> Archived in 3.1.1 (the TUI was removed, ADR 0014). This document is a completed milestone work order. The shipped behavior is described by [`Docs/architecture/current-state.md`](../architecture/current-state.md) and [`CHANGELOG.md`](../../CHANGELOG.md).
 
 ## Objective
 

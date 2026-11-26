@@ -2,22 +2,14 @@
  * AIBridge Extension SDK — Conformance Test Runner (M8.7).
  *
  * Runs deterministic conformance verification scenarios against any
- * third-party or custom adapter/terminal implementation.
+ * third-party or custom adapter implementation.
  */
 
-import type { AgentRuntimeAdapter, TerminalBackend } from "./types.js"
-import type {
-  NodeId,
-  MeshId,
-  CommandId,
-  CorrelationId,
-  ProjectId,
-  TerminalClientId,
-} from "./types.js"
+import type { AgentRuntimeAdapter, NodeId, MeshId } from "./types.js"
 
 export interface ConformanceReport {
   readonly ok: boolean
-  readonly suite: "adapter" | "terminal"
+  readonly suite: "adapter"
   readonly targetKind: string
   readonly passedTests: readonly string[]
   readonly failures: readonly { readonly test: string; readonly error: string }[]
@@ -74,50 +66,6 @@ export async function runAdapterConformance(
     ok: failures.length === 0,
     suite: "adapter",
     targetKind: adapter.kind,
-    passedTests: passed,
-    failures,
-  }
-}
-
-export async function runTerminalBackendConformance(
-  backend: TerminalBackend,
-): Promise<ConformanceReport> {
-  const passed: string[] = []
-  const failures: { test: string; error: string }[] = []
-
-  // 1. Kind property inspection
-  if (typeof backend.kind === "string" && backend.kind.length > 0) {
-    passed.push("kind")
-  } else {
-    failures.push({ test: "kind", error: "Terminal backend kind must be a non-empty string" })
-  }
-
-  // 2. Recovery / list test
-  try {
-    const recoverResult = await backend.recover({
-      schemaVersion: 1,
-      commandId: "cmd-conf" as unknown as CommandId,
-      correlationId: "corr-conf" as unknown as CorrelationId,
-      projectId: "proj-conf" as unknown as ProjectId,
-      nodeId: "node-conf" as unknown as NodeId,
-      clientId: "client-conf" as unknown as TerminalClientId,
-    })
-
-    if (!recoverResult.ok) {
-      failures.push({ test: "recover", error: recoverResult.error.message })
-    } else if (!Array.isArray(recoverResult.value)) {
-      failures.push({ test: "recover", error: "recover() must return an array of TerminalReference" })
-    } else {
-      passed.push("recover")
-    }
-  } catch (e) {
-    failures.push({ test: "recover", error: e instanceof Error ? e.message : String(e) })
-  }
-
-  return {
-    ok: failures.length === 0,
-    suite: "terminal",
-    targetKind: backend.kind,
     passedTests: passed,
     failures,
   }

@@ -1,7 +1,7 @@
 # AIBridge Documentation
 
 > **Status:** Current  
-> **Applies to:** AIBridge 3.1.0  
+> **Applies to:** AIBridge 3.1.1  
 > **Owner:** Maintainers  
 
 Welcome to the AIBridge documentation hub. This index organizes documentation around user needs, establishing one canonical source of truth for each architectural, operational, and development topic.
@@ -20,7 +20,7 @@ Docs/
 ├── guides/
 │   ├── configuration.md            # Zod config schema, profile storage, and token rotation
 │   ├── development.md              # Build, test, typecheck, contract parity, and release gate
-│   ├── integrations.md             # OpenCode, Claude Code, Codex, Herdr, and Tailscale
+│   ├── integrations.md             # OpenCode, Claude Code, Codex, and Tailscale
 │   └── pairing.md                  # aibr enroll pairing and security.request_signing
 ├── operations/
 │   ├── deployment.md               # Tmux, macOS launchd, Linux systemd, and multi-node mesh
@@ -51,7 +51,7 @@ Docs/
 ### User & Developer Guides
 - [**Configuration Guide**](guides/configuration.md) — Detailed reference for `config.json`, profile XDG paths, environment variables, and token management.
 - [**Developer Guide**](guides/development.md) — Contributor instructions for building, running tests, regenerating contracts, and validating documentation.
-- [**Integrations Guide**](guides/integrations.md) — Connecting with OpenCode, Claude Code, Codex, the Herdr presentation substrate, and Tailscale networking.
+- [**Integrations Guide**](guides/integrations.md) — Connecting with OpenCode, Claude Code, Codex, and Tailscale networking.
 - [**Pairing Guide**](guides/pairing.md) — Pair an orchestrator with a worker using a one-time code (`aibr enroll`) and require signed requests.
 
 ### Operations & Maintenance

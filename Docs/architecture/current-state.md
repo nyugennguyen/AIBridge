@@ -1,13 +1,13 @@
 # Current architecture guide
 
 > **Status:** Current
-> **Applies to:** AIBridge 3.1.0
+> **Applies to:** AIBridge 3.1.1
 > **Last verified:** 2026-10-16 against commit a887380 (core architecture, port bindings, trust boundaries, and wizard probe semantics)
 > **Owner:** maintainers
 
 ## 1. Purpose and status
 
-This document defines the as-built architecture of AIBridge 3.1.0. Every statement in this guide describes running code in the repository; planned extensions or historical prototypes are explicitly labeled as such.
+This document defines the as-built architecture of AIBridge 3.1.1. Every statement in this guide describes running code in the repository; planned extensions or historical prototypes are explicitly labeled as such.
 
 For historical design notes and earlier recovery surface proposals, see [`Docs/archive/failure-modes-and-recovery.md`](../archive/failure-modes-and-recovery.md) (marked with status *Archived*). For executable command syntax, see the generated [`Docs/reference/cli-reference.md`](../reference/cli-reference.md).
 
@@ -46,7 +46,7 @@ AIBridge separates admission, orchestration, local execution, and networking acr
        ┌────────────────────────────────────────────────────────────────┐
        │ Execution Runtimes & Adapters                                  │
        │   - OpenCode Serve Daemon: 127.0.0.1:4096 (OPENCODE_PORT)      │
-       │   - Terminal backends: tmux (default) / herdr                  │
+       │   - Terminal supervision: tmux                              │
        │   - Project path containment (realpath allowlist)              │
        │   - Jobs Store: ~/.local/state/aibridge/<profile>/jobs/        │
        └────────────────────────────────────────────────────────────────┘
@@ -77,7 +77,7 @@ AIBridge separates admission, orchestration, local execution, and networking acr
    - Manages language model agent tools and workspace modifications.
    - Bound strictly to localhost (`127.0.0.1`), on port `OPENCODE_PORT` (default 4096, `src/cli.ts:1147-1150`).
    - Authenticated via `OPENCODE_SERVER_PASSWORD` environment variable or `${secretsDir}/opencode_password` file (`src/cli.ts:901-904,1140-1145`).
-   - Supervised in headless sessions using tmux (`src/host/tmux.ts`) or Herdr (`src/terminal/herdr-terminal-backend.ts`).
+   - Supervised in headless sessions using tmux (`src/host/tmux.ts`).
 
 ### Trust boundaries
 
@@ -110,7 +110,7 @@ Distributed N-Node Mesh Topology (src/mesh/):
 │                │     SSE State Gateway (SSE)  │                │
 │ Ed25519 Keys   ├─────────────────────────────►│ Ed25519 Keys   │
 │ Leases & Epochs│     Durable Outbox / Inbox   │ Mesh Inbox     │
-│ Registry Store │◄─────────────────────────────┤ Terminal GW    │
+│ Registry Store │◄─────────────────────────────┤                │
 └────────────────┘                              └────────────────┘
 ```
 
@@ -123,7 +123,7 @@ Distributed N-Node Mesh Topology (src/mesh/):
 - **Registry and heartbeats (`src/mesh/registry/`):** Peer nodes register their capabilities and announce presence with periodic heartbeats (`src/mesh/protocol/heartbeat.ts`). Stale nodes expire automatically.
 - **Distributed controller leases and epochs (`src/mesh/lease/`, ADR 0004):** Coordination uses monotonic epoch counters and durable controller leases to guarantee single-master execution for task graphs and avoid split-brain states (`command-gate.ts`, `sqlite-lease-store.ts`).
 - **Mesh inbox and outbox (`src/mesh/inbox/`, `src/mesh/outbox/`):** Commands are dispatched through durable outboxes and received by target inboxes, decoupling inter-node latency from execution.
-- **Real-time gateways (`src/mesh/gateway/`):** Server-Sent Events (SSE) gateways (`gateway/events/sse.ts`) stream state projections to remote consumers, while terminal gateways (`gateway/terminal/gateway.ts`) stream PTY sessions.
+- **Real-time gateways (`src/mesh/gateway/`):** Server-Sent Events (SSE) gateways (`gateway/events/sse.ts`) stream state projections to remote consumers. The terminal gateway was removed in 3.1.1 (ADR 0014).
 - **Orchestration charter and advisory roundtables (`src/orchestration/`):** Multi-agent coordination supports deliberation sessions (`roundtable/aggregate.ts`). Deliberations and charter proposals are strictly advisory (`src/orchestration/policy/immutable-core.ts:53,95`): deliberation outcomes (`RoundtableOutcome`) never mutate external task lifecycles directly.
 
 ## 4. Request and event flow
@@ -254,7 +254,7 @@ Five binary targets are compiled by `scripts/build-matrix.sh:31-37`:
 
 - **Operating system:** Linux (systemd with glibc or musl) or macOS (Darwin 64-bit arm64/x64).
 - **Network infrastructure:** Tailscale daemon running locally (`/var/run/tailscaled.sock` or `tailscale` CLI in PATH).
-- **Supervision:** Headless sessions require `tmux` in system PATH (`scripts/tmux-start.sh`) or Herdr terminal backend integration.
+- **Supervision:** Headless sessions require `tmux` in system PATH (`scripts/tmux-start.sh`).
 
 ## 8. External dependencies and known limitations
 

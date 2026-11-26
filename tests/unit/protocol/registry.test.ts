@@ -31,7 +31,7 @@ import { ALL_RECORD_TYPES, sampleEnvelope } from "./fixtures.js"
  *      and NEVER parsed as a generic object. Parsing it "well enough" is how a
  *      record from the future gets partially read by a build that does not
  *      understand it.
- *   3. The table is EXHAUSTIVE against §4's nine families. The check is against
+ *   3. The table is EXHAUSTIVE against §4's seven families. The check is against
  *      the families themselves, not against a list in this test.
  *   4. A family that declares no shape for a SUPPORTED version is refused. This
  *      is the case a `z.literal`-era reader could not express, and it is the one
@@ -47,7 +47,6 @@ const SPEC_FAMILIES: readonly { family: string; recordTypes: readonly string[] }
   { family: "mesh.event", recordTypes: ["mesh.event"] },
   { family: "mesh.lease", recordTypes: ["mesh.lease"] },
   { family: "mesh.reconciliation", recordTypes: ["mesh.reconciliation.request", "mesh.reconciliation.response"] },
-  { family: "mesh.terminal", recordTypes: ["mesh.terminal.control", "mesh.terminal.data"] },
 ]
 
 describe("every record type is reachable", () => {
@@ -82,7 +81,6 @@ describe("every record type is reachable", () => {
       if (parsed.recordType === "mesh.command") expect(parsed.payload.commandId).toBeDefined()
       if (parsed.recordType === "mesh.heartbeat") expect(parsed.payload.sequence).toBeDefined()
       if (parsed.recordType === "mesh.lease") expect(parsed.payload.operation).toBeDefined()
-      if (parsed.recordType === "mesh.terminal.data") expect(parsed.payload.chunk).toBeDefined()
     }
   })
 })
@@ -135,9 +133,9 @@ describe("an unknown record type is refused, never generically parsed", () => {
   })
 })
 
-describe("the table is exhaustive against the spec's nine families", () => {
+describe("the table is exhaustive against the spec's seven families", () => {
   it("covers every family §4 names, in both directions where the family is bidirectional", () => {
-    expect(SPEC_FAMILIES).toHaveLength(8)
+    expect(SPEC_FAMILIES).toHaveLength(7)
     const declared = new Set(MESH_RECORD_TYPES)
     for (const { family, recordTypes } of SPEC_FAMILIES) {
       for (const recordType of recordTypes) {
@@ -157,7 +155,6 @@ describe("the table is exhaustive against the spec's nine families", () => {
     for (const pair of [
       ["mesh.enrollment.request", "mesh.enrollment.response"],
       ["mesh.reconciliation.request", "mesh.reconciliation.response"],
-      ["mesh.terminal.control", "mesh.terminal.data"],
     ] as const) {
       for (const recordType of pair) expect(MESH_RECORD_TYPES).toContain(recordType)
       expect(pair[0]).not.toBe(pair[1])
@@ -234,11 +231,11 @@ describe("what each family says about itself", () => {
   it("gives a per-family answer, because a build can know one family and not another", () => {
     // "Which versions does this build understand" has a per-family answer, and a
     // single global answer is misleading: a build can read a `mesh.heartbeat` at
-    // a version where it has never heard of `mesh.terminal`.
+    // a version where it has never heard of `mesh.lease`.
     const declared = declaredFamilyVersions()
     expect(declared["mesh.heartbeat"]).toBeDefined()
-    expect(declared["mesh.terminal.data"]).toBeDefined()
-    expect(declared["mesh.terminal.data"]).not.toBe(declared["mesh.heartbeat"])
+    expect(declared["mesh.lease"]).toBeDefined()
+    expect(declared["mesh.lease"]).not.toBe(declared["mesh.heartbeat"])
   })
 
   it("reports versions in ascending order, whatever order the table was written in", () => {

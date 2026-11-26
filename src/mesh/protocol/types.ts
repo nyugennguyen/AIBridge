@@ -7,7 +7,6 @@ import type { MeshEvent } from "./event.js"
 import type { MeshHeartbeat } from "./heartbeat.js"
 import type { MeshLease } from "./lease.js"
 import type { MeshReconciliationRequest, MeshReconciliationResponse } from "./reconciliation.js"
-import type { MeshTerminalControl, MeshTerminalData } from "./terminal.js"
 
 /**
  * The public type surface of the mesh protocol.
@@ -34,7 +33,6 @@ export type { IncomingCommandExpectation, VerifiedIncomingCommand, IncomingComma
 export type { LocalSequenceVerdict, SequenceStatus } from "./event.js"
 export type { ReconcileContext, ReconciliationStepVerdict, ReconciliationVerdict, UnreconciledReason } from "./reconciliation.js"
 export type { CommandReceipt } from "./ack.js"
-export type { TerminalAdmission } from "./terminal.js"
 export type { HeartbeatFreshness, HeartbeatSequenceVerdict } from "./heartbeat.js"
 export type { NegotiationMismatch } from "./negotiation.js"
 
@@ -62,8 +60,6 @@ export type MeshEnvelope = MeshEnvelopeHeaders &
     | { readonly recordType: "mesh.lease"; readonly payload: MeshLease }
     | { readonly recordType: "mesh.reconciliation.request"; readonly payload: MeshReconciliationRequest }
     | { readonly recordType: "mesh.reconciliation.response"; readonly payload: MeshReconciliationResponse }
-    | { readonly recordType: "mesh.terminal.control"; readonly payload: MeshTerminalControl }
-    | { readonly recordType: "mesh.terminal.data"; readonly payload: MeshTerminalData }
   )
 
 /** The payload carried by a given `recordType`. */

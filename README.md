@@ -20,6 +20,8 @@
 
 A typical setup: **Claude Code on your laptop is the orchestrator**. Through the AIBridge plugin it hands work (integration tests, bug reproduction, log reading, a fix on a branch) to worker nodes such as a staging VPS, then reads the findings and continues locally. Each worker runs the job with Claude Code or OpenCode, inside a capability profile it controls, pinned to an exact commit.
 
+**New in 3.1.1:** the unused TUI, Herdr, terminal and IPC layer is removed (about 54k lines, two Rust crates); `aibr tui`, `--ipc-publish` and `terminal.backend: "herdr"` are deprecated ([ADR 0014](Docs/adr/0014-claude-is-the-operator-interface.md), [CHANGELOG](CHANGELOG.md#311---2026-11-26)).
+
 **New in 3.1.0:** Claude Code as a worker runtime and as the orchestrator (plugin + MCP server), signed requests and one-code pairing (`aibr enroll`), operator approval with an audit ledger, jobs pinned to `repo@sha`, and a quickstart (`aibr init`, `aibr doctor`, `aibr ping`, `aibr send`). See the [CHANGELOG](CHANGELOG.md#310---2026-11-26), and its **Behaviour changes** before upgrading a running node.
 
 ---
@@ -93,7 +95,7 @@ For OpenCode workers that need a hardened, durable admission tier, `bridge.ingre
 
 1. **Two-Tier Validation:** The router is a structural gate, never an authorization authority. The worker independently re-parses and enforces all semantic permissions, allowlists, and approvals.
 2. **Commit Before 202 (`SF-08`):** An admission response (`HTTP 202 Accepted`) is emitted **only** after work has been durably committed to SQLite disk storage (`synchronous=FULL`). No in-memory queues or fallback drop-paths exist.
-3. **Decoupled Interactive Interface:** Presentation is delegated to Herdr. Closing or disconnecting the interface never disrupts running background agents.
+3. **Decoupled Interface:** Claude Code with the AIBridge plugin dispatches and follows work; human-only actions (approve, reject, kill switch) stay in the `aibr` CLI on the worker. Closing the interface never disrupts running background agents.
 4. **Append-Only Immutability:** Authoritative event logs are immutable. Repair and maintenance tools never rewrite or delete history.
 5. **Terminal Outbox Rows are Evidence:** Errored or failed outbox records are preserved as permanent audit evidence with error taxonomy codes and attempt counters.
 6. **Automated Secret Redaction:** Prompts, transcripts, raw memory, bearer tokens, and private paths are scrubbed by default across all logs, telemetry, and diagnostics bundles.
@@ -108,8 +110,8 @@ AIBridge is tested and supported on:
 
 Ensure each participating machine has:
 - [Bun](https://bun.sh) `>= 1.3.0` (install from bun.sh)
-- [tmux](https://github.com/tmux/tmux) `>= 3.0` on workers (used by `aibr start --foreground`; the default is a launchd/systemd user service)
-- An agent runtime on workers: [OpenCode](https://opencode.ai) bound strictly to loopback `127.0.0.1:4096` (`bun install -g opencode-ai`) or [Claude Code](https://claude.com/claude-code) 2.1.x or newer, logged in (`claude` once, or `CLAUDE_CODE_OAUTH_TOKEN` / `ANTHROPIC_API_KEY`). An orchestrator-only machine needs Claude Code but not OpenCode or tmux.
+- [tmux](https://github.com/tmux/tmux) `>= 3.0` is optional: only `aibr start --foreground` uses it (the default is a launchd/systemd user service). `aibr verify` and `aibr doctor` warn, not fail, when it is missing
+- An agent runtime on workers: [OpenCode](https://opencode.ai) bound strictly to loopback `127.0.0.1:4096` (`bun install -g opencode-ai`) or [Claude Code](https://claude.com/claude-code) 2.1.x or newer, logged in (`claude` once, or `CLAUDE_CODE_OAUTH_TOKEN` / `ANTHROPIC_API_KEY`). An orchestrator-only machine needs Claude Code but not OpenCode.
 - [Tailscale](https://tailscale.com) installed, logged in, and authenticated (bridge binds to private Tailscale IPv4, never public Internet)
 
 ---
@@ -128,7 +130,7 @@ curl -fsSL https://raw.githubusercontent.com/nyugennguyen/AIBridge/main/scripts/
 curl -fsSL https://raw.githubusercontent.com/nyugennguyen/AIBridge/main/scripts/install.sh | bash -s -- --role orchestrator
 ```
 
-Prompts are read from your terminal (`/dev/tty`), so the one-liner works when piped; without a terminal, pass `--yes`. Flags: `--role worker|orchestrator|both`, `--runtime opencode|claude|auto`, `--with-claude-plugin`, `--ingress router`, `--with-units` (needs a repository checkout). The installer offers to install tmux and Tailscale, never installs OpenCode or Claude Code (it prints the install command), and offers to add Bun's bin directory to your shell `PATH`.
+Prompts are read from your terminal (`/dev/tty`), so the one-liner works when piped; without a terminal, pass `--yes`. Flags: `--role worker|orchestrator|both`, `--runtime opencode|claude|auto`, `--with-claude-plugin`, `--ingress router`, `--with-units` (needs a repository checkout). The installer offers to install Tailscale, never installs OpenCode or Claude Code (it prints the install command), and only prints a note (no prompt) when tmux is absent on a worker, and offers to add Bun's bin directory to your shell `PATH`.
 
 Manual fallback via Bun:
 
@@ -345,7 +347,7 @@ Comprehensive documentation is organized around clear user needs in [`Docs/`](Do
 - [**Claude Dev → Staging Runbook**](Docs/runbooks/claude-dev-staging.md) — End-to-end setup of a Claude Code orchestrator and a staging worker.
 - [**Configuration Guide**](Docs/guides/configuration.md) — Complete `config.json` schema, XDG directories, and token rotation.
 - [**Developer Guide**](Docs/guides/development.md) — Local development, test suites, contract parity, and release gates.
-- [**Integrations Guide**](Docs/guides/integrations.md) — OpenCode, Claude Code, Codex, Herdr presentation, and Tailscale mesh.
+- [**Integrations Guide**](Docs/guides/integrations.md) — OpenCode, Claude Code, Codex, and Tailscale mesh.
 - [**Deployment & Operations**](Docs/operations/deployment.md) — Headless tmux, macOS launchd, Linux systemd, and multi-node federation.
 - [**Monitoring & Diagnostics**](Docs/operations/monitoring.md) — Health checks, diagnostic bundles, and queue monitoring.
 - [**Operational Troubleshooting**](Docs/operations/troubleshooting.md) — Executable triage ladder, HTTP status codes, and recovery.

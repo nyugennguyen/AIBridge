@@ -353,19 +353,9 @@ describe("the M6 rule engine's dependency edges point the way ADR 0007 section 1
     // "found nothing to check".
     const files = sourceFiles(join(REPOSITORY_ROOT, "src"))
     expect(files.length).toBeGreaterThan(50)
-    // `src/simulation/` is the ONE sanctioned consumer of the rule surface, and it
-    // is sanctioned by ADR 0007 section 1, whose dependency diagram includes
-    // `simulation -> rules`. It is a consumer rather than a participant: the
-    // simulator calls `evaluateRules` and `previewCompiledRuleSet` because ADR
-    // section 16 requires the dry run to be composed of the SAME evaluators as
-    // production. If it were forbidden from importing them it would have to write
-    // its own, which is precisely the divergence ADR stop condition 1 forbids.
-    //
-    // So the exception is named here rather than left implicit. A reader who adds a
-    // second permitted consumer must add it to this list AND to ADR section 1, which
-    // is the point: the set of modules allowed to depend on the rule language is a
-    // decision, not a byproduct of which imports happened to compile.
-    const PERMITTED_CONSUMERS = ["src/simulation/"]
+    // `src/simulation/`, the one consumer sanctioned by ADR 0007 section 1, was removed in
+    // 3.2.0 (ADR 0016), so no module outside `src/rules/` may import it.
+    const PERMITTED_CONSUMERS: string[] = []
     const offenders = files
       .filter((file) => !file.path.startsWith(RULES_DIRECTORY))
       .filter((file) => !PERMITTED_CONSUMERS.some((permitted) => file.path.startsWith(`${REPOSITORY_ROOT}/${permitted}`)))
@@ -373,15 +363,6 @@ describe("the M6 rule engine's dependency edges point the way ADR 0007 section 1
       .filter(({ specifier }) => specifier.includes("/rules/"))
       .map(({ file, specifier }) => `${file.replace(`${REPOSITORY_ROOT}/`, "")} -> ${specifier}`)
     expect(offenders).toEqual([])
-
-    // And the exception is not dead weight: the permitted consumer must actually be
-    // there. Without this, deleting `src/simulation/` would make the assertion above
-    // pass for the wrong reason — the same "found nothing to check" failure mode the
-    // `toBeGreaterThan(50)` guard exists to rule out, one directory narrower.
-    for (const permitted of PERMITTED_CONSUMERS) {
-      const consumers = files.filter((file) => file.path.startsWith(`${REPOSITORY_ROOT}/${permitted}`))
-      expect(consumers.length, `${permitted} is a permitted consumer but does not exist`).toBeGreaterThan(0)
-    }
   })
 
   it("src/rules does not reach the filesystem, the network, a process, or a clock", () => {

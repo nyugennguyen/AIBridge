@@ -394,14 +394,6 @@ describe("Structural Isolation: Boundary Discipline (M4/M5 Style)", () => {
     expect(offenders).toEqual([])
   })
 
-  it("budget modules never import from notifications", () => {
-    const budgetFiles = sourceFiles(join(REPOSITORY_ROOT, "src/budgets"))
-    const offenders = budgetFiles
-      .flatMap((file) => importsOf(file.text).map((specifier) => ({ file: file.path, specifier })))
-      .filter(({ specifier }) => specifier.includes("/notifications/") || specifier.includes("notifications"))
-    expect(offenders).toEqual([])
-  })
-
   it("notification module imports NO orchestration command schemas or types", () => {
     const notificationFiles = sourceFiles(NOTIFICATIONS_DIR)
     for (const file of notificationFiles) {

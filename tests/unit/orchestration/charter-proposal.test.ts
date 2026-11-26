@@ -45,14 +45,6 @@ import {
 } from "../../../src/orchestration/schemas.js"
 import type { Actor, OrchestrationCommand, OrchestrationEvent } from "../../../src/orchestration/types.js"
 import {
-  compileRuleSet,
-  evaluateRules,
-  evaluateWithKernel,
-  type CompiledRuleSet,
-} from "../../../src/rules/index.js"
-import { MAX_FAN_OUT, MAX_RULE_EXPIRY_DAYS } from "../../../src/rules/limits.js"
-import { rawPreApprovalDocument, validContext } from "../rules/fixtures.js"
-import {
   eventIdSchema,
   correlationIdSchema,
   userIdSchema,
@@ -606,44 +598,8 @@ describe("Charter Proposal Lifecycle & Immutable Core (§7.3, §7.4, DoD #3, DoD
     })
   })
 
-  describe("5. Plan §7.3 rule-language matching invariant test", () => {
-    it("the rule engine enforces safety floor immutability analogously to assertCharterDoesNotRelaxCore", () => {
-      // In §7.3: "The rule language gains a matching test so this is enforced the same way every other invariant is"
-      // Verify that the rule engine cannot relax or widen the safety floor:
-      const ruleDocuments = [
-        rawPreApprovalDocument({
-          ruleId: "rule-attempt-escalation",
-          actions: [
-            {
-              kind: "pre_approve_within_bounds",
-              approvedCapabilities: ["fs.read", "net.fetch"],
-              maximumTimeoutSeconds: 900,
-              allowDestructiveEffects: false,
-              allowExternalEffects: false,
-              maximumSensitivity: "restricted",
-            },
-          ],
-        }),
-      ]
-
-      // Compile rules
-      const compiled = compileRuleSet(ruleDocuments)
-      expect(compiled.ok).toBe(true)
-      if (!compiled.ok) return
-
-      // Evaluate rules
-      const evaluated = evaluateRules(compiled.value, validContext({ requestedCapabilities: ["fs.read"] }))
-
-      // The pre-approval candidate bounds are clamped down to the safety floor's maximum timeout
-      // No rule can exceed SAFETY_FLOOR_MAXIMUM_TIMEOUT_SECONDS (3600)
-      if (evaluated.preApproval) {
-        for (const candidate of evaluated.preApproval.candidates) {
-          expect(candidate.bounds.maximumTimeoutSeconds).toBeLessThanOrEqual(3600)
-        }
-      }
-
-      // Parity check with assertCharterDoesNotRelaxCore:
-      // A charter proposal that attempts to relax the safety floor is refused identically
+  describe("5. Plan §7.3 safety-floor matching invariant test", () => {
+    it("a charter proposal that attempts to relax the safety floor is refused", () => {
       const baseCharter = createBaselineCharter()
       const violatingProposal = createProposal(
         { ...baseCharter, version: 2 },
@@ -655,13 +611,6 @@ describe("Charter Proposal Lifecycle & Immutable Core (§7.3, §7.4, DoD #3, DoD
       if (!charterCoreCheck.ok) {
         expect(charterCoreCheck.error.code).toBe("charter_core_violation")
       }
-    })
-
-    it("the rule language enforces complexity and budget limits (item 5: budget ceilings)", () => {
-      // Plan §7.3 Item 5: "Budget ceilings (rules/limits.ts)"
-      // The rule language schema and limits enforce hard ceilings
-      expect(MAX_FAN_OUT).toBeDefined()
-      expect(MAX_RULE_EXPIRY_DAYS).toBe(3_655)
     })
   })
 

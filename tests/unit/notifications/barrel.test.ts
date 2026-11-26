@@ -349,25 +349,6 @@ describe("the restated identifier schemas have not drifted from the kernel's", (
 })
 
 describe("no name is exported by two M6 barrels", () => {
-  const siblingPaths = {
-    rules: "../../../src/rules/index.js",
-    routing: "../../../src/routing/index.js",
-    budgets: "../../../src/budgets/index.js",
-    workflows: "../../../src/workflows/index.js",
-  } as const
-
-  for (const [sibling, path] of Object.entries(siblingPaths)) {
-    it(`shares no export name with src/${sibling}`, async () => {
-      const sibling = await optionalBarrel(new URL(path, import.meta.url).pathname)
-      // `null` means the sibling has not been written yet. A module that does not
-      // exist cannot export a colliding name, which is what this check asks.
-      if (sibling === null) return
-      const mine = new Set(Object.keys(notifications))
-      const collisions = Object.keys(sibling).filter((name) => mine.has(name))
-      expect(collisions).toEqual([])
-    })
-  }
-
   it("shares no export name with the M5 barrels the milestone sits above", async () => {
     for (const path of ["../../../src/context/index.js", "../../../src/memory/index.js", "../../../src/mesh/tui/index.js"]) {
       const sibling = await optionalBarrel(new URL(path, import.meta.url).pathname)

@@ -18,8 +18,6 @@ import type {
   reportCallbackSchema,
   runtimeConfigSchema,
   triggerRequestSchema,
-  terminalBackendSchema,
-  terminalConfigSchema,
   triggerResponseSchema,
 } from "./schemas.js"
 
@@ -43,5 +41,3 @@ export type ReportFinding = ReportCallback["findings"][number]
 export type RuntimeConfig = z.infer<typeof runtimeConfigSchema>
 export type TriggerRequest = z.infer<typeof triggerRequestSchema>
 export type TriggerResponse = z.infer<typeof triggerResponseSchema>
-export type TerminalBackendKind = z.infer<typeof terminalBackendSchema>
-export type TerminalConfig = z.infer<typeof terminalConfigSchema>

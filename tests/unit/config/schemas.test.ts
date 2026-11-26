@@ -162,7 +162,7 @@ describe("AIBridge schemas", () => {
     })
   })
 
-  describe("terminal backend selection", () => {
+  describe("legacy terminal key", () => {
     const baseConfig = {
       agent_id: "test-vps",
       bridge: { host: "0.0.0.0", port: 8787, public_url: "http://test-vps.tailnet:8787" },
@@ -178,30 +178,11 @@ describe("AIBridge schemas", () => {
       planning: { plan_annotator_enabled: true, require_approval_for: ["deployment"] },
     }
 
-    it("defaults terminal.backend to tmux when terminal is omitted", () => {
-      const parsed = bridgeConfigSchema.parse(baseConfig)
-      expect(parsed.terminal.backend).toBe("tmux")
-    })
-
-    it("defaults terminal.backend to tmux when empty terminal object is passed", () => {
-      const parsed = bridgeConfigSchema.parse({ ...baseConfig, terminal: {} })
-      expect(parsed.terminal.backend).toBe("tmux")
-    })
-
-    it("accepts explicit herdr terminal backend selection", () => {
-      const parsed = bridgeConfigSchema.parse({ ...baseConfig, terminal: { backend: "herdr" } })
-      expect(parsed.terminal.backend).toBe("herdr")
-    })
-
-    it("accepts explicit tmux terminal backend selection", () => {
-      const parsed = bridgeConfigSchema.parse({ ...baseConfig, terminal: { backend: "tmux" } })
-      expect(parsed.terminal.backend).toBe("tmux")
-    })
-
-    it("rejects invalid terminal backend values", () => {
-      expect(() =>
-        bridgeConfigSchema.parse({ ...baseConfig, terminal: { backend: "invalid-backend" } }),
-      ).toThrow()
+    it("ignores a legacy terminal key (removed in 3.2.0)", () => {
+      for (const terminal of [{ backend: "herdr" }, { backend: "tmux" }, { backend: "invalid-backend" }, {}]) {
+        const parsed = bridgeConfigSchema.parse({ ...baseConfig, terminal })
+        expect("terminal" in parsed).toBe(false)
+      }
     })
   })
 })

@@ -35,9 +35,9 @@ $$\text{allowed} \cap \text{roleAllowed} \cap \neg\text{denied}$$
 
 ---
 
-## 3. Operator Interface (Herdr removed in 3.1.1)
+## 3. Operator Interface (Herdr and `aibr tui` removed)
 
-The Herdr workspace backend and the `aibr tui` launcher for the `aibr-manager` plugin were removed in 3.1.1 (ADR 0014). Claude Code with the AIBridge plugin dispatches and follows jobs ([Claude Code as Orchestrator](claude-code-orchestrator.md)). The operator actions that must stay outside Claude run on the worker with the CLI:
+The Herdr workspace backend was removed in 3.1.1 and the `aibr tui` stub in 3.2.0 (ADR 0014). Claude Code with the AIBridge plugin dispatches and follows jobs ([Claude Code as Orchestrator](claude-code-orchestrator.md)). The operator actions that must stay outside Claude run on the worker with the CLI:
 
 ```bash
 aibr jobs pending --profile <name>
@@ -46,7 +46,7 @@ aibr logs --profile <name> -f
 aibr stop --all-jobs --profile <name>
 ```
 
-A profile that still sets `terminal.backend: "herdr"` loads with a deprecation warning and uses tmux.
+A profile that still has a `terminal` key loads, ignores it and logs a warning; delete the key.
 
 ---
 

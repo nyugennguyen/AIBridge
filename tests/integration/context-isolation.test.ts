@@ -3,7 +3,7 @@
  *
  * This is the plan's "Isolation and leakage audit" row, made executable. It
  * walks every entry in `ISOLATION_CASES` against a real repository, asserts the
- * exact withholding reason, and then runs the egress audit over all seven paths
+ * exact withholding reason, and then runs the egress audit over all six paths
  * with seeded secrets planted in the corpus.
  *
  * The seeded secrets are imported from the M5.4 corpus rather than written
@@ -513,8 +513,8 @@ describe("M5.9 audit events carry identity, never content", () => {
 })
 
 describe("M5.9 the egress list is complete and every path is reachable", () => {
-  it("names seven paths, and the auditor can examine all seven", () => {
-    expect(MEMORY_EGRESS_PATHS).toHaveLength(7)
+  it("names six paths, and the auditor can examine them", () => {
+    expect(MEMORY_EGRESS_PATHS).toHaveLength(6)
     const audit = auditMemoryContext({
       seededSecrets: [],
       forbiddenIdentifiers: [],
@@ -533,7 +533,7 @@ describe("M5.9 the egress list is complete and every path is reachable", () => {
     const empty = auditMemoryContext({ seededSecrets: [], forbiddenIdentifiers: [] })
     expect(empty.passed).toBe(true)
     expect(empty.examinedPaths).toHaveLength(0)
-    expect(describeAudit(empty)).toContain("0/7")
+    expect(describeAudit(empty)).toContain("0/6")
   })
 })
 
@@ -559,7 +559,7 @@ describe("M5.9 a leaked file and a leaked query agree", async () => {
   })
 })
 
-describe("M5.9 the TUI preview shows exactly the context, and nothing withheld", () => {
+describe("M5.9 the context preview shows exactly the context, and nothing withheld", () => {
   it("the preview describes the manifest, with the same included ids in the same order", async () => {
     const candidates = [
       {
@@ -620,74 +620,6 @@ describe("M5.9 the TUI preview shows exactly the context, and nothing withheld",
     expect(preview.included.map((item) => item.sourceId)).toEqual(["m-2", "m-1"])
     expect(preview.excluded.map((item) => `${item.sourceId}:${item.reason}`)).toEqual(["m-secret:prohibited_content"])
     expect(preview.excluded.find((item) => item.sourceId === "m-secret")?.withheldDetail).toBe(true)
-
-    // The preview is its own egress path, and it is the last of the seven.
-    // Audited with the preview data serialised line by line (the TUI renderer
-    // was removed in 3.1.1), so a preview that carried withheld text or a seeded
-    // secret would be caught.
-    const lines = JSON.stringify(preview, null, 1).split("\n")
-    const audit = auditMemoryContext({
-      seededSecrets: SEEDED_SECRET_LITERALS,
-      forbiddenIdentifiers: [],
-      manifest: assembled,
-      preview: {
-        lines,
-        included: preview.included,
-        excluded: preview.excluded,
-      },
-    })
-    expect(describeAudit(audit)).toContain("PASS")
-    expect(audit.examinedPaths).toContain("tui_preview")
-    expect(audit.findings).toEqual([])
-  })
-
-  it("the auditor DETECTS a preview that does not describe its manifest", async () => {
-    const candidates = [
-      {
-        source: { kind: "memory" as const, memoryKind: "decision" as const, memoryId: "m-1" },
-        scope: { kind: "project" as const },
-        category: "project_constraints" as const,
-        reason: "active_decision" as const,
-        text: "included",
-        sensitivity: "public_to_project" as const,
-        priority: 500,
-        optional: true,
-        createdAt: NOW,
-      },
-    ]
-    const manifest = ok(
-      await assembleContext(
-        {
-          projectId: PROJECT,
-          runId: runIdSchema.parse("run-1"),
-          taskId: taskIdSchema.parse("task-1"),
-          dispatchId: dispatchIdSchema.parse("dispatch-1"),
-          destination: { nodeId: "node-a", roleId: roleIdSchema.parse("role-implementer"), clearance: "restricted" },
-          roleSnapshotHash: digestJson({ role: "implementer" }),
-          policy: { policyVersion: "m5.v1", budget: { maximum: 10_000, unit: "tokens" } },
-          now: NOW,
-          correlationId: "corr-preview-drift",
-        },
-        { provider: { candidates: async () => candidates } },
-      ),
-    )
-
-    // A preview that claims an item the manifest excluded. An operator would
-    // approve this; the agent would not receive it.
-    const audit = auditMemoryContext({
-      seededSecrets: [],
-      forbiddenIdentifiers: [],
-      manifest,
-      preview: {
-        lines: ["AIBridge — Dispatch context preview"],
-        included: [{ sourceId: "m-never-selected" }],
-        excluded: [],
-      },
-    })
-    expect(audit.passed).toBe(false)
-    const previewFindings = audit.findings.filter((finding) => finding.path === "tui_preview")
-    expect(previewFindings.length).toBeGreaterThan(0)
-    expect(previewFindings[0]?.severity).toBe("blocker")
   })
 
   it("a preview built by hand from a different manifest is detected as inconsistent", () => {

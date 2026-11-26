@@ -81,7 +81,7 @@ async function verifyWith(config: Record<string, unknown>, installed: readonly s
     bunVersion: "1.3.14",
     discoverAgents: async () => ({ agents: [], peersFound: 0, reachableCount: 0, enrolledCount: 0 }),
   })
-  const probed = calls.filter((c) => c.startsWith("which ") && c !== "which herdr")
+  const probed = calls.filter((c) => c.startsWith("which "))
   return { report, probed }
 }
 

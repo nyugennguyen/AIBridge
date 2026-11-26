@@ -15,7 +15,6 @@
  *                    "where should this code go" needs the seam, not the class.
  *   4. redaction   — before persistence, when input is prohibited.
  *   5. repository  — append-only storage, authorization, supersession, tombstones.
- *   6. migration   — v1 and legacy `memory.json` -> v2, as a plan then a write.
  *   7. workflow    — propose / accept / reject / supersede, with audit events.
  *   8. summarization — bounded handoffs, dependency results, run summaries.
  *
@@ -33,6 +32,5 @@ export * from "./access-policy.js"
 export * from "./in-memory-repository.js"
 export * from "./file-repository.js"
 export * from "./redaction/index.js"
-export * from "./migration.js"
 export * from "./workflow.js"
 export * from "./summarization.js"

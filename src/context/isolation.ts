@@ -24,9 +24,8 @@
  * | 4 | rendered prompt | a record the manifest did not include |
  * | 5 | memory record at rest | a secret value, in any field |
  * | 6 | audit events | content, or a secret, in a log |
- * | 7 | TUI preview | content a manifest withheld |
  *
- * Seven, because those are the seven places M5 writes or emits anything. A
+ * Six, because those are the six places M5 writes or emits anything. A
  * leak path that is not in this list is a leak path nobody is checking, so the
  * list is exported and the gate report cites it.
  *
@@ -49,7 +48,6 @@
  */
 
 import { assembleContext, renderContextWithContent, sourceIdOf } from "./assembler.js"
-import { verifyPreviewMatchesManifest } from "./preview.js"
 import type {
   ContextAssemblyRequest,
   ContextCandidate,
@@ -69,7 +67,7 @@ import type { MemoryQueryResult, MemoryQueryScope, MemoryRepository } from "../m
 import type { MemoryViewScope } from "../memory/record.js"
 import { createContractError, type Result } from "../orchestration/errors.js"
 
-/** The seven egress paths. Exported so the gate report can cite the list. */
+/** The six egress paths. Exported so the gate report can cite the list. */
 export const MEMORY_EGRESS_PATHS = [
   "repository_query",
   "context_manifest",
@@ -77,7 +75,6 @@ export const MEMORY_EGRESS_PATHS = [
   "rendered_prompt",
   "record_at_rest",
   "audit_event",
-  "tui_preview",
 ] as const
 export type MemoryEgressPath = (typeof MEMORY_EGRESS_PATHS)[number]
 
@@ -105,21 +102,6 @@ export interface AuditInput {
   readonly rendered?: { readonly text: string; readonly sourceIds: readonly string[] } | null
   /** A query result under audit. */
   readonly query?: MemoryQueryResult | null
-  /**
-   * The TUI preview under audit.
-   *
-   * Typed structurally rather than as the M5.8 view-model class, so the auditor
-   * does not import the presentation layer — a redaction check that depended on
-   * the renderer it is checking could be defeated by a renderer change. Only the
-   * fields the audit reads are required.
-   */
-  readonly preview?: {
-    readonly lines: readonly string[]
-    readonly included: readonly { readonly sourceId: string }[]
-    readonly excluded: readonly { readonly sourceId: string; readonly reason: string }[]
-    /** Source ids whose CONTENT the preview displayed, per the caller. */
-    readonly excludedContent?: readonly string[]
-  } | null
   /** Records at rest under audit. */
   readonly records?: readonly MemoryRecordV2[]
   /** Audit events under audit. */
@@ -175,7 +157,7 @@ function findForbiddenIdentifier(text: string, forbidden: readonly string[]): st
  *
  * Checks the paths the input actually supplies, and records which ones it
  * examined. A caller that forgets to pass `records` gets an audit that says it
- * examined five of seven paths — not an audit that quietly passed.
+ * examined five of six paths — not an audit that quietly passed.
  */
 export function auditMemoryContext(input: AuditInput): AuditResult {
   const findings: LeakFinding[] = []
@@ -422,66 +404,6 @@ export function auditMemoryContext(input: AuditInput): AuditResult {
     }
   }
 
-  // --- Path 7: the TUI preview --------------------------------------------
-  //
-  // The preview is an operator-facing rendering, so it is a distinct egress
-  // from the manifest it renders. The check that matters is that the preview
-  // shows exactly the manifest's items: a view that filtered, re-sorted, or
-  // un-redacted would let an operator approve something other than what the
-  // agent receives, and the manifest would still verify.
-  if (input.preview) {
-    examined.push("tui_preview")
-    const previewText = input.preview.lines.join("\n")
-    const secret = findSeededSecret(previewText, input.seededSecrets)
-    if (secret) {
-      findings.push({
-        path: "tui_preview",
-        kind: "secret_material",
-        severity: "blocker",
-        detail: "The TUI preview rendered a seeded secret literal",
-      })
-    }
-    if (input.manifest) {
-      // `verifyPreviewMatchesManifest` is the M5.8 function, and it wants the
-      // full view model. The audit's structural type is deliberately narrower, so
-      // the comparison is done against a merged object whose manifest-derived
-      // fields come from the manifest — which is the point: any field the
-      // preview *claims* about itself is ignored in favour of the manifest's.
-      const drift = verifyPreviewMatchesManifest(
-        {
-          ...(input.preview as unknown as Record<string, unknown>),
-          manifestId: input.manifest.manifestId,
-          digest: input.manifest.digest,
-          estimated: input.manifest.budget.estimated,
-        } as unknown as Parameters<typeof verifyPreviewMatchesManifest>[0],
-        input.manifest,
-      )
-      if (drift.length > 0) {
-        findings.push({
-          path: "tui_preview",
-          kind: "unauthorized_content",
-          severity: "blocker",
-          // The names of the discrepancies, never the content: this string ends
-          // up in an operator's report.
-          detail: `The preview does not describe its manifest (${drift.join(", ")})`,
-        })
-      }
-      // A withheld record's CONTENT must not appear anywhere on screen, even if
-      // the preview's structured fields are correct.
-      for (const exclusion of input.manifest.excluded) {
-        if (input.preview.excludedContent?.includes(exclusion.sourceId) === true) {
-          findings.push({
-            path: "tui_preview",
-            kind: "unauthorized_content",
-            severity: "blocker",
-            detail: "The TUI preview displayed an excluded record's content",
-            subjectId: exclusion.sourceId,
-          })
-        }
-      }
-    }
-  }
-
   // --- Path 6: audit events -----------------------------------------------
   if (input.auditEvents) {
     examined.push("audit_event")
@@ -518,7 +440,7 @@ export function auditMemoryContext(input: AuditInput): AuditResult {
 /**
  * A one-line disposition for the gate report.
  *
- * Says which paths were checked, because "no leaks found" without "out of seven"
+ * Says which paths were checked, because "no leaks found" without "out of six"
  * is indistinguishable from "no leaks, because nothing was checked".
  */
 export function describeAudit(result: AuditResult): string {

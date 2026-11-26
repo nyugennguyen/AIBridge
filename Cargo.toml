@@ -35,7 +35,7 @@ default-members = ["router"]
 #
 # It cannot stay in the member manifest: `[profile.*]` is honoured only in the
 # workspace root. Keeping it byte-identical matters because the musl binary-size
-# gate in `.github/workflows/milestone-7.yml` is calibrated on exactly this
+# gate in `.github/workflows/ci.yml` (`router` job, formerly `milestone-7.yml`) is calibrated on exactly this
 # profile -- `opt-level`/`lto`/`codegen-units` were chosen to bring a 2,222,768
 # byte binary under a bound that was then formally amended to 2,359,296 bytes
 # (ADR 0008 §12), and later to 3,145,728 bytes (ADR 0008 §13). Changing a flag here silently invalidates that number, so any

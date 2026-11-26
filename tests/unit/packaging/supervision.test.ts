@@ -227,8 +227,8 @@ describe("launchd supervision", () => {
   })
 })
 
-describe("milestone-7 workflow — verification that can fail", () => {
-  const load = () => read(".github/workflows/milestone-7.yml")
+describe("ci.yml router job — verification that can fail", () => {
+  const load = () => read(".github/workflows/ci.yml")
 
   it("is valid YAML, so a formatting slip cannot silently disable every check", async () => {
     // A real parse, not a regex. One under-indented `- name:` made GitHub reject
@@ -267,8 +267,22 @@ describe("milestone-7 workflow — verification that can fail", () => {
     }
   })
 
-  it("can be run on demand against a branch", async () => {
-    expect(await load()).toContain("workflow_dispatch")
+  it("path-gates the router job and fails safe to running it", async () => {
+    const workflow = parseYaml(await load()) as {
+      jobs: Record<string, { needs?: string; if?: string }>
+    }
+    expect(workflow.jobs.router?.needs).toBe("changes")
+    expect(workflow.jobs.router?.if).toBe("needs.changes.outputs.router == 'true'")
+    const text = await load()
+    expect(text).toContain("router=true (fail safe)")
+    expect(text).toContain("packaging/systemd/")
+    expect(text).toContain("packaging/nftables/")
+  })
+
+  it("can be run by hand, and a manual run is not a PR so the router job runs", async () => {
+    const workflow = parseYaml(await load()) as { on: Record<string, unknown> }
+    expect(Object.keys(workflow.on)).toContain("workflow_dispatch")
+    expect(await load()).toContain('if [ "$EVENT_NAME" != "pull_request" ]; then')
   })
 
   it("fails the job when systemd-analyze verify fails", async () => {
@@ -357,6 +371,7 @@ describe("milestone-7 workflow — verification that can fail", () => {
       "actions/checkout",
       "dtolnay/rust-toolchain",
       "mlugg/setup-zig",
+      "oven-sh/setup-bun",
     ]
 
     const workflow = await load()

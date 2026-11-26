@@ -623,7 +623,7 @@ typify turns these into 29 new types with serde, validation and builder code. Th
 
 **Decision:**
 1. Amend the static musl binary size bound from 2,359,296 bytes (2.25 MiB, §12) to **3,145,728 bytes (3.00 MiB)**. The worst target now sits 343,048 bytes (about 11%) below it.
-2. The bound's purpose is unchanged. §2.1 sizes the router against a 32 MiB systemd `MemoryMax`, and a 2.8 MB binary uses under 9% of that cap. The bound remains a regression alarm, enforced by `.github/workflows/milestone-7.yml`, and remains measured on the root `[profile.release]` (`opt-level = "z"`, `lto`, `codegen-units = 1`, `panic = "abort"`).
+2. The bound's purpose is unchanged. §2.1 sizes the router against a 32 MiB systemd `MemoryMax`, and a 2.8 MB binary uses under 9% of that cap. The bound remains a regression alarm, enforced by `.github/workflows/ci.yml` (`router` job, formerly `milestone-7.yml`), and remains measured on the root `[profile.release]` (`opt-level = "z"`, `lto`, `codegen-units = 1`, `panic = "abort"`).
 
 **Alternative considered and deferred: an opaque "router view" of the config.** The contract generator could emit the engine-only blocks (`capability_profiles`, `repositories`, `claude`, `limits`) as opaque JSON values in the router partition, the way `IPC_CONTRACT_FILES` already keeps the IPC families out of the router. That would recover most of the growth. The cost is that the router would no longer reject unknown keys inside those blocks, which weakens the §2.3 "strictly stricter" property for exactly the operator-authored policy the Claude runtime depends on. Because a fail-closed parse is worth more here than about 0.5 MB of binary, the opaque view was not adopted.
 

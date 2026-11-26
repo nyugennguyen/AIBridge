@@ -199,6 +199,8 @@ interface ClaudeActiveSession {
   readonly process: ProcessHandle
   /** The process leads its own process group (pgid = pid). */
   readonly processGroup: boolean
+  /** `terminate` was called while the process lived: its group is killed as soon as it exits. */
+  terminateRequested: boolean
   readonly splitter: LineStreamSplitter
   readonly bufferedEvents: AgentRuntimeEvent[]
   readonly usage: MutableRunUsage
@@ -315,12 +317,11 @@ export class ClaudeCodeRuntimeAdapter implements AgentRuntimeAdapter {
    * Code and every tool or shell it started), else to the process. Never
    * throws.
    */
-  #signal(active: ClaudeActiveSession, signal: NodeJS.Signals, groupAfterExit = false): void {
+  #signal(active: ClaudeActiveSession, signal: NodeJS.Signals): void {
     const pid = active.process.pid
-    // Once the leader has exited, its group is signalled only by the
-    // escalation `terminate` armed while the leader lived (a few seconds
-    // later): the group id may otherwise be free, or reused, by now.
-    if (active.processGroup && pid !== undefined && pid > 1 && (!active.exitRecorded || groupAfterExit)) {
+    // Once the leader has exited, its group is signalled only by the `exit`
+    // handler, at once (see `terminate`): later, the id may be free or reused.
+    if (active.processGroup && pid !== undefined && pid > 1 && !active.exitRecorded) {
       try {
         process.kill(-pid, signal)
         return
@@ -561,13 +562,13 @@ export class ClaudeCodeRuntimeAdapter implements AgentRuntimeAdapter {
     const active = this.#sessions.get(session.sessionId)
     if (!active) return success(undefined)
     this.#closeStdin(active)
-    const leaderAlive = !active.exitRecorded
+    // When the leader exits, what is left of its group (a tool ignoring
+    // SIGTERM) is SIGKILLed at once by the `exit` handler, before the record
+    // is cleared: nothing waits on a timer a closing bridge may never run.
+    if (!active.exitRecorded) active.terminateRequested = true
     this.#signal(active, "SIGTERM")
     const timer = setTimeout(() => {
-      // The group may outlive its leader by a few seconds (a tool ignoring
-      // SIGTERM): it is killed as the script runner kills a script's group.
       if (!active.exitRecorded) this.#signal(active, "SIGKILL")
-      else if (leaderAlive && active.processGroup) this.#signal(active, "SIGKILL", true)
     }, DEFAULT_TERMINATION_GRACE_PERIOD_MS)
     timer.unref?.()
     return success(undefined)
@@ -741,6 +742,7 @@ export class ClaudeCodeRuntimeAdapter implements AgentRuntimeAdapter {
       directory,
       process: child,
       processGroup: this.#processGroup,
+      terminateRequested: false,
       splitter,
       bufferedEvents: [],
       usage: { providerSessionId, initialized: false, errors: [], permissionDenials: [] },
@@ -773,6 +775,16 @@ export class ClaudeCodeRuntimeAdapter implements AgentRuntimeAdapter {
     })
 
     child.on("exit", (code, signal) => {
+      // Stopped on purpose: kill what is left of its group now, while the
+      // group id is still the group's (the leader was only just reaped), then
+      // clear the record. A normal exit leaves the group alone.
+      if (active.terminateRequested && active.processGroup && child.pid !== undefined && child.pid > 1) {
+        try {
+          process.kill(-child.pid, "SIGKILL")
+        } catch {
+          /* no member left */
+        }
+      }
       untrack?.()
       if (active.exitRecorded) return
       active.exitRecorded = true

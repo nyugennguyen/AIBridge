@@ -12,8 +12,9 @@
  * `ps -o lstart=` run with `TZ=UTC` and `LC_ALL=C`. The two forms carry a
  * prefix (`linux:`, `ps:`) and are never compared with each other.
  */
-import { execFileSync } from "node:child_process"
+import { execFile, execFileSync } from "node:child_process"
 import { readFileSync } from "node:fs"
+import { readFile as readFileAsync } from "node:fs/promises"
 
 /** Whether `pid` names a live process. EPERM (alive, another user's) counts as alive. */
 export function isProcessAlive(pid: number): boolean {
@@ -93,6 +94,79 @@ export function readProcessStartTime(pid: number, sources: Partial<StartTimeSour
   const out = source.runPs(pid, { ...source.env, TZ: "UTC", LC_ALL: "C", LANG: "C" })
   const start = out?.trim().replace(/\s+/g, " ")
   return start !== undefined && start.length > 0 ? `ps:${start}` : undefined
+}
+
+/** `/proc` text reads and a `ps` column read that never block the event loop. */
+export interface AsyncProcessSources {
+  readonly platform: NodeJS.Platform
+  readonly readFile: (path: string) => Promise<string | undefined>
+  /** `ps -o <column>= -p <pid>` under `env`, killed after `timeoutMs`; `undefined` on failure. */
+  readonly runPs: (column: string, pid: number, env: Record<string, string | undefined>, timeoutMs: number) => Promise<string | undefined>
+  readonly env: Record<string, string | undefined>
+}
+
+const defaultAsyncSources: AsyncProcessSources = {
+  platform: process.platform,
+  readFile: async (path) => {
+    try {
+      return await readFileAsync(path, "utf8")
+    } catch {
+      return undefined
+    }
+  },
+  runPs: (column, pid, env, timeoutMs) =>
+    new Promise((resolve) => {
+      execFile(
+        "ps",
+        ["-o", `${column}=`, "-p", String(pid)],
+        { encoding: "utf8", env, timeout: timeoutMs, killSignal: "SIGKILL" },
+        (error, stdout) => resolve(error === null ? stdout : undefined),
+      )
+    }),
+  env: process.env,
+}
+
+/** How long an async identity read may take before it counts as unreadable. */
+export const DEFAULT_IDENTITY_READ_TIMEOUT_MS = 1_000
+
+/**
+ * `readProcessStartTime` without blocking the event loop: same value, same
+ * forms. A `ps` that does not answer within `timeoutMs` reads as `undefined`
+ * (unverifiable).
+ */
+export async function readProcessStartTimeAsync(
+  pid: number,
+  options: { readonly timeoutMs?: number; readonly sources?: Partial<AsyncProcessSources> } = {},
+): Promise<string | undefined> {
+  const source = { ...defaultAsyncSources, ...options.sources }
+  if (source.platform === "linux") {
+    const [stat, bootIdRaw] = await Promise.all([source.readFile(`/proc/${pid}/stat`), source.readFile("/proc/sys/kernel/random/boot_id")])
+    const bootId = bootIdRaw?.trim()
+    if (stat !== undefined && bootId !== undefined && bootId.length > 0) {
+      const startTicks = statFieldsAfterComm(stat)[22 - 3]
+      if (startTicks !== undefined && /^\d+$/.test(startTicks)) return `linux:${bootId}:${startTicks}`
+    }
+  }
+  const out = await source.runPs("lstart", pid, { ...source.env, TZ: "UTC", LC_ALL: "C", LANG: "C" }, options.timeoutMs ?? DEFAULT_IDENTITY_READ_TIMEOUT_MS)
+  const start = out?.trim().replace(/\s+/g, " ")
+  return start !== undefined && start.length > 0 ? `ps:${start}` : undefined
+}
+
+/** `readProcessGroupId` without blocking the event loop. */
+export async function readProcessGroupIdAsync(
+  pid: number,
+  options: { readonly timeoutMs?: number; readonly sources?: Partial<AsyncProcessSources> } = {},
+): Promise<number | undefined> {
+  const source = { ...defaultAsyncSources, ...options.sources }
+  let raw: string | undefined
+  if (source.platform === "linux") {
+    const stat = await source.readFile(`/proc/${pid}/stat`)
+    if (stat !== undefined) raw = statFieldsAfterComm(stat)[5 - 3]
+  }
+  raw ??= (await source.runPs("pgid", pid, { ...source.env, LC_ALL: "C", LANG: "C" }, options.timeoutMs ?? DEFAULT_IDENTITY_READ_TIMEOUT_MS))?.trim()
+  if (raw === undefined || !/^\d+$/.test(raw)) return undefined
+  const pgid = Number.parseInt(raw, 10)
+  return pgid > 0 ? pgid : undefined
 }
 
 /** The method prefix of a start time (`linux`, `ps`), or "" for an unprefixed value. */

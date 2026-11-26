@@ -9,7 +9,9 @@ import {
   compareProcessStart,
   isProcessAlive,
   readProcessGroupId,
+  readProcessGroupIdAsync,
   readProcessStartTime,
+  readProcessStartTimeAsync,
   startTimeForm,
 } from "../../../src/host/process-identity.js"
 import * as stateLock from "../../../src/host/state-lock.js"
@@ -44,6 +46,41 @@ describe("readProcessStartTime", () => {
 
   it("is undefined for a PID that does not exist", () => {
     expect(readProcessStartTime(2 ** 22 + 12345)).toBeUndefined()
+  })
+})
+
+describe("readProcessStartTimeAsync / readProcessGroupIdAsync", () => {
+  it("read the same values as the synchronous readers", async () => {
+    expect(await readProcessStartTimeAsync(process.pid)).toBe(readProcessStartTime(process.pid))
+    expect(await readProcessGroupIdAsync(process.pid)).toBe(readProcessGroupId(process.pid))
+  })
+
+  it("on Linux read /proc without ps", async () => {
+    const fields = Array.from({ length: 50 }, (_, index) => String(index + 3))
+    const sources = {
+      platform: "linux" as const,
+      readFile: async (path: string) =>
+        path === "/proc/7/stat" ? `7 (a b) ${fields.join(" ")}\n` : path === "/proc/sys/kernel/random/boot_id" ? "boot-1\n" : undefined,
+      runPs: async () => {
+        throw new Error("ps must not run on Linux")
+      },
+    }
+    expect(await readProcessStartTimeAsync(7, { sources })).toBe("linux:boot-1:22")
+    expect(await readProcessGroupIdAsync(7, { sources })).toBe(5)
+  })
+
+  it("pass the timeout to ps and read a failed ps as undefined", async () => {
+    const timeouts: number[] = []
+    const sources = {
+      platform: "darwin" as const,
+      runPs: async (_column: string, _pid: number, _env: Record<string, string | undefined>, timeoutMs: number) => {
+        timeouts.push(timeoutMs)
+        return undefined
+      },
+    }
+    expect(await readProcessStartTimeAsync(7, { timeoutMs: 250, sources })).toBeUndefined()
+    expect(await readProcessGroupIdAsync(7, { timeoutMs: 250, sources })).toBeUndefined()
+    expect(timeouts).toEqual([250, 250])
   })
 })
 

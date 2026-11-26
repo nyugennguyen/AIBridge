@@ -4,14 +4,19 @@
  * to `trackProcess` (recorded until it exits).
  */
 import { EventEmitter } from "node:events"
-import { chmod, mkdtemp, readFile, writeFile } from "node:fs/promises"
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { PassThrough } from "node:stream"
-import { describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it } from "vitest"
 import { isProcessAlive, readProcessGroupId } from "../../../src/host/process-identity.js"
 import { ClaudeCodeRuntimeAdapter, type ProcessHandle } from "../../../src/runtime/claude-adapter.js"
 import { createTestLaunchRequest, createTestOperationContext } from "../../contracts/runtime/conformance-helpers.js"
+
+const created: string[] = []
+afterEach(async () => {
+  for (const directory of created.splice(0)) await rm(directory, { recursive: true, force: true })
+})
 
 class ExitingProcess extends EventEmitter implements ProcessHandle {
   readonly stdin = new PassThrough()
@@ -83,14 +88,21 @@ describe("ClaudeCodeRuntimeAdapter process group and tracking", () => {
     expect(detached).toBe(true)
   })
 
-  it("real spawn: leads its own group, and terminate stops it and a grandchild that both ignore SIGTERM", async () => {
+  // `stubborn`: Claude ignores SIGTERM (SIGKILL after 3 s). `prompt`: Claude
+  // exits on SIGTERM at once, but a tool it started ignores it: that tool must
+  // be killed when Claude exits, not on a timer a closing bridge may not run.
+  it.each([
+    ["stubborn", `process.on("SIGTERM", () => {})`, 8_000],
+    ["prompt", ``, 1_500],
+  ] as const)("real spawn (%s leader): leads its own group; terminate stops it and a grandchild ignoring SIGTERM", async (_name, leaderTerm, within) => {
     const directory = await mkdtemp(join(tmpdir(), "aibridge-claude-group-"))
+    created.push(directory)
     const pidFile = join(directory, "pids")
     const fakeClaude = join(directory, "fake-claude.js")
     await writeFile(
       fakeClaude,
       `#!${process.execPath}
-process.on("SIGTERM", () => {})
+${leaderTerm}
 const { spawn } = require("node:child_process")
 const grandchild = spawn(${JSON.stringify(process.execPath)}, ["-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"], { stdio: "ignore" })
 require("node:fs").writeFileSync(${JSON.stringify(pidFile)}, process.pid + " " + grandchild.pid)
@@ -126,7 +138,7 @@ setInterval(() => {}, 1000)
       expect(readProcessGroupId(grandchildPid)).toBe(claudePid)
 
       await adapter.terminate(launched.value, createTestOperationContext("real-terminate"))
-      await waitFor(() => !isProcessAlive(claudePid) && !isProcessAlive(grandchildPid), 8_000)
+      await waitFor(() => !isProcessAlive(claudePid) && !isProcessAlive(grandchildPid), within)
       expect(isProcessAlive(claudePid)).toBe(false)
       expect(isProcessAlive(grandchildPid)).toBe(false)
       expect(cleared).toBe(true)

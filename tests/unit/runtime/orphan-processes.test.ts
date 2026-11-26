@@ -200,6 +200,46 @@ describe("terminateOrphanedRuntimeProcesses", () => {
     expect(table.size).toBe(0)
   })
 
+  it("refuses a record whose process group is not the process itself", async () => {
+    const { signals, options } = world({ 500: { start: "ps:A", pgid: 600 }, 600: { start: "ps:B", pgid: 600 } })
+    const { registry } = registryOf([{ pid: 500, start: "ps:A", pgid: 600 }])
+    const [outcome] = await terminateOrphanedRuntimeProcesses({ ...options, registry })
+    expect(outcome).toMatchObject({ action: "refused", reason: expect.stringMatching(/process group 600 is not the process itself/) })
+    expect(signals).toEqual([])
+  })
+
+  it("a read that never answers counts as unverifiable, within the read timeout", async () => {
+    const { signals, options } = world({ 500: { start: "ps:A", pgid: 500 } })
+    const { registry } = registryOf([{ pid: 500, start: "ps:A", pgid: 500 }])
+    const started = Date.now()
+    const [outcome] = await terminateOrphanedRuntimeProcesses({
+      ...options,
+      selfPgid: undefined,
+      registry,
+      readTimeoutMs: 100,
+      startTimeOf: () => new Promise<string>(() => undefined),
+      processGroupOf: () => new Promise<number>(() => undefined),
+    })
+    expect(outcome?.action).toBe("unverified")
+    expect(signals).toEqual([])
+    expect(Date.now() - started).toBeLessThan(1_000)
+  })
+
+  it("acts on no record (and removes none) when the registry directory cannot be trusted", async () => {
+    const { signals, options } = world({ 500: { start: "ps:A", pgid: 500 } })
+    const { registry, removed } = registryOf([{ pid: 500, start: "ps:A", pgid: 500 }])
+    const logs: string[] = []
+    const outcomes = await terminateOrphanedRuntimeProcesses({
+      ...options,
+      registry: { ...registry, checkDirectory: () => ({ ok: false as const, reason: "it is owned by uid 0, not 501" }) },
+      log: (level, message) => logs.push(`${level} ${message}`),
+    })
+    expect(outcomes).toEqual([])
+    expect(signals).toEqual([])
+    expect(removed).toEqual([])
+    expect(logs.join("\n")).toMatch(/error .*cannot be trusted \(it is owned by uid 0/)
+  })
+
   it("is a logged no-op on Windows", async () => {
     const { signals, options } = world({ 500: { start: "ps:A", pgid: 500 } })
     const { registry, removed } = registryOf([{ pid: 500, start: "ps:A", pgid: 500 }])
@@ -239,6 +279,12 @@ describe("terminateOrphanedRuntimeProcesses", () => {
     const grandchildPid = await new Promise<number>((resolve) => child.stdout!.once("data", (chunk: Buffer) => resolve(Number(chunk.toString().trim()))))
     const registry = new FileRuntimeProcessRegistry(join(await mkdtemp(join(tmpdir(), "aibridge-orphan-")), "runtime-processes"))
     registry.track({ jobId: "job_real", role: "claude", pid: child.pid!, processGroup: true })
+    // Outside Linux the start time is added to the record asynchronously.
+    for (let attempt = 0; attempt < 250; attempt += 1) {
+      const [entry] = registry.list()
+      if (entry !== undefined && "record" in entry && entry.record.start !== undefined) break
+      await new Promise((done) => setTimeout(done, 20))
+    }
     try {
       const [outcome] = await terminateOrphanedRuntimeProcesses({ registry, graceMs: 300, log: () => undefined })
       expect(outcome).toMatchObject({ action: "terminated", signal: "SIGKILL", group: true })

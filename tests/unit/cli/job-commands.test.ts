@@ -9,7 +9,8 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
 import { runCli, type CliDeps } from "../../../src/cli.js"
-import { runJobCommand, signedPeerTarget, WATCH_INTERVAL_MS, type JobCliDeps, type JobResponse, type JobTarget } from "../../../src/cli/job-commands.js"
+import { realJobDeps, runJobCommand, signedPeerTarget, WATCH_INTERVAL_MS, type JobCliDeps, type JobResponse, type JobTarget } from "../../../src/cli/job-commands.js"
+import { loadOrCreateNodeKey } from "../../../src/pairing/files.js"
 import { BridgeTools, type BridgeToolDeps } from "../../../src/mcp/bridge-tools.js"
 import { jobApiApp, type Peer } from "../../integration/job-api-fixtures.js"
 
@@ -77,7 +78,7 @@ function cli(h: Harness, options: Options = {}) {
     },
     peers: async () => options.peers ?? [],
   }
-  return { deps, output, questions, sleeps, text: () => output.join("") }
+  return { deps, output, questions, sleeps, abort: () => controller.abort(), text: () => output.join("") }
 }
 
 describe("aibr jobs", () => {
@@ -351,7 +352,8 @@ describe("aibr cancel", () => {
     const h = await jobApiApp()
     await h.seedJob("job_1", "dev-main", "running")
     const c = cli(h, { tty: false, confirm: true })
-    expect(await runJobCommand("cancel", ["job_1"], c.deps)).toBe(64)
+    expect(await runJobCommand("cancel", ["job_1"], c.deps)).toBe(1)
+    expect(c.text()).toContain("Nothing changed")
     expect(c.text()).toContain("pass --yes")
     expect(c.questions).toEqual([])
     expect((await h.jobManager.getJob("job_1")).status).toBe("running")
@@ -412,6 +414,121 @@ describe("aibr cancel", () => {
   })
 })
 
+describe("interrupts, odd input and profile resolution", () => {
+  /** A node that accepts the request and never answers, until the signal fires. */
+  const hanging = (label: string, kind: "operator" | "peer"): JobTarget => ({
+    label,
+    kind,
+    request: (_method, _path, signal) =>
+      new Promise((_resolve, reject) => {
+        signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true })
+      }),
+  })
+
+  it("Ctrl-C aborts a request in flight: --watch and -f return 0 instead of waiting for it", async () => {
+    const h = await jobApiApp()
+    for (const [kind, argv] of [["operator", ["--watch"]], ["peer", ["--watch", "--node", "worker"]]] as const) {
+      const c = cli(h, { peers: [hanging("worker", "peer")] })
+      c.deps = { ...c.deps, local: async () => hanging("local", kind) }
+      const done = runJobCommand("jobs", argv, c.deps)
+      await new Promise((resolve) => setTimeout(resolve, 5))
+      c.abort()
+      expect(await done).toBe(0)
+    }
+    const f = cli(h)
+    f.deps = { ...f.deps, local: async () => hanging("local", "operator") }
+    const following = runJobCommand("job", ["job_1", "-f"], f.deps)
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    f.abort()
+    expect(await following).toBe(0)
+  })
+
+  it("the real local target sends the operator token with an abort signal that Ctrl-C fires", async () => {
+    const home = await mkdtemp(join(tmpdir(), "aibr-job-cli-local-"))
+    const configDir = join(home, ".config", "aibridge", "dev")
+    await mkdir(configDir, { recursive: true })
+    await writeFile(join(configDir, "config.json"), JSON.stringify({
+        agent_id: "dev-main",
+        bridge: { host: "127.0.0.1", port: 8787, public_url: "http://dev-main.ts.net:8787", ingress_mode: "engine" },
+        opencode: { base_url: "http://127.0.0.1:4096", server_port: 4096 },
+        security: { auth_mode: "bearer-token", allowed_sources: [] },
+        permissions: { default_response: "reject", allow_tools: [], require_plan_approval_for_tools: [] },
+        projects: [],
+        agents: [],
+        timeouts: { default_job_seconds: 900, callback_retry_attempts: 3 },
+        planning: { plan_annotator_enabled: false, require_approval_for: [] },
+      }), { mode: 0o600 })
+    let seen: { authorization: string | null; signal: AbortSignal | null | undefined } | undefined
+    const deps = realJobDeps(() => undefined, {} as BridgeToolDeps, {
+      env: { HOME: home, AIBRIDGE_OPERATOR_TOKEN: "op-secret" },
+      fetch: ((_url: string, init?: RequestInit) => {
+        seen = { authorization: new Headers(init?.headers).get("authorization"), signal: init?.signal }
+        return new Promise((_resolve, reject) => init?.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true }))
+      }) as unknown as typeof fetch,
+    })
+    const target = await deps.local("dev")
+    const interrupt = new AbortController()
+    const pending = target.request("GET", "/jobs", interrupt.signal)
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    expect(seen?.authorization).toBe("Bearer op-secret")
+    expect(seen?.signal?.aborted).toBe(false)
+    interrupt.abort()
+    await expect(pending).rejects.toThrow(/not reachable/)
+    expect(seen?.signal?.aborted).toBe(true)
+  })
+
+  it("maps 401/403 from GET /jobs/:id through the same messages", async () => {
+    const h = await jobApiApp()
+    const scripted = (status: number, body: Record<string, unknown>): JobTarget => ({ label: "worker", kind: "peer", request: async () => ({ status, body }) })
+    const notOwner = cli(h, { peers: [scripted(403, { code: "not_job_requester", error: "no" })] })
+    expect(await runJobCommand("job", ["job_1", "--node", "worker"], notOwner.deps)).toBe(1)
+    expect(notOwner.text()).toContain("was not dispatched by this node")
+    const noId = cli(h, { peers: [scripted(403, { code: "requester_identity_required", error: "no" })] })
+    expect(await runJobCommand("job", ["job_1", "--node", "worker"], noId.deps)).toBe(1)
+    expect(noId.text()).toContain("cannot tell which jobs are yours")
+    const local = cli(h)
+    local.deps = { ...local.deps, local: async () => ({ label: "local", kind: "operator", request: async () => ({ status: 401, body: {} }) }) }
+    expect(await runJobCommand("job", ["job_1"], local.deps)).toBe(1)
+    expect(local.text()).toContain("rejected the operator token (401)")
+  })
+
+  it("-- ends options, so an id starting with a dash can be addressed", async () => {
+    const h = await jobApiApp()
+    await h.seedJob("-odd", "dev-main", "completed")
+    expect(await runJobCommand("job", ["--", "-odd"], cli(h).deps)).toBe(0)
+    expect(await runJobCommand("cancel", ["--yes", "--", "-odd"], cli(h).deps)).toBe(1)
+    expect(await runJobCommand("job", ["-odd"], cli(h).deps)).toBe(64)
+  })
+
+  it("stops with an error when a full page does not advance next", async () => {
+    const h = await jobApiApp()
+    const stuck: JobTarget = {
+      label: "worker",
+      kind: "peer",
+      request: async () => ({ status: 200, body: { events: Array.from({ length: 500 }, (_, i) => ({ seq: i + 1, type: "status", at: "t", data: {} })), next: 0, final: false } }),
+    }
+    const c = cli(h, { peers: [stuck] })
+    expect(await runJobCommand("job", ["j", "--events", "--node", "worker"], c.deps)).toBe(1)
+    expect(c.text()).toContain("without advancing")
+  })
+
+  it("uses one profile for every mode: --profile, else default", async () => {
+    const h = await jobApiApp()
+    const profiles: string[] = []
+    const c = cli(h, { peers: [peerTarget(h, "worker", "dev-main")] })
+    c.deps = {
+      ...c.deps,
+      local: async (profile) => (profiles.push(profile), operatorTarget(h)),
+      peer: async (profile) => (profiles.push(profile), peerTarget(h, "worker", "dev-main")),
+      peers: async (profile) => (profiles.push(profile), [peerTarget(h, "worker", "dev-main")]),
+    }
+    await runJobCommand("jobs", [], c.deps)
+    await runJobCommand("jobs", ["--node", "worker"], c.deps)
+    await runJobCommand("jobs", ["--all-nodes", "-p", "staging"], c.deps)
+    expect(profiles).toEqual(["default", "default", "staging"])
+  })
+})
+
 describe("real peer target", () => {
   it("sends the bearer token and a node signature, and reports an unreachable peer without secrets", async () => {
     const home = await mkdtemp(join(tmpdir(), "aibr-job-cli-"))
@@ -435,11 +552,17 @@ describe("real peer target", () => {
     )
     await writeFile(join(secrets, "bearer_token"), "tok_SECRET_abcdef123456\n")
     const { readFile } = await import("node:fs/promises")
-    const seen: Array<{ url: string; method: string | undefined; authorization: string | null }> = []
+    const seen: Array<{ url: string; method: string | undefined; authorization: string | null; signed: boolean }> = []
     let reachable = true
     const toolDeps: BridgeToolDeps = {
       fetch: async (url, init) => {
-        seen.push({ url, method: init?.method, authorization: new Headers(init?.headers).get("authorization") })
+        const headers = new Headers(init?.headers)
+        seen.push({
+          url,
+          method: init?.method,
+          authorization: headers.get("authorization"),
+          signed: [...headers.keys()].some((name) => name !== "authorization" && name !== "accept"),
+        })
         if (!reachable) throw new Error("ECONNREFUSED tok_SECRET_abcdef123456")
         return new Response(JSON.stringify({ jobs: [] }), { status: 200 })
       },
@@ -452,12 +575,19 @@ describe("real peer target", () => {
       sleep: async () => undefined,
     }
     const loaded = await new BridgeTools(toolDeps, "dev").loadProfile()
+    await loadOrCreateNodeKey(loaded.paths.stateDir)
     const target = signedPeerTarget(loaded, loaded.config.agents[0]!, toolDeps)
     expect(target.label).toBe("staging")
     expect(await target.request("GET", "/jobs?limit=5")).toEqual({ status: 200, body: { jobs: [] } })
-    expect(seen).toEqual([{ url: "http://staging.ts.net:8787/jobs?limit=5", method: "GET", authorization: "Bearer tok_SECRET_abcdef123456" }])
+    expect(seen).toEqual([{ url: "http://staging.ts.net:8787/jobs?limit=5", method: "GET", authorization: "Bearer tok_SECRET_abcdef123456", signed: true }])
     reachable = false
-    await expect(target.request("GET", "/jobs")).rejects.toThrow(/staging is not reachable/)
+    const failure = await target.request("GET", "/jobs").then(
+      () => "",
+      (error: Error) => error.message,
+    )
+    expect(failure).toMatch(/staging is not reachable: ECONNREFUSED/)
+    expect(failure).not.toContain("tok_SECRET_abcdef123456")
+    expect(failure).toContain("[redacted]")
   })
 })
 

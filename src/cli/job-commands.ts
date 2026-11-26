@@ -36,8 +36,8 @@ export interface JobTarget {
   /** `local`, or the peer's agent id. */
   readonly label: string
   readonly kind: "operator" | "peer"
-  /** Rejects with a message fit for the terminal when the node cannot be reached. */
-  request(method: "GET" | "POST", path: string): Promise<JobResponse>
+  /** Rejects with a message fit for the terminal when the node cannot be reached. `signal` (Ctrl-C) cuts a request in flight. */
+  request(method: "GET" | "POST", path: string, signal?: AbortSignal): Promise<JobResponse>
 }
 
 export interface JobCliDeps {
@@ -54,9 +54,9 @@ export interface JobCliDeps {
   /** This node, with the operator credential. */
   readonly local: (profile: string) => Promise<JobTarget>
   /** One peer of the profile, signed. */
-  readonly peer: (profile: string | undefined, node: string) => Promise<JobTarget>
+  readonly peer: (profile: string, node: string) => Promise<JobTarget>
   /** Every peer of the profile, signed. */
-  readonly peers: (profile: string | undefined) => Promise<readonly JobTarget[]>
+  readonly peers: (profile: string) => Promise<readonly JobTarget[]>
 }
 
 export const WATCH_INTERVAL_MS = 2_000
@@ -86,7 +86,7 @@ export const JOBS_HELP = [
   "time with a node column; a peer that cannot be reached gets one line and does",
   "not fail the command (exit 1 only when no peer answered). It needs no local",
   "bridge.",
-  "--status filters by job status; --limit is at most 200 (default 50, per node).",
+  "--status filters by job status; --limit is at most 200 (default 50) and is a total, also with --all-nodes.",
   "--json prints one JSON document. --watch polls every 2 seconds until Ctrl-C:",
   "on a terminal it redraws the list, otherwise it prints one line per change.",
   "",
@@ -111,6 +111,7 @@ export const JOB_HELP = [
   "--node <peer> the request is signed and the peer shows only a job this node",
   "dispatched to it.",
   "",
+  "An id that starts with a dash goes after --: aibr job -- -id.",
   "This is not aibr logs, which prints the bridge's own log.",
   "",
 ].join("\n")
@@ -123,8 +124,8 @@ export const CANCEL_HELP = [
   "",
   "The job ends as failed (\"cancelled by operator\" or \"by requester\") and its",
   "requester is sent the report. A running Claude Code job's process is",
-  "terminated. Asks first (default No); --yes skips the question, and it is",
-  "required when there is no terminal. A job awaiting operator approval cannot",
+  "terminated. Asks first (default No); --yes skips the question. Without a",
+  "terminal it asks nothing and changes nothing (exit 1) unless --yes is given. A job awaiting operator approval cannot",
   "be cancelled: reject it with aibr reject <job_id>. A finished job answers",
   "\"already ended\".",
   "",
@@ -132,6 +133,7 @@ export const CANCEL_HELP = [
   "--node <peer> the request is signed and the peer cancels only a job this node",
   "dispatched to it.",
   "",
+  "An id that starts with a dash goes after --: aibr cancel -- -id.",
   "aibr cancel stops ONE job. aibr stop stops the service, or with --all-jobs",
   "every running job on the node.",
   "",
@@ -146,6 +148,7 @@ export const ATTACH_HELP = [
   "The same as aibr job <job_id> --events -f. It does NOT attach a terminal:",
   "Claude Code jobs run as child processes without a terminal session, so this",
   "only prints the job's events as they happen and returns when the job ends.",
+  "An id that starts with a dash goes after --: aibr cancel -- -id.",
   "Ctrl-C stops watching, not the job. See aibr cancel to stop it.",
   "",
 ].join("\n")
@@ -187,8 +190,17 @@ function parseJobArgs(command: JobCommandName, argv: readonly string[]): JobArgs
   const positional: string[] = []
   const values = new Map<string, string>()
   const bools = new Set<string>()
+  let optionsEnded = false
   for (let index = 0; index < argv.length; index += 1) {
     const raw = argv[index]!
+    if (optionsEnded) {
+      positional.push(raw)
+      continue
+    }
+    if (raw === "--") {
+      optionsEnded = true
+      continue
+    }
     const eq = raw.startsWith("--") ? raw.indexOf("=") : -1
     const given = eq > 0 ? raw.slice(0, eq) : raw
     const name = ALIASES[given] ?? given
@@ -238,9 +250,14 @@ function parseJobArgs(command: JobCommandName, argv: readonly string[]): JobArgs
 
 class JobCliError extends Error {}
 
-async function call(target: JobTarget, method: "GET" | "POST", path: string): Promise<JobResponse> {
+/** The profile every mode uses: `--profile`, else "default", as `aibr approve` does. */
+function profileOf(args: JobArgs): string {
+  return args.profile ?? "default"
+}
+
+async function call(target: JobTarget, method: "GET" | "POST", path: string, signal?: AbortSignal): Promise<JobResponse> {
   try {
-    return await target.request(method, path)
+    return await target.request(method, path, signal)
   } catch (error) {
     throw new JobCliError(error instanceof Error ? error.message : `request to ${target.label} failed`)
   }
@@ -352,27 +369,27 @@ interface Listing {
   readonly failures: readonly (readonly [string, string])[]
 }
 
-async function listFrom(target: JobTarget, args: JobArgs): Promise<JobRow[]> {
+async function listFrom(target: JobTarget, args: JobArgs, signal?: AbortSignal): Promise<JobRow[]> {
   const query = new URLSearchParams()
   if (args.status !== undefined) query.set("status", args.status)
   if (args.limit !== undefined) query.set("limit", String(args.limit))
-  const response = await call(target, "GET", `/jobs${query.toString() !== "" ? `?${query}` : ""}`)
+  const response = await call(target, "GET", `/jobs${query.toString() !== "" ? `?${query}` : ""}`, signal)
   if (response.status !== 200) throw new JobCliError(explain(response, target, "list"))
   return rowsOf(target.label, response.body)
 }
 
 /** One listing of this node, one peer, or every peer. Throws when nothing could be listed. */
-async function listing(args: JobArgs, deps: JobCliDeps): Promise<Listing> {
+async function listing(args: JobArgs, deps: JobCliDeps, signal?: AbortSignal): Promise<Listing> {
   if (!args.allNodes) {
-    const target = args.node !== undefined ? await deps.peer(args.profile, args.node) : await deps.local(args.profile ?? "default")
-    return { rows: await listFrom(target, args), failures: [] }
+    const target = args.node !== undefined ? await deps.peer(profileOf(args), args.node) : await deps.local(profileOf(args))
+    return { rows: await listFrom(target, args, signal), failures: [] }
   }
-  const peers = await deps.peers(args.profile)
+  const peers = await deps.peers(profileOf(args))
   if (peers.length === 0) throw new JobCliError("This profile has no peers in agents[]. Pair one with: aibr enroll join <code>")
   const answers = await Promise.all(
     peers.map(async (peer): Promise<{ rows: JobRow[] } | { failure: readonly [string, string] }> => {
       try {
-        return { rows: await listFrom(peer, args) }
+        return { rows: await listFrom(peer, args, signal) }
       } catch (error) {
         return { failure: [peer.label, error instanceof Error ? error.message : "failed"] }
       }
@@ -436,9 +453,10 @@ async function runWatch(args: JobArgs, deps: JobCliDeps): Promise<number> {
     while (!signal.aborted) {
       let result: Listing | undefined
       try {
-        result = await listing(args, deps)
+        result = await listing(args, deps, signal)
         lastError = undefined
       } catch (error) {
+        if (signal.aborted) return 0
         const message = error instanceof Error ? error.message : "poll failed"
         if (first) {
           deps.writer(`Error: ${message}\n`)
@@ -487,7 +505,7 @@ async function runWatch(args: JobArgs, deps: JobCliDeps): Promise<number> {
 // ── job, events, attach ─────────────────────────────────────────────────
 
 async function targetFor(args: JobArgs, deps: JobCliDeps): Promise<JobTarget> {
-  return args.node !== undefined ? deps.peer(args.profile, args.node) : deps.local(args.profile ?? "default")
+  return args.node !== undefined ? deps.peer(profileOf(args), args.node) : deps.local(profileOf(args))
 }
 
 function eventLine(event: Record<string, unknown>): string {
@@ -512,9 +530,10 @@ async function runEvents(target: JobTarget, jobId: string, args: JobArgs, deps: 
     for (;;) {
       let response: JobResponse
       try {
-        response = await call(target, "GET", `/jobs/${encoded}/events?after=${after}&limit=${EVENTS_PAGE}`)
+        response = await call(target, "GET", `/jobs/${encoded}/events?after=${after}&limit=${EVENTS_PAGE}`, interrupt?.signal)
         failures = 0
       } catch (error) {
+        if (interrupt?.signal.aborted === true) return 0
         failures += 1
         if (!args.follow || failures >= 3) {
           deps.writer(`Error: ${error instanceof Error ? error.message : "events failed"}${after > 0 ? ` (read up to event ${after})` : ""}\n`)
@@ -530,7 +549,12 @@ async function runEvents(target: JobTarget, jobId: string, args: JobArgs, deps: 
       }
       const page = Array.isArray(response.body.events) ? (response.body.events as Record<string, unknown>[]) : []
       for (const event of page) deps.writer(args.json ? `${JSON.stringify(event)}\n` : eventLine(event))
-      if (typeof response.body.next === "number") after = response.body.next
+      const next = typeof response.body.next === "number" ? response.body.next : after
+      if (page.length > 0 && next <= after) {
+        deps.writer(`Error: ${text(target.label)} returned events without advancing its position (next ${next}, after ${after}); stopping.\n`)
+        return 1
+      }
+      after = next
       if (page.length >= EVENTS_PAGE) continue
       if (!args.follow) return 0
       if (response.body.final === true) {
@@ -594,8 +618,8 @@ async function runCancel(args: JobArgs, deps: JobCliDeps): Promise<number> {
   }
   const shown = sanitizeForTerminal(jobId)
   if (!args.yes && !deps.isInputTTY) {
-    deps.writer("Error: aibr cancel asks for confirmation and there is no terminal to ask on; pass --yes to cancel without asking.\n")
-    return 64
+    deps.writer("Nothing changed: aibr cancel asks first and there is no terminal to ask on; pass --yes to cancel without asking.\n")
+    return 1
   }
   try {
     const target = await targetFor(args, deps)
@@ -683,22 +707,35 @@ export function signedPeerTarget(loaded: LoadedProfile, peer: { readonly id: str
   return {
     label: peer.id,
     kind: "peer",
-    request: async (method, path) => {
+    request: async (method, path, signal) => {
       const url = `${peer.url.replace(/\/+$/, "")}${path}`
       const headers: Record<string, string> = { accept: "application/json" }
+      const secrets: string[] = []
+      const redact = (message: string): string => {
+        let out = message
+        for (const secret of secrets) out = out.split(secret).join("[redacted]")
+        return out.replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [redacted]")
+      }
       if (loaded.config.security.auth_mode !== "none") {
         try {
           const token = (await toolDeps.readFile(join(loaded.paths.secretsDir, "bearer_token"))).trim()
-          if (token !== "") headers.authorization = `Bearer ${token}`
+          if (token !== "") {
+            headers.authorization = `Bearer ${token}`
+            secrets.push(token)
+          }
         } catch {
           // a per-peer token from `aibr enroll join` replaces it below; without either the peer answers 401
         }
       }
       const prepared = await prepareSignedRequest(loaded, url, { method, headers }, toolDeps)
+      secrets.push(...prepared.secrets)
       const controller = new AbortController()
       const timer = setTimeout(() => controller.abort(), PEER_TIMEOUT_MS)
       try {
-        const response = await toolDeps.fetch(url, { ...prepared.init, signal: controller.signal })
+        const response = await toolDeps.fetch(url, {
+          ...prepared.init,
+          signal: signal === undefined ? controller.signal : AbortSignal.any([signal, controller.signal]),
+        })
         let body: Record<string, unknown> = {}
         try {
           const value: unknown = await response.json()
@@ -708,7 +745,8 @@ export function signedPeerTarget(loaded: LoadedProfile, peer: { readonly id: str
         }
         return { status: response.status, body }
       } catch (error) {
-        throw new Error(`${peer.id} is not reachable: ${controller.signal.aborted ? "timed out" : error instanceof Error ? error.message : "request failed"}`)
+        const why = controller.signal.aborted ? "timed out" : signal?.aborted === true ? "interrupted" : error instanceof Error ? redact(error.message) : "request failed"
+        throw new Error(`${peer.id} is not reachable: ${why}`)
       } finally {
         clearTimeout(timer)
       }
@@ -716,8 +754,14 @@ export function signedPeerTarget(loaded: LoadedProfile, peer: { readonly id: str
   }
 }
 
-export function realJobDeps(writer: (text: string) => void, toolDeps: BridgeToolDeps = defaultBridgeToolDeps()): JobCliDeps {
+export function realJobDeps(
+  writer: (text: string) => void,
+  toolDeps: BridgeToolDeps = defaultBridgeToolDeps(),
+  /** Overridable for tests: the environment the operator token is read from, and the fetch that reaches the local bridge. */
+  local: { readonly env?: Readonly<Record<string, string | undefined>>; readonly fetch?: typeof fetch } = {},
+): JobCliDeps {
   const operator = realOperatorDeps(writer)
+  const localFetch = local.fetch ?? ((input, init) => fetch(input, init))
   const load = (profile: string | undefined): Promise<LoadedProfile> => new BridgeTools(toolDeps, profile).loadProfile()
   return {
     writer,
@@ -728,17 +772,23 @@ export function realJobDeps(writer: (text: string) => void, toolDeps: BridgeTool
     sleep: abortableSleep,
     interrupt: () => {
       const controller = new AbortController()
-      const onSigint = (): void => controller.abort()
+      // The first Ctrl-C stops the loop and any request in flight; a second one exits at once.
+      const onSigint = (): void => {
+        if (controller.signal.aborted) process.exit(130)
+        controller.abort()
+      }
       process.on("SIGINT", onSigint)
       return { signal: controller.signal, dispose: () => process.off("SIGINT", onSigint) }
     },
     local: async (profile) => {
-      const endpoint = await loadOperatorEndpoint(profile)
+      const endpoint = await loadOperatorEndpoint(profile, local.env)
       return {
         label: "local",
         kind: "operator",
-        request: async (method, path) => {
-          const response = await operatorRequest(operator, endpoint, method, path)
+        request: async (method, path, signal) => {
+          const timeout = AbortSignal.timeout(PEER_TIMEOUT_MS)
+          const bounded = signal === undefined ? timeout : AbortSignal.any([signal, timeout])
+          const response = await operatorRequest({ ...operator, fetch: (input, init) => localFetch(input, { ...init, signal: bounded }) }, endpoint, method, path)
           return { status: response.status, body: response.body }
         },
       }

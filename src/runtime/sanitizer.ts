@@ -266,6 +266,22 @@ function isCodeOrReference(value: string, after: string, quoted: boolean): boole
   return CODE_KEYWORD.test(value)
 }
 
+/** Assigned values shorter than this are placeholders or prose (`token: was`), not secrets. */
+const MINIMUM_ASSIGNED_SECRET_LENGTH = 8
+
+/**
+ * Whether an assigned value looks like a secret. Any value shorter than
+ * `MINIMUM_ASSIGNED_SECRET_LENGTH` is left alone. After `: ` a value that is
+ * all lowercase letters (`token: every`) or contains a space (`token: set the
+ * variable`) is prose and is also left alone. Accepted cost: a short
+ * `PASSWORD=pw1` or a lowercase-word `password: changeme` is not redacted.
+ */
+function looksLikeAssignedSecret(value: string, colonForm: boolean): boolean {
+  if (value.length < MINIMUM_ASSIGNED_SECRET_LENGTH) return false
+  if (!colonForm) return true
+  return !/^[a-z]+$/.test(value) && !value.includes(" ")
+}
+
 /** `bearerToken`, `hasExistingPassword`: a camelCase name is a code identifier, not a config key. */
 const CAMEL_CASE_KEY = /[a-z][A-Z]/
 
@@ -285,20 +301,23 @@ const SECRET_KEY_SUFFIX_PROBE = /password|passwd|passphrase|secret|token|api_?ke
  * `: ` needs whitespace after the colon, so `token:abc` in a URL or a log key
  * does not match; `=` must not start `==` or `=>`. The value stops at the end
  * of the line, so `PASSWORD=` followed by a newline never swallows the next
- * line. Known and accepted: prose such as "the dispatch token: was" redacts
- * `was` (corpus `fp-key-name-in-prose`).
+ * line. `looksLikeAssignedSecret` drops short values and, after `: `, plain
+ * lowercase words and values with a space, so prose such as "the dispatch
+ * token: was not accepted" passes through.
  */
 const envSecretAssignmentDetector = valueDetector(
   ENV_SECRET_ASSIGNMENT_RULE,
   new RegExp(
-    String.raw`(?<![A-Za-z0-9_])(?<key>[A-Za-z0-9_]*${SECRET_KEY_SUFFIX})(?![A-Za-z0-9_])["']?(?:[ \t]*=(?![=>])|:[ \t]+)[ \t]*` +
+    String.raw`(?<![A-Za-z0-9_])(?<key>[A-Za-z0-9_]*${SECRET_KEY_SUFFIX})(?![A-Za-z0-9_])["']?(?:[ \t]*=(?![=>])|(?<colon>:)[ \t]+)[ \t]*` +
       String.raw`(?:"(?<double>[^"\n]+)"|'(?<single>[^'\n]+)'|(?<bare>\$\{[^}\n]*\}|[^\s,;()\[\]{}"'<>]+))`,
     "i",
   ),
   ["double", "single", "bare"],
   (text) => SECRET_KEY_SUFFIX_PROBE.test(text),
   (value, after, found, group) =>
-    !CAMEL_CASE_KEY.test(found.groups?.key ?? "") && !isCodeOrReference(value, after, group !== "bare"),
+    !CAMEL_CASE_KEY.test(found.groups?.key ?? "") &&
+    !isCodeOrReference(value, after, group !== "bare") &&
+    looksLikeAssignedSecret(value, found.groups?.colon !== undefined),
 )
 
 const CONNECTION_STRING_PASSWORD_RULE = "connection_string_password"

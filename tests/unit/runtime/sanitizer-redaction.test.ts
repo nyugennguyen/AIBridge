@@ -51,8 +51,8 @@ const SANITIZER_OUTCOME: Readonly<Record<string, "redacted" | "unchanged">> = {
   "fp-slack-prefix-in-prose": "redacted",
   // A lowercase word after "Bearer" is prose, not a token.
   "fp-bearer-word-in-prose": "unchanged",
-  // Still accepted: `token: was` is a key ending in TOKEN followed by `: `.
-  "fp-key-name-in-prose": "redacted",
+  // `token: was`: a short lowercase word after `: ` is prose.
+  "fp-key-name-in-prose": "unchanged",
   // No `sensitivePaths`.
   "fp-dotenv-example-suffix": "unchanged",
   // `XXXX…` is not random-looking, so the URL path tail survives.
@@ -214,13 +214,14 @@ describe("redactSecretsFromText env-style secret assignments", () => {
     ["api_key: plainvalue123", "api_key: [REDACTED]"],
     ["DB_PASSWD = hunter2hunter2", "DB_PASSWD = [REDACTED]"],
     ["APP_SECRET='single quoted value'", "APP_SECRET='[REDACTED]'"],
-    ['"client_secret": "json value here"', '"client_secret": "[REDACTED]"'],
-    ["STRIPE_APIKEY=abc123", "STRIPE_APIKEY=[REDACTED]"],
+    ['"client_secret": "json-value-1234"', '"client_secret": "[REDACTED]"'],
+    ["STRIPE_APIKEY=abc12345", "STRIPE_APIKEY=[REDACTED]"],
     ["MINIO_ACCESS_KEY=minioadmin", "MINIO_ACCESS_KEY=[REDACTED]"],
     ["SIGNING_PRIVATE_KEY=keymaterial", "SIGNING_PRIVATE_KEY=[REDACTED]"],
-    ["gpg passphrase: correct horse", "gpg passphrase: [REDACTED] horse"],
-    ["run with --password=hunter2 now", "run with --password=[REDACTED] now"],
-    ["PASSWORD=x\nNEXT=1", "PASSWORD=[REDACTED]\nNEXT=1"],
+    ["run with --password=hunter2x now", "run with --password=[REDACTED] now"],
+    ["PASSWORD=changeme\nNEXT=1", "PASSWORD=[REDACTED]\nNEXT=1"],
+    ["db_password: Hunter2-prod", "db_password: [REDACTED]"],
+    ["GET /jobs/abc?token=s3cr3t-value", "GET /jobs/abc?token=[REDACTED]"],
   ]
   for (const [input, expected] of redacted) {
     it(`redacts only the value: ${input.split("\n")[0]}`, () => {
@@ -245,12 +246,25 @@ describe("redactSecretsFromText env-style secret assignments", () => {
     ["camelCase key", "bearerToken: plainvalue123, const hasExistingToken = await pathExists(p)"],
     ["camelCase variable value", "OPENCODE_SERVER_PASSWORD: ocPassword"],
     ["literal with a method call", 'secret: "A".repeat(24)'],
+    ["value shorter than 8 after =", "STRIPE_APIKEY=abc123 and PASSWORD=x"],
+    ["value shorter than 8 after : ", "api_key: abc1234"],
+    ["prose: token: every", "This REPLACES the existing token: every peer still using the old one"],
+    ["prose: token: set", "No operator token: set AIBRIDGE_OPERATOR_TOKEN or create the file"],
+    ["prose: token: the", "// no per-peer token: the profile's shared token stays"],
+    ["prose: token: was", "the dispatch token: was not accepted by the scheduler"],
+    ["lowercase word after : ", "gpg passphrase: correcthorse"],
+    ["quoted value with a space after : ", '"client_secret": "json value here"'],
   ]
   for (const [name, text] of untouched) {
     it(`leaves ${name} alone`, () => {
       expect(redactSecretsFromText(text)).toBe(text)
     })
   }
+
+  it("still redacts a snake_case word after `: ` (known false positive)", () => {
+    // `prohibited_content` has an underscore, so it is not all lowercase letters.
+    expect(redactSecretsFromText("  - m-secret: prohibited_content (detail withheld)")).toBe("  - m-secret: [REDACTED] (detail withheld)")
+  })
 })
 
 describe("redactSecretsFromText connection-string passwords", () => {

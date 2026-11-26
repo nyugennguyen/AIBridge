@@ -1,7 +1,7 @@
 # Operational Troubleshooting Guide
 
 > **Status:** Current  
-> **Applies to:** AIBridge 3.1.1  
+> **Applies to:** AIBridge 3.2.0  
 > **Owner:** Maintainers  
 
 This guide provides an executable triage ladder, root-cause resolutions for HTTP error codes, and practical remediation steps for common operational issues.

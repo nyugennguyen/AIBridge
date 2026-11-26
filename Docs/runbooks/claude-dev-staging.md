@@ -1,7 +1,7 @@
 # Runbook: Claude Code dev → staging
 
 > **Status:** Current
-> **Applies to:** AIBridge 3.1.1
+> **Applies to:** AIBridge 3.2.0
 > **Owner:** Maintainers
 
 This runbook is for the operator of a two-node setup: a **dev** machine where Claude Code acts as the orchestrator through the AIBridge plugin, and a **staging** worker (a VPS or cloud VM) that runs Claude Code jobs under capability profiles. It is Phase 7 of the [Claude adapter & plugin plan](../implementation-plans/claude-adapter-and-plugin.md).
@@ -257,7 +257,7 @@ aibr cancel <job_id>                           # ends one job after asking; --ye
 aibr job <job_id> --node staging               # the same against a peer, signed
 ```
 
-Run against this node, these use the operator token like `aibr approve`, and see every job. With `--node <peer>` or `--all-nodes` they send the peer's bearer token and this node's signature (`aibr enroll`), so the peer shows and cancels only jobs this node requested; an unsigned request answers 403. `--all-nodes` works on an orchestrator node with no local bridge; a peer that cannot be reached prints one line and the rest are still listed.
+Run against this node, these use the operator token like `aibr approve`, and see every job. With `--node <peer>` or `--all-nodes` they send the peer's bearer token and this node's signature (`aibr enroll`), so the peer shows and cancels only jobs this node requested (on a peer with `request_signing: off` signatures are not verified, so the bearer reads and cancels any job there); an unsigned request answers 403. `--all-nodes` works on an orchestrator node with no local bridge; a peer that cannot be reached prints one line and the rest are still listed.
 
 `aibr cancel` ends one job as failed (`cancelled by operator`, or `by requester` through a peer) and the requester gets the report. A job awaiting approval cannot be cancelled (reject it with `aibr reject`), and a finished job answers "already ended". `aibr stop --all-jobs` is the kill switch for the whole node. `aibr attach` does not attach a terminal (Claude Code jobs run as child processes); it only prints events. `aibr logs` is still the bridge's own log.
 

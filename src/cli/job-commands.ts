@@ -12,7 +12,8 @@
  * - Against a PEER (`--node <peer>`, `jobs --all-nodes`) they send the peer's
  *   bearer token and a node signature (ADR 0012), through the same
  *   `prepareSignedRequest` that `aibr ping` and the MCP tools use. A peer
- *   shows and cancels only the jobs this node requested.
+ *   shows and cancels only the jobs this node requested (unless it has
+ *   `request_signing: off`, where signatures are not verified).
  *
  * `aibr jobs pending` is a different command (operator approvals,
  * `src/cli/approve.ts`); `src/cli.ts` sends it there. Text from a job (prompt,
@@ -82,7 +83,9 @@ export const JOBS_HELP = [
   "with the operator token (AIBRIDGE_OPERATOR_TOKEN or the profile's",
   "secrets/operator_token); run it on the node that runs the bridge.",
   "--all-nodes and --node ask the peers in agents[] with signed requests, so a",
-  "peer lists only the jobs THIS node dispatched to it. --all-nodes merges them by",
+  "peer lists only the jobs THIS node dispatched to it (unless the peer has",
+  "request_signing \"off\": it does not verify signatures, so the bearer lists",
+  "every job there). --all-nodes merges them by",
   "time with a node column; a peer that cannot be reached gets one line and does",
   "not fail the command (exit 1 only when no peer answered). It needs no local",
   "bridge.",
@@ -109,7 +112,8 @@ export const JOB_HELP = [
   "",
   "Without --node the job is looked up on THIS node with the operator token. With",
   "--node <peer> the request is signed and the peer shows only a job this node",
-  "dispatched to it.",
+  "dispatched to it (unless the peer has request_signing \"off\": signatures are",
+  "not verified there and the bearer reads any job).",
   "",
   "An id that starts with a dash goes after --: aibr job -- -id.",
   "This is not aibr logs, which prints the bridge's own log.",
@@ -131,7 +135,8 @@ export const CANCEL_HELP = [
   "",
   "Without --node it cancels a job on THIS node with the operator token. With",
   "--node <peer> the request is signed and the peer cancels only a job this node",
-  "dispatched to it.",
+  "dispatched to it (unless the peer has request_signing \"off\": signatures are",
+  "not verified there and the bearer cancels any job).",
   "",
   "An id that starts with a dash goes after --: aibr cancel -- -id.",
   "aibr cancel stops ONE job. aibr stop stops the service, or with --all-jobs",

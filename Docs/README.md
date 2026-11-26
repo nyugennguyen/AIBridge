@@ -1,7 +1,7 @@
 # AIBridge Documentation
 
 > **Status:** Current  
-> **Applies to:** AIBridge 3.1.1  
+> **Applies to:** AIBridge 3.2.0  
 > **Owner:** Maintainers  
 
 Welcome to the AIBridge documentation hub. This index organizes documentation around user needs, establishing one canonical source of truth for each architectural, operational, and development topic.
@@ -31,6 +31,8 @@ Docs/
 │   └── tailscale-policy.example.hujson  # Tailscale ACL example for dev/staging tags
 ├── security/
 │   └── security-model.md           # Inviolable security invariants and threat boundaries
+├── releases/
+│   └── 3.2.0.md                    # Draft GitHub Release text for 3.2.0
 ├── reference/
 │   └── cli-reference.md            # Executable command reference generated from aibr --help
 └── archive/

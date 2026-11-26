@@ -1,7 +1,7 @@
 # Deployment & Operations Guide
 
 > **Status:** Current  
-> **Applies to:** AIBridge 3.1.1  
+> **Applies to:** AIBridge 3.2.0  
 > **Owner:** Maintainers  
 
 This guide covers deployment topologies, platform supervisor configurations (systemd and launchd), headless tmux management, and two-tier service operation.

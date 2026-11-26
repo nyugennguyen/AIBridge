@@ -489,11 +489,15 @@ export class IngressDrainer {
       return
     }
 
-    const unblocked = await this.#jobManager.recordRemoteReport({
+    const { unblocked, failed } = await this.#jobManager.applyRemoteReport({
       source_agent_id: report.source_agent_id,
       job_id: report.job_id,
       status: report.status,
     })
+    // A dependent this report failed is reported by this call: it made the terminal write.
+    for (const failedJob of failed) {
+      await this.#reportTerminalJob?.(failedJob).catch(() => undefined)
+    }
 
     for (const unblockedJob of unblocked) {
       const recorded = this.#orchestration?.translation.recordReport(unblockedJob)

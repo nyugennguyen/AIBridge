@@ -76,6 +76,14 @@ export interface JobManagerOptions {
 
 type TransitionGuard = (current: JobRecord) => boolean
 
+const stillBlocked: TransitionGuard = (current) => current.status === "blocked"
+
+/** What settling a job's dependents did: the jobs unblocked (launch them) and failed (report them). */
+export interface DependentsOutcome {
+  readonly unblocked: readonly JobRecord[]
+  readonly failed: readonly JobRecord[]
+}
+
 export class JobManager {
   /**
    * Per-job queue: every read-modify-write of a job runs alone, so two paths
@@ -289,8 +297,21 @@ export class JobManager {
     return this.transition(id, "blocked", now, { depends_on, remoteDependencies, blockedAt: now })
   }
 
+  /** `applyRemoteReport`, returning only the jobs it unblocked (callers that report nothing). */
   async recordRemoteReport(report: RemoteDependencyReport, now = new Date().toISOString()): Promise<JobRecord[]> {
-    const unblocked: JobRecord[] = []
+    return [...(await this.applyRemoteReport(report, now)).unblocked]
+  }
+
+  /**
+   * Records a remote dependency's report on every `blocked` job waiting for
+   * it, then unblocks or fails each one whose dependencies are now settled.
+   * Every write is guarded under the job's lock (the job must still be
+   * `blocked`), and one dependent's failure never stops the others: a job
+   * another path ended meanwhile is skipped, not an error. Returns the jobs
+   * THIS call unblocked (launch them) and failed (report them).
+   */
+  async applyRemoteReport(report: RemoteDependencyReport, now = new Date().toISOString()): Promise<DependentsOutcome> {
+    const outcome: { unblocked: JobRecord[]; failed: JobRecord[] } = { unblocked: [], failed: [] }
     for (const job of await this.store.list()) {
       if (job.status !== "blocked") continue
       const remoteDependencies = job.remoteDependencies ?? []
@@ -299,57 +320,72 @@ export class JobManager {
       )
       if (!matches) continue
 
-      const updatedDependencies = remoteDependencies.map((dependency) => {
-        if (dependency.agent_id !== report.source_agent_id || dependency.job_id !== report.job_id || dependency.status) return dependency
-        return { ...dependency, status: report.status, reportedAt: now }
-      })
-      const updated = await this.transition(job.id, "blocked", now, { remoteDependencies: updatedDependencies })
-      const outcome = await this.dependencyOutcome(updated, now)
-      if (outcome.kind === "failed") await this.markFailed(updated.id, outcome.error, now)
-      if (outcome.kind === "ready") unblocked.push(await this.transition(updated.id, "accepted", now))
+      try {
+        const updatedDependencies = remoteDependencies.map((dependency) => {
+          if (dependency.agent_id !== report.source_agent_id || dependency.job_id !== report.job_id || dependency.status) return dependency
+          return { ...dependency, status: report.status, reportedAt: now }
+        })
+        const updated = await this.transitionIf(job.id, "blocked", now, { remoteDependencies: updatedDependencies }, stillBlocked)
+        if (updated === undefined) continue
+        await this.settleDependent(updated, now, outcome)
+      } catch {
+        /* one dependent's failure never stops the others */
+      }
     }
-    return unblocked
+    return outcome
   }
 
+  /** `resolveDependents`, returning only the jobs it unblocked (callers that report nothing). */
   async unblockDependents(completedJobId: string, now = new Date().toISOString()): Promise<JobRecord[]> {
-    const allJobs = await this.store.list()
-    const unblocked: JobRecord[] = []
-
-    const dependents = allJobs.filter(
-      (j) => j.status === "blocked" && j.depends_on?.includes(completedJobId),
-    )
-
-    for (const job of dependents) {
-      const outcome = await this.dependencyOutcome(job, now)
-      if (outcome.kind === "failed") await this.markFailed(job.id, outcome.error, now)
-      if (outcome.kind === "ready") unblocked.push(await this.transition(job.id, "accepted", now))
-    }
-
-    return unblocked
+    return [...(await this.resolveDependents(completedJobId, now)).unblocked]
   }
 
   /**
-   * Fails the local dependents of a job that ended unsuccessfully, as
-   * `unblockDependents` does, but each under its job's lock and only while it
-   * is still `blocked`: a dependent that another path (the sweep) ended
-   * meanwhile is left alone. Returns the dependents THIS call failed, so the
-   * caller reports exactly those.
+   * Settles the local dependents of a job that just ended: each `blocked`
+   * job waiting on it is moved to `accepted` when all its dependencies
+   * completed, or failed when one of them failed (and its own dependents in
+   * turn). Every write is guarded under the job's lock (the job must still be
+   * `blocked`), so a dependent another path ended meanwhile (a cancel, the
+   * sweep, another dependency's resolution) is skipped, not an error, and one
+   * dependent never stops the others. Returns the jobs THIS call unblocked
+   * (launch them) and failed (report them): whoever writes a job's end
+   * reports it.
    */
-  async failDependentsOf(failedJobId: string, now = new Date().toISOString()): Promise<JobRecord[]> {
-    const failed: JobRecord[] = []
-    for (const job of await this.store.list()) {
-      if (job.status !== "blocked" || !(job.depends_on ?? []).includes(failedJobId)) continue
-      const outcome = await this.dependencyOutcome(job, now)
-      if (outcome.kind !== "failed") continue
-      const ended = await this.transitionIf(job.id, "failed", now, { error: this.redactError(outcome.error) }, (current) => current.status === "blocked").catch(
-        () => undefined,
-      )
-      if (ended === undefined) continue
-      failed.push(ended)
-      // A failed dependent fails its own dependents in turn.
-      failed.push(...(await this.failDependentsOf(ended.id, now)))
+  async resolveDependents(endedJobId: string, now = new Date().toISOString()): Promise<DependentsOutcome> {
+    const outcome: { unblocked: JobRecord[]; failed: JobRecord[] } = { unblocked: [], failed: [] }
+    let jobs: JobRecord[]
+    try {
+      jobs = await this.store.list()
+    } catch {
+      return outcome
     }
-    return failed
+    for (const job of jobs) {
+      if (job.status !== "blocked" || !(job.depends_on ?? []).includes(endedJobId)) continue
+      try {
+        await this.settleDependent(job, now, outcome)
+      } catch {
+        /* one dependent's failure never stops the others */
+      }
+    }
+    return outcome
+  }
+
+  /** Unblocks or fails one dependent if its dependencies are settled; guarded, see `resolveDependents`. */
+  private async settleDependent(job: JobRecord, now: string, outcome: { unblocked: JobRecord[]; failed: JobRecord[] }): Promise<void> {
+    const decision = await this.dependencyOutcome(job, now)
+    if (decision.kind === "ready") {
+      const accepted = await this.transitionIf(job.id, "accepted", now, {}, stillBlocked)
+      if (accepted !== undefined) outcome.unblocked.push(accepted)
+      return
+    }
+    if (decision.kind !== "failed") return
+    const failed = await this.transitionIf(job.id, "failed", now, { error: this.redactError(decision.error) }, stillBlocked)
+    if (failed === undefined) return
+    outcome.failed.push(failed)
+    // A failed dependent fails its own dependents in turn.
+    const next = await this.resolveDependents(failed.id, now)
+    outcome.failed.push(...next.failed)
+    outcome.unblocked.push(...next.unblocked)
   }
 
   async getJob(id: string): Promise<JobRecord> {

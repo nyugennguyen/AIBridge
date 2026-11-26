@@ -88,6 +88,47 @@ describe("FileJobEventLog on disk", () => {
     expect(reader.bytesRead - afterFirstRead).toBe(Buffer.byteLength(`${JSON.stringify(appended)}\n`, "utf8"))
   })
 
+  it("bounds the read cache by bytes, dropping the least recently read job first", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "aibr-job-events-"))
+    const writer = new FileJobEventLog(directory)
+    for (const id of ["a", "b"]) for (let index = 0; index < 10; index += 1) await writer.append(id, { type: "message", data: { index } })
+    const size = Buffer.byteLength(await readFile(writer.pathFor("a"), "utf8"), "utf8")
+    // Room for one job's file, not two.
+    const reader = new FileJobEventLog(directory, { cacheBytes: size + 10 })
+    await reader.read("a", 0, 100)
+    expect(reader.cachedBytes).toBe(size)
+    await reader.read("b", 0, 100)
+    expect(reader.cachedBytes).toBeLessThanOrEqual(size + 10)
+    // `b` is cached: reading it again reads nothing new.
+    const before = reader.bytesRead
+    await reader.read("b", 0, 100)
+    expect(reader.bytesRead).toBe(before)
+    // `a` was dropped: reading it again reads its whole file, and still gets every event.
+    const page = await reader.read("a", 0, 100)
+    expect(reader.bytesRead - before).toBe(size)
+    expect(page.events).toHaveLength(10)
+    // Numbering is never dropped with the cache.
+    expect((await reader.append("a", { type: "message", data: {} }))?.seq).toBe(11)
+  })
+
+  it("never lets a file pass maxBytes, even with a 2 KB job id", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "aibr-job-events-"))
+    const maxBytes = 8_192
+    const log = new FileJobEventLog(directory, { maxBytes })
+    const longId = `job-${"x".repeat(2_048)}`
+    for (let index = 0; index < 50; index += 1) await log.append(longId, { type: "message", data: { index } })
+    const raw = await readFile(log.pathFor(longId), "utf8")
+    expect(Buffer.byteLength(raw, "utf8")).toBeLessThanOrEqual(maxBytes)
+    const page = await new FileJobEventLog(directory, { maxBytes }).read(longId, 0, 100)
+    expect(page.events.at(-1)).toMatchObject({ type: "truncated", job_id: longId, data: { reason: "max_bytes" } })
+    // A job id longer than the whole cap: nothing is written past it, not even the marker.
+    const hugeId = "y".repeat(maxBytes)
+    expect(await log.append(hugeId, { type: "message", data: {} })).toBeUndefined()
+    expect(await log.append(hugeId, { type: "message", data: {} })).toBeUndefined()
+    const huge = await readFile(log.pathFor(hugeId), "utf8").catch(() => "")
+    expect(Buffer.byteLength(huge, "utf8")).toBeLessThanOrEqual(maxBytes)
+  })
+
   it("skips a line cut short by a crash and numbers on from the last whole event", async () => {
     const directory = await mkdtemp(join(tmpdir(), "aibr-job-events-"))
     const log = new FileJobEventLog(directory)

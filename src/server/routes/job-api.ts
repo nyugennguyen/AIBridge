@@ -255,11 +255,17 @@ export function registerJobApiRoutes(app: FastifyInstance, dependencies: AppDepe
     // SSE: resumes after `Last-Event-ID` (the `seq` of the last event seen).
     const lastEventId = Number.parseInt(String(request.headers["last-event-id"] ?? ""), 10)
     if (Number.isInteger(lastEventId) && lastEventId >= 0) after = lastEventId
+    // A client that left while the request was being authorized never gets
+    // a slot: its `close` has already fired and would never free one.
+    if (clientGone(request, reply)) {
+      reply.hijack()
+      return reply
+    }
     const callerKey = resolved.caller.kind === "operator" ? "operator" : `requester:${resolved.caller.agentId}`
     const refusal = streamSlots.acquire(callerKey, jobId)
     if (refusal !== undefined) return reply.code(429).send({ error: refusal, code: "too_many_streams" })
     try {
-      await streamJobEvents({ jobId, after, events, dependencies, reply, pollMs, streams })
+      await streamJobEvents({ jobId, after, events, dependencies, request, reply, pollMs, streams })
     } finally {
       streamSlots.release(callerKey, jobId)
     }
@@ -382,6 +388,11 @@ async function pageIsFinal(events: JobEventLog, jobId: string, page: JobEventPag
   return !whole.events.some((event) => event.type === "status")
 }
 
+/** Whether the client's connection is already gone. */
+function clientGone(request: FastifyRequest, reply: FastifyReply): boolean {
+  return request.raw.destroyed || reply.raw.destroyed || request.raw.socket?.destroyed === true
+}
+
 function acceptsEventStream(request: FastifyRequest): boolean {
   const accept = request.headers.accept
   return typeof accept === "string" && accept.toLowerCase().includes("text/event-stream")
@@ -400,6 +411,7 @@ async function streamJobEvents(options: {
   readonly after: number
   readonly events: JobEventLog
   readonly dependencies: AppDependencies
+  readonly request: FastifyRequest
   readonly reply: FastifyReply
   readonly pollMs: number
   /** Registry of open streams; this one adds its own `end` while it runs. */
@@ -433,6 +445,10 @@ async function streamJobEvents(options: {
   }
   raw.on("close", end)
   options.streams.add(end)
+  // `close` may have fired before the listener existed (the client left
+  // while this request was being authorized): end now, or the stream and
+  // its slot would be held until the job ends.
+  if (clientGone(options.request, reply)) end()
   const unsubscribe = events.subscribe(jobId, notify)
   const heartbeat = setInterval(() => {
     if (!closed) raw.write(": keep-alive\n\n")

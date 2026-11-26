@@ -35,11 +35,16 @@ export function registerReportRoute(app: FastifyInstance, dependencies: AppDepen
     )
     if (!source) return reply.code(403).send({ error: `Source ${report.source_agent_id} is not authorized` })
 
-    const unblocked = await dependencies.jobManager.recordRemoteReport({
+    const { unblocked, failed } = await dependencies.jobManager.applyRemoteReport({
       source_agent_id: report.source_agent_id,
       job_id: report.job_id,
       status: report.status,
     })
+    // A dependent this report failed is reported by this call: it made the terminal write.
+    for (const job of failed) {
+      await dependencies.taskGraphSyncer.syncJobToTask(job.trigger.task_id ?? `#${job.id}`, "failed").catch(() => undefined)
+      await terminalReporter(dependencies)(job).catch(() => undefined)
+    }
     for (const job of unblocked) {
       // A report is an observation, not an authority: recording it must not
       // fabricate a canonical lifecycle event, so the translation only

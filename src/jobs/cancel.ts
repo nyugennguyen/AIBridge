@@ -22,11 +22,12 @@
  * so the session monitor (which sees the aborted session go idle) finds the
  * job terminal and cannot report it as completed. Because that monitor then
  * stops, a job this module ends also fails (and reports) its local
- * dependents itself (`failDependentsOf`).
+ * dependents itself (`settleDependents`).
  *
  * The job's error is the cancel reason: `cancelled by requester`, or
  * `cancelled by operator` when the operator credential cancelled it.
  */
+import { settleDependents } from "./dependents.js"
 import type { JobManager } from "./manager.js"
 import type { JobRecord, JobStatus } from "./types.js"
 
@@ -44,7 +45,7 @@ export function isTerminalStatus(status: JobStatus): boolean {
 }
 
 export interface CancelDependencies {
-  readonly jobManager: Pick<JobManager, "getJob" | "markFailedIf"> & Partial<Pick<JobManager, "failDependentsOf">>
+  readonly jobManager: Pick<JobManager, "getJob" | "markFailedIf"> & Partial<Pick<JobManager, "resolveDependents">>
   /** The error the job ends with: `CANCELLED_BY_REQUESTER` (default) or `CANCELLED_BY_OPERATOR`. */
   readonly reason?: string
   /** The Claude runner, when this node runs one. */
@@ -130,11 +131,14 @@ async function finish(ended: JobRecord, dependencies: CancelDependencies): Promi
   await dependencies.reportTerminalJob(ended).catch(() => undefined)
   // Same outcome as any other failure of a dependency: local dependents
   // waiting on this job fail now (not at the sweep's grace window), and the
-  // ones this call failed are reported by it.
-  const dependents = (await dependencies.jobManager.failDependentsOf?.(ended.id).catch(() => [])) ?? []
-  for (const dependent of dependents) {
-    await dependencies.syncFailedTask?.(dependent).catch(() => undefined)
-    await dependencies.reportTerminalJob(dependent).catch(() => undefined)
+  // ones this call failed are reported by it (`settleDependents`).
+  const resolveDependents = dependencies.jobManager.resolveDependents
+  if (resolveDependents !== undefined) {
+    await settleDependents(ended.id, {
+      jobManager: { resolveDependents: (id) => resolveDependents.call(dependencies.jobManager, id) },
+      reportTerminalJob: dependencies.reportTerminalJob,
+      ...(dependencies.syncFailedTask !== undefined ? { syncFailedTask: dependencies.syncFailedTask } : {}),
+    })
   }
   return { kind: "cancelled", job: ended }
 }

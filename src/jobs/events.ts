@@ -66,8 +66,8 @@ export const DEFAULT_MAX_EVENTS_PER_JOB = 2_000
 export const DEFAULT_MAX_BYTES_PER_JOB = 1_048_576
 /** Longest string kept in an event's data, cut AFTER redaction so a cut secret leaves no prefix. */
 export const MAX_EVENT_STRING_LENGTH = 4_000
-/** Room kept free for the `truncated` line itself. */
-const TRUNCATED_RESERVE_BYTES = 512
+/** Smallest byte cap accepted. */
+const MIN_MAX_BYTES = 1_024
 
 export interface BoundedJobEventLogOptions {
   /** Applied to every string in `data` before it is stored (`redactSecretsFromText` in production). */
@@ -106,7 +106,7 @@ abstract class BoundedJobEventLog implements JobEventLog {
   constructor(options: BoundedJobEventLogOptions = {}) {
     this.#redact = options.redact ?? ((text) => text)
     this.#maxEvents = Math.max(2, options.maxEvents ?? DEFAULT_MAX_EVENTS_PER_JOB)
-    this.#maxBytes = Math.max(TRUNCATED_RESERVE_BYTES * 2, options.maxBytes ?? DEFAULT_MAX_BYTES_PER_JOB)
+    this.#maxBytes = Math.max(MIN_MAX_BYTES, options.maxBytes ?? DEFAULT_MAX_BYTES_PER_JOB)
     this.#now = options.now ?? (() => new Date().toISOString())
     this.#emitter.setMaxListeners(0)
   }
@@ -158,21 +158,24 @@ abstract class BoundedJobEventLog implements JobEventLog {
     const event: JobEvent = { job_id: jobId, seq: state.seq + 1, at: this.#now(), type: input.type, data: this.#clean(input.data) }
     const line = `${JSON.stringify(event)}\n`
     const size = Buffer.byteLength(line, "utf8")
-    // The last line of a full log is always the `truncated` marker.
-    if (event.seq >= this.#maxEvents || state.bytes + size > this.#maxBytes - TRUNCATED_RESERVE_BYTES) {
-      const marker: JobEvent = {
-        job_id: jobId,
-        seq: state.seq + 1,
-        at: event.at,
-        type: "truncated",
-        data: { reason: event.seq >= this.#maxEvents ? "max_events" : "max_bytes", max_events: this.#maxEvents, max_bytes: this.#maxBytes },
-      }
+    // The last line of a full log is always the `truncated` marker, and the
+    // file never passes `maxBytes`: the room kept for the marker is the size
+    // of THIS job's marker (it carries the job id, which the caller chose),
+    // at its largest possible `seq`.
+    const reserve = Buffer.byteLength(`${JSON.stringify(this.#marker(jobId, this.#maxEvents, event.at, "max_events"))}\n`, "utf8")
+    if (event.seq >= this.#maxEvents || state.bytes + size > this.#maxBytes - reserve) {
+      const marker = this.#marker(jobId, state.seq + 1, event.at, event.seq >= this.#maxEvents ? "max_events" : "max_bytes")
       const markerLine = `${JSON.stringify(marker)}\n`
-      await this.storeLine(jobId, markerLine)
-      state.seq = marker.seq
-      state.bytes += Buffer.byteLength(markerLine, "utf8")
+      const markerSize = Buffer.byteLength(markerLine, "utf8")
+      // Only a job id longer than the whole cap leaves no room even for the
+      // marker: the log is then closed without writing past the cap.
+      if (state.bytes + markerSize <= this.#maxBytes) {
+        await this.storeLine(jobId, markerLine)
+        state.seq = marker.seq
+        state.bytes += markerSize
+        this.#emitter.emit(channelOf(jobId), marker)
+      }
       state.closed = true
-      this.#emitter.emit(channelOf(jobId), marker)
       return undefined
     }
     await this.storeLine(jobId, line)
@@ -180,6 +183,10 @@ abstract class BoundedJobEventLog implements JobEventLog {
     state.bytes += size
     this.#emitter.emit(channelOf(jobId), event)
     return event
+  }
+
+  #marker(jobId: string, seq: number, at: string, reason: "max_events" | "max_bytes"): JobEvent {
+    return { job_id: jobId, seq, at, type: "truncated", data: { reason, max_events: this.#maxEvents, max_bytes: this.#maxBytes } }
   }
 
   /** The job's numbering and size, read from storage once per process. */
@@ -279,8 +286,8 @@ export function jobEventsFileName(jobId: string): string {
   return `${createHash("sha256").update(jobId, "utf8").digest("hex")}.events.jsonl`
 }
 
-/** Jobs whose parsed events a `FileJobEventLog` keeps in memory (least recently read dropped first). */
-const DEFAULT_CACHED_JOBS = 128
+/** File bytes whose parsed events a `FileJobEventLog` keeps in memory (least recently read job dropped first). */
+export const DEFAULT_CACHE_BYTES = 32 * 1_048_576
 
 interface FileTail {
   /** Bytes of the file consumed so far (the remainder included). */
@@ -299,13 +306,16 @@ interface FileTail {
  * Reads are incremental: the parsed events of recently read jobs are kept
  * with the file offset they reach, and a read parses only the bytes appended
  * since (by this process or another one), so following a job costs the new
- * lines, not the whole file, on every wake.
+ * lines, not the whole file, on every wake. The cache holds at most
+ * `cacheBytes` of file content (32 MiB by default), dropping the least
+ * recently read job first; a dropped job is simply read again. Numbering
+ * (`seq`, size, closed) is kept apart and never dropped.
  */
 export class FileJobEventLog extends BoundedJobEventLog {
   /** Jobs whose file ended in a partial line when first loaded: the next line starts on a fresh one. */
   readonly #unterminated = new Set<string>()
   readonly #tails = new Map<string, FileTail>()
-  readonly #cachedJobs: number
+  readonly #cacheBytes: number
   /** Per-job read queue, so two readers never consume the same bytes twice. */
   readonly #reads = new Map<string, Promise<unknown>>()
   /** Jobs this instance has appended to: a remainder seen after that is a line in flight, not a crash. */
@@ -314,10 +324,17 @@ export class FileJobEventLog extends BoundedJobEventLog {
 
   constructor(
     private readonly directory: string,
-    options: BoundedJobEventLogOptions & { readonly cachedJobs?: number } = {},
+    options: BoundedJobEventLogOptions & { readonly cacheBytes?: number } = {},
   ) {
     super(options)
-    this.#cachedJobs = Math.max(1, options.cachedJobs ?? DEFAULT_CACHED_JOBS)
+    this.#cacheBytes = Math.max(0, options.cacheBytes ?? DEFAULT_CACHE_BYTES)
+  }
+
+  /** Bytes of file content the read cache holds now (diagnostics and tests). */
+  get cachedBytes(): number {
+    let total = 0
+    for (const tail of this.#tails.values()) total += tail.offset
+    return total
   }
 
   pathFor(jobId: string): string {
@@ -376,7 +393,9 @@ export class FileJobEventLog extends BoundedJobEventLog {
         tail.remainder = Buffer.from(buffer)
       }
       if (tail.remainder.length > 0 && !this.#everAppended.has(jobId)) this.#unterminated.add(jobId)
-      return { events: tail.events, bytes: tail.bytes + tail.remainder.length }
+      const result = { events: tail.events, bytes: tail.bytes + tail.remainder.length }
+      this.#evict(jobId)
+      return result
     } finally {
       await handle.close()
     }
@@ -389,15 +408,22 @@ export class FileJobEventLog extends BoundedJobEventLog {
     await appendFile(this.pathFor(jobId), `${prefix}${line}`, { encoding: "utf8", mode: 0o600 })
   }
 
-  /** Keeps `tail` as the most recently used; drops the least recently used beyond the cap. */
+  /** Keeps `tail` as the most recently used. */
   #remember(jobId: string, tail: FileTail): void {
     this.#tails.delete(jobId)
     this.#tails.set(jobId, tail)
-    while (this.#tails.size > this.#cachedJobs) {
-      const oldest = this.#tails.keys().next().value
-      if (oldest === undefined) break
-      this.#tails.delete(oldest)
+  }
+
+  /** Drops the least recently read jobs until the cache fits `cacheBytes`; `current` goes last. */
+  #evict(current: string): void {
+    let total = this.cachedBytes
+    for (const [jobId, tail] of this.#tails) {
+      if (total <= this.#cacheBytes) return
+      if (jobId === current) continue
+      this.#tails.delete(jobId)
+      total -= tail.offset
     }
+    if (total > this.#cacheBytes) this.#tails.delete(current)
   }
 }
 

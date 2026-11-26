@@ -25,6 +25,7 @@ import type { JobRecord } from "../jobs/types.js"
 import { JobManager } from "../jobs/manager.js"
 import { JsonFileJobStore } from "../jobs/store.js"
 import { FileJobEventLog } from "../jobs/events.js"
+import { finishEndedJob } from "../jobs/dependents.js"
 import { SdkOpencodeClientAdapter } from "../opencode/client.js"
 import type { OpencodeClient } from "../opencode/types.js"
 import { StaticPermissionPolicy } from "../opencode/permissions.js"
@@ -235,22 +236,28 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
         .syncJobToTask(job.trigger.task_id ?? `#${job.id}`, failure === undefined ? "done" : "failed")
         .catch(() => undefined)
 
-      const unblockedJobs = await jobManager.unblockDependents(job.id)
-      for (const unblocked of unblockedJobs) {
-        try {
-          const { running } = await startOpencodeSession(unblocked, { jobManager, opencodeClient, reportTerminalJob })
-          void monitorSession(running).catch(async (err: unknown) => {
-            const failed = await jobManager
-              .markFailed(unblocked.id, err instanceof Error ? err.message : "Session monitor failed")
-              .catch(() => undefined)
-            if (failed !== undefined) await reportTerminalJob(failed)
-          })
-        } catch {
-          // OpenCode refused: the job is already failed and reported. The
-          // marker refused: another path owns this job; leave it alone.
-        }
-      }
-      await reportTerminalJob(terminalJob)
+      // Dependents are settled with guarded writes (a dependent a cancel or
+      // the sweep ended meanwhile is skipped), the ones failed here are
+      // reported here, and nothing in it can stop this job's own report.
+      await finishEndedJob(terminalJob, {
+        jobManager,
+        reportTerminalJob,
+        syncFailedTask: (failed) => taskGraphSyncer.syncJobToTask(failed.trigger.task_id ?? `#${failed.id}`, "failed"),
+        launch: async (unblocked) => {
+          try {
+            const { running } = await startOpencodeSession(unblocked, { jobManager, opencodeClient, reportTerminalJob })
+            void monitorSession(running).catch(async (err: unknown) => {
+              const failed = await jobManager
+                .markFailed(unblocked.id, err instanceof Error ? err.message : "Session monitor failed")
+                .catch(() => undefined)
+              if (failed !== undefined) await reportTerminalJob(failed)
+            })
+          } catch {
+            // OpenCode refused: the job is already failed and reported. The
+            // marker refused: another path owns this job; leave it alone.
+          }
+        },
+      })
     })
   const monitorSession = async (job: JobRecord): Promise<void> => {
     monitoredJobs.add(job.id)

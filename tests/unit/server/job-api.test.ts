@@ -245,6 +245,57 @@ describe("GET /jobs/:id/events", () => {
     }
   })
 
+  it("takes no slot for a client that left before its stream started", async () => {
+    const events = new InMemoryJobEventLog()
+    const h = await jobApiApp({ events, jobEventStreamLimits: { perCaller: 1 } })
+    await h.seedJob("job_1", "dev-main", "running")
+    await h.seedJob("job_2", "dev-main", "completed")
+    // Hold the request inside the handler (before the stream starts) until the client is gone.
+    let entered = false
+    let release: () => void = () => undefined
+    const gate = new Promise<void>((resolve) => (release = resolve))
+    const getJob = h.jobManager.getJob.bind(h.jobManager)
+    let armed = true
+    h.jobManager.getJob = async (id: string) => {
+      if (armed && id === "job_1") {
+        armed = false
+        entered = true
+        await gate
+      }
+      return getJob(id)
+    }
+    let aborted = false
+    h.app.addHook("onRequestAbort", (_request, done) => {
+      aborted = true
+      done()
+    })
+    const address = await h.app.listen({ host: "127.0.0.1", port: 0 })
+    try {
+      const path = "/jobs/job_1/events"
+      const controller = new AbortController()
+      const request = fetch(`${address}${path}`, {
+        headers: { ...h.peerHeaders("dev-main", "GET", path), accept: "text/event-stream" },
+        signal: controller.signal,
+      }).catch(() => undefined)
+      await until(() => entered)
+      controller.abort()
+      await request
+      await until(() => aborted)
+      expect(aborted).toBe(true)
+      release()
+      // The caller's only slot is free: a stream of its finished job opens (and ends).
+      let status = 0
+      for (let attempt = 0; attempt < 200 && status !== 200; attempt += 1) {
+        status = (await h.asPeer("dev-main", "GET", "/jobs/job_2/events", { accept: "text/event-stream" })).statusCode
+        if (status !== 200) await new Promise((resolve) => setTimeout(resolve, 5))
+      }
+      expect(status).toBe(200)
+      expect(events.subscriberCount("job_1")).toBe(0)
+    } finally {
+      await h.app.close()
+    }
+  })
+
   it("caps open streams per caller, per job and in total (429)", async () => {
     const events = new InMemoryJobEventLog()
     const h = await jobApiApp({ events, jobEventStreamLimits: { global: 3, perCaller: 2, perJob: 2 } })

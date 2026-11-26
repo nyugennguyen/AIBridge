@@ -3,6 +3,7 @@ import { reportCallbackSchema } from "../../config/schemas.js"
 import { createAuthProvider } from "../../security/auth-provider.js"
 import { requireIdentityGuard } from "../../pairing/verifier.js"
 import { startOpencodeSession } from "../../opencode/launch.js"
+import { RemoteReportApplyError, type DependentsOutcome } from "../../jobs/manager.js"
 import type { AppDependencies } from "../app.js"
 import { terminalReporter } from "./claude-dispatch.js"
 
@@ -35,15 +36,34 @@ export function registerReportRoute(app: FastifyInstance, dependencies: AppDepen
     )
     if (!source) return reply.code(403).send({ error: `Source ${report.source_agent_id} is not authorized` })
 
-    const { unblocked, failed } = await dependencies.jobManager.applyRemoteReport({
-      source_agent_id: report.source_agent_id,
-      job_id: report.job_id,
-      status: report.status,
-    })
-    // A dependent this report failed is reported by this call: it made the terminal write.
+    let outcome: DependentsOutcome
+    let failure: RemoteReportApplyError | undefined
+    try {
+      outcome = await dependencies.jobManager.applyRemoteReport({
+        source_agent_id: report.source_agent_id,
+        job_id: report.job_id,
+        status: report.status,
+      })
+    } catch (error) {
+      // The store failed: launch and report what was settled anyway, then
+      // answer 500 as before so the sender retries.
+      if (!(error instanceof RemoteReportApplyError)) throw error
+      failure = error
+      outcome = error.outcome
+    }
+    const { unblocked, failed } = outcome
+    // A dependent this report failed is reported by this call: it made the
+    // terminal write. The report is an outbound POST to that dependent's own
+    // requester, which may be offline, so it is NOT awaited: the peer sending
+    // this `/report` must get its answer now. The delivery is marked `pending`
+    // first, so a crash before it goes out is re-delivered at startup
+    // (`listCallbackRetries`), and the reporter's durable outbox retries it.
     for (const job of failed) {
-      await dependencies.taskGraphSyncer.syncJobToTask(job.trigger.task_id ?? `#${job.id}`, "failed").catch(() => undefined)
-      await terminalReporter(dependencies)(job).catch(() => undefined)
+      await dependencies.jobManager.markCallbackDelivery(job.id, "pending").catch(() => undefined)
+      void dependencies.taskGraphSyncer.syncJobToTask(job.trigger.task_id ?? `#${job.id}`, "failed").catch(() => undefined)
+      void terminalReporter(dependencies)(job).catch((error: unknown) => {
+        dependencies.log?.("warn", `report of dependent job ${job.id} failed: ${error instanceof Error ? error.message : String(error)}`)
+      })
     }
     for (const job of unblocked) {
       // A report is an observation, not an authority: recording it must not
@@ -61,6 +81,7 @@ export function registerReportRoute(app: FastifyInstance, dependencies: AppDepen
         // refused: another path owns this job; leave it alone.
       }
     }
+    if (failure !== undefined) throw failure.reason
     dependencies.shadowMirror?.mirrorReport(request.body, true)
     return reply.code(202).send({ accepted: true })
   })

@@ -84,6 +84,21 @@ export interface DependentsOutcome {
   readonly failed: readonly JobRecord[]
 }
 
+/**
+ * Thrown by `applyRemoteReport` when the store failed for at least one
+ * dependent. `outcome` is what was settled anyway: launch and report it,
+ * then answer with an error so the sender retries.
+ */
+export class RemoteReportApplyError extends Error {
+  readonly code = "remote_report_apply_failed"
+  constructor(
+    readonly reason: unknown,
+    readonly outcome: DependentsOutcome,
+  ) {
+    super(reason instanceof Error ? reason.message : String(reason))
+  }
+}
+
 export class JobManager {
   /**
    * Per-job queue: every read-modify-write of a job runs alone, so two paths
@@ -306,12 +321,19 @@ export class JobManager {
    * Records a remote dependency's report on every `blocked` job waiting for
    * it, then unblocks or fails each one whose dependencies are now settled.
    * Every write is guarded under the job's lock (the job must still be
-   * `blocked`), and one dependent's failure never stops the others: a job
-   * another path ended meanwhile is skipped, not an error. Returns the jobs
-   * THIS call unblocked (launch them) and failed (report them).
+   * `blocked`): a job another path ended meanwhile is skipped, which is not
+   * an error and throws nothing. Returns the jobs THIS call unblocked (launch
+   * them) and failed (report them).
+   *
+   * A real error (the store failing to read or write) is NOT swallowed: the
+   * other dependents are still settled, then `RemoteReportApplyError` is
+   * thrown carrying what was done, so the caller can launch and report that
+   * much and still answer with an error (`/report` answers 500 and the sender
+   * retries; a retry skips what is already settled).
    */
   async applyRemoteReport(report: RemoteDependencyReport, now = new Date().toISOString()): Promise<DependentsOutcome> {
     const outcome: { unblocked: JobRecord[]; failed: JobRecord[] } = { unblocked: [], failed: [] }
+    let failure: unknown
     for (const job of await this.store.list()) {
       if (job.status !== "blocked") continue
       const remoteDependencies = job.remoteDependencies ?? []
@@ -328,10 +350,12 @@ export class JobManager {
         const updated = await this.transitionIf(job.id, "blocked", now, { remoteDependencies: updatedDependencies }, stillBlocked)
         if (updated === undefined) continue
         await this.settleDependent(updated, now, outcome)
-      } catch {
-        /* one dependent's failure never stops the others */
+      } catch (error) {
+        // Not a skip (a skip throws nothing): remember it, settle the others, then raise it.
+        failure ??= error
       }
     }
+    if (failure !== undefined) throw new RemoteReportApplyError(failure, outcome)
     return outcome
   }
 

@@ -229,7 +229,15 @@ describe("GET /jobs/:id/events", () => {
       })
       expect(response.status).toBe(200)
       const reader = response.body!.getReader()
-      await reader.read()
+      // A live GET over a real socket is not taken for a gone client: its events arrive.
+      let received = ""
+      while (!received.includes("id: 2\n")) {
+        const chunk = await reader.read()
+        if (chunk.done) break
+        received += new TextDecoder().decode(chunk.value)
+      }
+      expect(received).toContain("id: 1\nevent: status")
+      expect(received).toContain("id: 2\nevent: status")
       await until(() => events.subscriberCount("job_1") === 1)
       // The one slot this caller has is taken.
       expect((await h.asPeer("dev-main", "GET", path, { accept: "text/event-stream" })).statusCode).toBe(429)

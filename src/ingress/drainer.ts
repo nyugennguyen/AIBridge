@@ -18,7 +18,7 @@ import {
   reportCallbackSchema,
 } from "../config/schemas.js"
 import type { BridgeConfig } from "../config/types.js"
-import type { JobManager } from "../jobs/manager.js"
+import { RemoteReportApplyError, type DependentsOutcome, type JobManager } from "../jobs/manager.js"
 import type { JobRecord } from "../jobs/types.js"
 import type { OpencodeClient } from "../opencode/types.js"
 import { startOpencodeSession } from "../opencode/launch.js"
@@ -96,6 +96,8 @@ export interface IngressDrainerDependencies {
   readonly reportTerminalJob?: (job: JobRecord) => Promise<void>
   /** Optional; see {@link IngressLifecycleObserver} for why it is not a return value. */
   readonly observer?: IngressLifecycleObserver
+  /** Where the drainer notes what it cannot surface otherwise. Default: stderr (the service's log file). */
+  readonly log?: (level: "info" | "warn" | "error", message: string) => void
   readonly orchestration?: {
     readonly translation: LegacyTranslation
   }
@@ -111,6 +113,7 @@ export class IngressDrainer {
   readonly #reportTerminalJob?: (job: JobRecord) => Promise<void>
   readonly #orchestration?: { readonly translation: LegacyTranslation }
   readonly #observer?: IngressLifecycleObserver
+  readonly #log: (level: "info" | "warn" | "error", message: string) => void
   private running = false
   private timer: NodeJS.Timeout | null = null
 
@@ -124,6 +127,11 @@ export class IngressDrainer {
     this.#reportTerminalJob = dependencies.reportTerminalJob
     this.#observer = dependencies.observer
     this.#orchestration = dependencies.orchestration
+    this.#log =
+      dependencies.log ??
+      ((level, message) => {
+        process.stderr.write(`${new Date().toISOString()} ${level.toUpperCase()} ${message}\n`)
+      })
   }
 
   /**
@@ -489,14 +497,32 @@ export class IngressDrainer {
       return
     }
 
-    const { unblocked, failed } = await this.#jobManager.applyRemoteReport({
-      source_agent_id: report.source_agent_id,
-      job_id: report.job_id,
-      status: report.status,
-    })
-    // A dependent this report failed is reported by this call: it made the terminal write.
+    let outcome: DependentsOutcome
+    let failure: RemoteReportApplyError | undefined
+    try {
+      outcome = await this.#jobManager.applyRemoteReport({
+        source_agent_id: report.source_agent_id,
+        job_id: report.job_id,
+        status: report.status,
+      })
+    } catch (error) {
+      // The store failed: launch and report what was settled anyway, then
+      // fail the row (it is retried) instead of acknowledging it.
+      if (!(error instanceof RemoteReportApplyError)) throw error
+      failure = error
+      outcome = error.outcome
+    }
+    const { unblocked, failed } = outcome
+    // A dependent this report failed is reported by this call: it made the
+    // terminal write. Not awaited: the report is an outbound POST to the
+    // dependent's requester, which may be offline, and must never stall the
+    // drain loop. The delivery is marked `pending` first, so a crash before it
+    // goes out is re-delivered when `aibr worker` starts (`listCallbackRetries`).
     for (const failedJob of failed) {
-      await this.#reportTerminalJob?.(failedJob).catch(() => undefined)
+      await this.#jobManager.markCallbackDelivery(failedJob.id, "pending").catch(() => undefined)
+      void this.#reportTerminalJob?.(failedJob).catch((error: unknown) => {
+        this.#log("warn", `report of dependent job ${failedJob.id} failed: ${error instanceof Error ? error.message : String(error)}`)
+      })
     }
 
     for (const unblockedJob of unblocked) {
@@ -517,6 +543,9 @@ export class IngressDrainer {
       }
     }
 
+    // As before this change, a store error leaves the row unacknowledged
+    // (`processRecord` fails it and it is retried).
+    if (failure !== undefined) throw failure.reason
     this.acknowledge(record.job_id, claimToken)
   }
 

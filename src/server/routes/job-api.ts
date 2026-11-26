@@ -388,7 +388,12 @@ async function pageIsFinal(events: JobEventLog, jobId: string, page: JobEventPag
   return !whole.events.some((event) => event.type === "status")
 }
 
-/** Whether the client's connection is already gone. */
+/**
+ * Whether the client of an SSE GET is already gone. For the bodyless GET of
+ * `/jobs/:id/events` only: do NOT reuse it on a POST route, where
+ * `request.raw.destroyed` is already true for a live request once its body
+ * has been read, so a healthy client would be taken for gone.
+ */
 function clientGone(request: FastifyRequest, reply: FastifyReply): boolean {
   return request.raw.destroyed || reply.raw.destroyed || request.raw.socket?.destroyed === true
 }

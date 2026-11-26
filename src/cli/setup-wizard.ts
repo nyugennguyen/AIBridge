@@ -1243,7 +1243,7 @@ async function runSetupSteps(io: WizardIo, ctx: SetupContext): Promise<SetupOutc
       : `http://${tailscaleIp}:${bridgePort}`
 
   // An existing profile is the base, so keys this wizard does not author
-  // (terminal, ingress_mode, custom permissions, extra projects) survive an
+  // (ingress_mode, custom permissions, extra projects) survive an
   // update. Keys it does author are overwritten below.
   const { runtime: _previousRuntime, ...baseWithoutRuntime } = base
   // A Claude worker answers capabilities with capability_profiles, so the

@@ -57,7 +57,6 @@ Options:
   --help, -h             Show this help
   --version, -v          Show version
   --shadow-mode          Run in shadow mode (mirroring ingress to router)
-  --ipc-publish          Deprecated and ignored since 3.1.1 (the IPC bus was removed)
 
 Run "aibr <command> --help" for help on one command.
 ```

@@ -18,6 +18,12 @@
 - An approval-gated OpenCode trigger with `depends_on` is refused with `501 not_implemented` (as on the Claude runtime), because a dependency's report arriving while the job waits for the operator would be lost.
 - With `bridge.ingress_mode: "router"` there is no operator approval path, so approval-gated capabilities are refused (`PLAN_APPROVAL_REQUIRED`) whatever the caller sends.
 
+### Removed
+- **BREAKING: `aibr tui`.** It was a stub since 3.1.1 and is now an unknown command (nonzero exit). Use Claude Code with the AIBridge plugin; on the worker use `aibr jobs pending`, `aibr approve`, `aibr logs -f`.
+- **BREAKING: `aibr worker --ipc-publish`.** The flag is now rejected as an unknown flag, so a hand-written service unit that still passes it will not start. Delete the flag from the unit; units generated from 3.1.1 onward do not have it.
+- **BREAKING: config `terminal` (`terminal.backend`).** The key is gone from the schema and from `contracts/v1/bridge-config.schema.json`. A profile that still has it keeps loading (the key is ignored) and `loadConfig` logs one warning; delete the key. The warning goes away in 3.3.0.
+- These three were no-ops since 3.1.1 and were announced as removed in 3.2.0 (ADR 0014), so this ships in a minor release: nothing stops working except the noisier failure. `/trigger`, `/report`, `/jobs` and the plugin are unchanged.
+
 ## [3.1.1] - 2026-11-26
 
 Removes the unused TUI, Herdr, terminal and IPC layer (about 54k lines, two Rust crates and two dependencies). Nothing in production depended on it: `/trigger`, `/report`, `/jobs`, the Claude Code plugin and the worker are unchanged. Claude Code with the AIBridge plugin is the operator interface, and human-only actions (approve, reject, kill switch, logs) stay in the `aibr` CLI on the worker. See [ADR 0014](Docs/adr/0014-claude-is-the-operator-interface.md).

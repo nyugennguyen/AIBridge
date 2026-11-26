@@ -174,9 +174,7 @@ Below are focused, schema-conforming partial examples illustrating each major se
 }
 ```
 
-- **`terminal.backend`** *(enum, default: `"tmux"`)*:
-  - `"tmux"`: Detached headless sessions (standard for headless VPS and daemon setups).
-  - `"herdr"`: **Deprecated** since 3.1.1. Still accepted so existing profiles load; it logs a warning and uses tmux. Removal planned for 3.2.0 (ADR 0014).
+- **`terminal`**: removed in 3.2.0 (it only selected `tmux`, the sole backend since 3.1.1). A profile that still has the key loads, ignores it and logs one warning; delete it.
 - **`timeouts.default_job_seconds`** *(integer)*: Maximum allowed execution duration before a job times out.
 - **`timeouts.callback_retry_attempts`** *(integer)*: Number of retry attempts for reporting completion callbacks to remote peers.
 

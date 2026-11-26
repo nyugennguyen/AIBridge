@@ -571,23 +571,17 @@ describe("cli worker", () => {
     expect(exitCode).toBe(0)
   })
 
-  it("accepts --ipc-publish, warns that it is ignored, and still runs the worker", async () => {
-    let receivedProfile: string | undefined
+  it("rejects --ipc-publish (removed in 3.2.0) without running the worker", async () => {
+    let ran = false
     const { exitCode, output } = await captureRun(["worker", "--profile", "dev-main", "--ipc-publish"], {
-      workerRunner: async (profile) => {
-        receivedProfile = profile
+      workerRunner: async () => {
+        ran = true
       },
     })
 
-    expect(exitCode).toBe(0)
-    expect(receivedProfile).toBe("dev-main")
-    expect(output).toContain("warning: --ipc-publish is deprecated and ignored since 3.1.1")
-  })
-
-  it("does not warn about --ipc-publish when the flag is absent", async () => {
-    const { output } = await captureRun(["worker", "--profile", "dev-main"])
-
-    expect(output).not.toContain("--ipc-publish")
+    expect(exitCode).not.toBe(0)
+    expect(output).toContain("unknown flag --ipc-publish")
+    expect(ran).toBe(false)
   })
 
   it("returns nonzero and explains when the store cannot be opened", async () => {
@@ -831,36 +825,13 @@ describe("cli _opencode (hidden)", () => {
 
 // ── Non-TTY ────────────────────────────────────────────────────────────
 
-describe("cli tui (removed in 3.1.1)", () => {
-  it("points to the replacements and exits 1, with or without a profile", async () => {
+describe("cli tui (removed in 3.2.0)", () => {
+  it("is an unknown command, with or without a profile", async () => {
     for (const argv of [["tui"], ["tui", "--profile", "dev"]]) {
       const { exitCode, output } = await captureRun(argv)
-      expect(exitCode).toBe(1)
-      expect(output).toContain("aibr tui was removed in 3.1.1")
-      expect(output).toContain("aibr jobs pending")
-      expect(output).not.toContain("--profile is required")
+      expect(exitCode).not.toBe(0)
+      expect(output).toContain('unknown command "tui"')
     }
-  })
-
-  it("never runs a process (no Herdr probe, no plugin link)", async () => {
-    const calls: string[][] = []
-    const fakeRunner: ProcessRunner = {
-      exec: async (cmd: readonly string[]) => {
-        calls.push([...cmd])
-        return { exitCode: 0, stdout: "", stderr: "" }
-      },
-    }
-    await captureRun(["tui", "--profile", "dev"], { processRunner: fakeRunner })
-    expect(calls).toEqual([])
-  })
-
-  it("keeps help and version usable without TTYs", async () => {
-    const help = await captureRun(["tui", "--help"], { isTTY: false, isInputTTY: false })
-    const version = await captureRun(["tui", "--version"], { isTTY: false, isInputTTY: false })
-
-    expect(help.exitCode).toBe(0)
-    expect(help.output).toContain("Usage")
-    expect(version.exitCode).toBe(0)
   })
 })
 

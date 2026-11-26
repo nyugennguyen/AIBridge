@@ -59,16 +59,6 @@ export const projectConfigSchema = z.object({
 })
 
 /**
- * Terminal backend selection. Default "tmux" for headless safety.
- * "herdr" is deprecated since 3.1.1 (backend removed): still accepted so older
- * profiles load, ignored, and `loadConfig` warns. Remove in 3.2.0.
- */
-export const terminalBackendSchema = z.enum(["tmux", "herdr"])
-export const terminalConfigSchema = z.object({
-  backend: terminalBackendSchema.default("tmux"),
-})
-
-/**
  * What this node does in the mesh. `worker` executes `/trigger` jobs,
  * `orchestrator` dispatches them, `both` does both. Defaulted so every config
  * written before the field existed keeps its meaning (a worker).
@@ -184,7 +174,6 @@ export const bridgeConfigSchema = z.object({
     public_url: z.url(),
     ingress_mode: z.enum(["engine", "router"]).default("engine"),
   }),
-  terminal: terminalConfigSchema.default({ backend: "tmux" }),
   runtime: runtimeConfigSchema.default({ kind: "opencode" }),
   /** Required when `runtime.kind` is `opencode` (the default); unused for `claude`. */
   opencode: opencodeConfigSchema.optional(),

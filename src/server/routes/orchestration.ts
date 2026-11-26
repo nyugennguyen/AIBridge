@@ -5,7 +5,7 @@
  *
  * The orchestration kernel is the sole authority for state transitions,
  * charter proposals/approvals, and roundtable deliberations. External
- * controllers and human operators (such as the Herdr manager plugin `aibr-manager`)
+ * controllers and human operators
  * interact with the local AIBridge node over HTTP to submit commands and preview
  * capability intersections.
  *

@@ -81,6 +81,17 @@ Then, as the `aibr` user (`sudo -u aibr -i`):
 curl -fsSL https://raw.githubusercontent.com/nyugennguyen/AIBridge/main/scripts/install.sh | bash -s -- --role worker --runtime claude --profile staging
 ```
 
+Quickstart (at most four questions; `aibr init --help` lists the flags):
+
+```bash
+aibr init --profile staging --role worker --runtime claude --project /srv/app --new
+aibr doctor --profile staging
+```
+
+`--new` creates the network: `aibr init` prints a one-time pairing code (`aibr1-…`), granting by default the capabilities that need no operator approval. Hand the code to the orchestrator ([Install an orchestrator](#install-an-orchestrator)). The bearer token is generated and never shown. A worker's bridge is started as a user service (`aibr start`) unless you pass `--no-start`.
+
+Use the full wizard instead when you need to change an existing profile or answer every question (`--advanced` adds the ports):
+
 ```bash
 aibr setup --profile staging
 aibr verify --profile staging
@@ -88,17 +99,24 @@ aibr start --profile staging
 aibr status --profile staging
 ```
 
-`aibr setup` asks for the role (answer `worker`) and the runtime (`claude`), a bearer token, and the project directory. A new Claude worker profile gets:
+Either way a new Claude worker profile gets:
 
 - the capability profiles `investigate` (read-only) and `run-tests` (may run the test command, may not edit);
 - `security.request_signing: "required"`.
 
-`aibr verify` checks `tmux`, `claude` and `tailscale`, the config schema, the project directories and the bearer-token secret. `aibr start` creates the tmux session `aibridge-staging`; the bridge runs in its `bridge` window. `aibr status` should print `healthy`. That only proves `/health` answers, which is unauthenticated: it says nothing about whether peers can authenticate.
-
-Add approval-gated or write-capable profiles (for example `fix-on-branch`, see [Capability profiles](#capability-profiles)) by editing `<config>/config.json`, then restart the bridge:
+`aibr start` installs a per-profile user service (a systemd user unit `aibridge-staging.service` on Linux, a launchd agent `com.aibridge.staging` on macOS), which runs `aibr serve`, restarts it on failure and at login, and waits until `/health` answers. Re-running it restarts the bridge with the current config. **On a Linux server, enable lingering** so the service survives logout (`aibr doctor` flags it when it is off). Run this as root or another admin, naming the user the bridge runs as (`aibr` in this runbook), because that user usually has no sudo:
 
 ```bash
-aibr stop --profile staging
+sudo loginctl enable-linger "aibr"
+```
+
+`aibr verify` checks `tmux`, `claude` and `tailscale` for a Claude worker (`tmux` is still on the list; the service itself does not use it, only `aibr start --foreground` does), the config schema, the project directories and the bearer-token secret. `aibr doctor` runs the `verify` checks plus `aibr status` and a signed ping of every peer in `agents[]`, and prints the fix for each failure. `aibr status` printing `healthy` only proves `/health` answers, which is unauthenticated: it says nothing about whether peers can authenticate. `aibr doctor` or `aibr ping <peer>` does.
+
+Logs: `aibr logs --profile staging` prints the last 100 lines of `<state>/logs/aibridge.log` (`-f` follows, `-n <count>` sets the length). The service's stdout and stderr go there too, so a crash at startup is in this file.
+
+Add approval-gated or write-capable profiles (for example `fix-on-branch`, see [Capability profiles](#capability-profiles)) by editing `<config>/config.json`, then restart the bridge (re-running `aibr start` restarts the service with the current config):
+
+```bash
 aibr start --profile staging
 ```
 
@@ -110,19 +128,22 @@ On the dev machine, with Claude Code installed:
 curl -fsSL https://raw.githubusercontent.com/nyugennguyen/AIBridge/main/scripts/install.sh | bash -s -- --role orchestrator --profile dev
 ```
 
-On the worker, issue a pairing code ([Pair nodes](#pair-nodes)), then on the dev machine:
+On the worker, issue a pairing code ([Pair nodes](#pair-nodes)) with the capabilities this orchestrator may request, or reuse the one `aibr init` printed. Then on the dev machine:
 
 ```bash
-aibr setup --profile dev
+aibr init --profile dev --role orchestrator --join aibr1-...
 ```
 
-Answer `orchestrator` for the role and paste the pairing code when Step 4 asks for it. An orchestrator needs no bridge of its own and gets no token prompt: pairing delivers the worker's bearer token. Then install the plugin and check it:
+An orchestrator needs no bridge of its own and gets no token prompt: pairing delivers the worker's bearer token. (`aibr setup --profile dev` with the `orchestrator` role also works; paste the code when Step 4 asks for it.) Then install the plugin and check the whole path:
 
 ```bash
 aibr plugin install claude
 aibr plugin status claude
-aibr verify --profile dev
+aibr doctor --profile dev
+aibr ping staging --profile dev
 ```
+
+`aibr verify` for an orchestrator checks `claude` and `tailscale` only (no `tmux`). `aibr ping <peer>` takes an `agents[]` id, signs a no-op job to the worker and waits for the result, which proves the path a real job takes.
 
 `aibr plugin install claude` defaults to `--scope user`. Exit code `2` means `claude` is not on `PATH`; `3` means Claude Code is too old for `claude plugin` and the manual steps are printed instead. Start a new Claude Code session: its first lines are a peer and job summary from the plugin's SessionStart hook. Usage: [Claude Code as orchestrator](../guides/claude-code-orchestrator.md).
 
@@ -151,10 +172,9 @@ aibr enroll list --profile staging
 aibr enroll revoke dev-main --profile staging
 ```
 
-`revoke` takes the peer's `agent_id`. It unpins the key, so the peer's signed requests are refused immediately, and removes its `allowed_sources[]` / `agents[]` entries from the file. Restart the bridge so the running process drops those entries too:
+`revoke` takes the peer's `agent_id`. It unpins the key, so the peer's signed requests are refused immediately, and removes its `allowed_sources[]` / `agents[]` entries from the file. Restart the bridge (`aibr start --profile staging`) so the running process drops those entries too:
 
 ```bash
-aibr stop --profile staging
 aibr start --profile staging
 ```
 
@@ -191,10 +211,9 @@ openssl rand -hex 32 | tr -d '\n' > ~/.local/share/aibridge/staging/secrets/oper
 chmod 600 ~/.local/share/aibridge/staging/secrets/operator_token
 ```
 
-The bridge reads it once at start, so restart it:
+The bridge reads it once at start, so restart it (`aibr start` again):
 
 ```bash
-aibr stop --profile staging
 aibr start --profile staging
 ```
 
@@ -233,13 +252,13 @@ aibr stop --all-jobs --profile staging
 
 It asks first (`--yes` to skip), then terminates every **running** Claude and script job on the node. Each is failed with "stopped by operator", its requester gets a report, and a `jobs.stopped` entry listing the job ids goes into the approval ledger. It needs the operator token and must run on the worker.
 
-It does not touch jobs still awaiting approval (reject those) and does not stop the bridge, so new triggers are still accepted. To stop intake as well:
+It does not touch jobs still awaiting approval (reject those) and does not stop the bridge, so new triggers are still accepted. To stop intake as well, stop the service. This is a different command, it needs no operator token, and it writes no ledger entry:
 
 ```bash
 aibr stop --profile staging
 ```
 
-That kills the `aibridge-staging` tmux session (the bridge with it). To cut off one orchestrator instead, revoke it (`aibr enroll revoke <agent_id>`) and restart the bridge.
+Without `--all-jobs`, `aibr stop` unloads and removes the profile's user service (and kills the tmux session `aibridge-staging` if you started with `--foreground`); jobs the bridge was running die with it. To cut off one orchestrator instead, revoke it (`aibr enroll revoke <agent_id>`) and restart the bridge.
 
 ## Audit: approval ledger and job records
 
@@ -300,11 +319,14 @@ jq '{id, status, error, runtime, checkout, approval,
 - `runtimeResult.usage`: `totalCostUsd`, `numTurns`, `durationMs`, `resultSubtype`, and `permissionDenials`. A non-zero `permissionDenials` with a failed or empty result usually means the profile is too narrow (see below).
 - `callbackDelivery`: whether the report reached the requester.
 
-There are no log files. The bridge's output is in its tmux window:
+The bridge log is `<state>/logs/aibridge.log` (startup, listen address, one line per request with method, path, status and duration; never headers or bodies). Read it with:
 
 ```bash
-tmux capture-pane -p -t aibridge-staging:bridge -S -2000
+aibr logs --profile staging -n 200
+aibr logs --profile staging -f
 ```
+
+Job output itself is in the job record, not the log.
 
 ## Rotate keys and tokens
 
@@ -320,7 +342,7 @@ tmux capture-pane -p -t aibridge-staging:bridge -S -2000
    mv ~/.local/state/aibridge/staging/identity/self.node-key.json ~/self.node-key.json.retired
    ```
 
-2. Restart that node's bridge if it runs one (`aibr stop`, then `aibr start`), so it signs with the new key.
+2. Restart that node's bridge if it runs one (`aibr start`), so it signs with the new key.
 3. Pair again: `aibr enroll issue` on the worker (creates the new worker key when the worker is the one rotating), then `aibr enroll join` on every orchestrator. Re-pairing replaces the pin for that `agent_id` and clears any earlier revocation; requests signed with the old key are refused from then on.
 4. Confirm with `aibr enroll list` on both sides (fingerprints changed), then shred the retired key.
 
@@ -354,7 +376,7 @@ Every launch is `claude -p` with `--permission-mode dontAsk`, the profile's rule
 
 ## Troubleshooting
 
-Start with `aibr status --profile staging` and the bridge window (`tmux capture-pane -p -t aibridge-staging:bridge -S -2000`). The `debugging-aibr-v2` skill in this repository covers general bridge debugging.
+Start with `aibr doctor --profile staging` (checks, status and a signed ping of every peer, each failure with its fix), then `aibr logs --profile staging`. From an orchestrator, `aibr ping <peer>` tests one worker end to end. The `debugging-aibr-v2` skill in this repository covers general bridge debugging.
 
 ### 401 `signature_required`
 
@@ -376,18 +398,18 @@ The worker is already running `limits.max_concurrent_jobs` jobs (default 2). The
 
 ### `bridge_unavailable`
 
-`aibr status` found the tmux session `aibridge-staging` but the bridge's `/health` did not answer (the probe status is printed). Check, in order:
+`aibr status` found the service (or, with `--foreground`, the tmux session `aibridge-staging`) but the bridge's `/health` did not answer (the probe status is printed). The other states are `healthy` (it also says whether the service or tmux runs the bridge) and `not_running`. Check, in order:
 
-1. The bridge window: `tmux capture-pane -p -t aibridge-staging:bridge -S -2000`. A config error or a crash on start is printed there.
+1. The log: `aibr logs --profile staging`. A config error or a crash on start is printed there. (With `--foreground`, the live output is also in the tmux window: `tmux capture-pane -p -t aibridge-staging:bridge -S -2000`.)
 2. Tailscale is up and the address the bridge binds still belongs to this node: `tailscale status`, `tailscale ip -4`, compared with `bridge.host` in `config.json`.
 3. Nothing else holds port 8787: `ss -ltnp | grep 8787`.
 4. The config still validates: `aibr verify --profile staging`.
+5. On Linux, the service dies at logout while lingering is off: `sudo loginctl enable-linger <user>` (`aibr doctor` reports it).
 
-Then restart:
+Then restart (this reloads the service with the current config):
 
 ```bash
-aibr stop --profile staging
 aibr start --profile staging
 ```
 
-`session_missing` means the tmux session is gone (after a reboot, for example); `aibr start` brings it back. From the orchestrator, `aibr discover --profile dev` shows whether the worker's `/health` is reachable over the tailnet; if it is not but `aibr status` on the worker is `healthy`, check the Tailscale ACLs.
+`session_missing` appears only for a `--foreground` run: the tmux session is gone (after a reboot, for example) and `aibr start --foreground` brings it back. A service-managed bridge comes back by itself at login. From the orchestrator, `aibr discover --profile dev` shows whether the worker's `/health` is reachable over the tailnet, and `aibr ping staging --profile dev` whether it also authenticates and completes a job; if discover works, `aibr status` on the worker is `healthy` and the ping fails, check the Tailscale ACLs, then pairing and signing.

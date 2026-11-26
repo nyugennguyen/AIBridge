@@ -45,7 +45,7 @@ jobs:
         # not found" or, worse, the check is dropped to keep the release green.
         #
         # `@master` + an explicit `toolchain:` mirrors the pairing in
-        # `.github/workflows/milestone-7.yml`, and the channel matches the one
+        # `.github/workflows/ci.yml` (`router` job), and the channel matches the one
         # `rust-toolchain.toml` pins in the tree. Leaving it to `@stable` builds
         # the artefacts with a different compiler than every other job does,
         # which is a drift that only shows up as an unexplainable diff.

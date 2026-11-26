@@ -238,7 +238,7 @@ Request ──► Bearer Check ──► Allowed Sources ──► Project Allow
 ### Toolchain versions
 
 - **Rust Minimum Supported Rust Version (MSRV):** Rust 1.94 (`router/Cargo.toml:18`).
-- **Rust CI and release pinned toolchain:** Rust 1.99.0 (`rust-toolchain.toml:15`). `.github/workflows/ci.yml` installs no toolchain of its own: its `cargo` steps resolve the pin through rustup. `.github/workflows/publish.yml:57` and `.github/workflows/milestone-7.yml:34` pin `toolchain: 1.99.0` explicitly.
+- **Rust CI and release pinned toolchain:** Rust 1.99.0 (`rust-toolchain.toml:15`). In `.github/workflows/ci.yml` the `verify` job installs no toolchain of its own: its `cargo` steps resolve the pin through rustup. The `router` job (formerly `.github/workflows/milestone-7.yml`; it runs only when router-related paths change on a pull request, always on push to main) and `.github/workflows/publish.yml:57` pin `toolchain: 1.99.0` explicitly.
 - **JavaScript / TypeScript runtime:** Bun 1.3.14 pinned (`.github/workflows/ci.yml:23`, `.github/workflows/publish.yml:30`).
 
 ### Platform build matrix

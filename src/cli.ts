@@ -58,6 +58,8 @@ export interface CliDeps {
   readonly runPlugin?: (args: readonly string[]) => Promise<number>
   /** `aibr approve|reject|jobs|stop …` handler (tests inject a fake; default: src/cli/operator-commands.ts). */
   readonly runOperator?: (command: "approve" | "reject" | "jobs" | "stop", args: readonly string[]) => Promise<number>
+  /** `aibr jobs|job|cancel|attach …` handler (tests inject a fake; default: src/cli/job-commands.ts). `aibr jobs pending` goes to `runOperator`. */
+  readonly runJobs?: (command: "jobs" | "job" | "cancel" | "attach", args: readonly string[]) => Promise<number>
   /** `aibr mcp serve|summary …` handler (tests inject a fake; default: src/cli/mcp.ts). */
   readonly runMcp?: (sub: "serve" | "summary", args: readonly string[]) => Promise<number>
   /** Overridable for tests; defaults to `runEnrollCommand` (src/cli/enroll.ts). */
@@ -298,7 +300,10 @@ function helpText(): string {
     "  enroll   Pair nodes with a one-time code (issue, join, list, revoke)",
     "  approve  Approve a job held for operator approval (on the worker node)",
     "  reject   Reject a job held for operator approval",
-    "  jobs     List jobs awaiting approval (jobs pending)",
+    "  jobs     List jobs on this node or your peers (--all-nodes, --watch); jobs pending: awaiting approval",
+    "  job      Show one job, its events (--events) or follow it until it ends (-f)",
+    "  cancel   Cancel one job (stop ends the service or, with --all-jobs, every job)",
+    "  attach   Watch a job's events until it ends (read-only; attaches no terminal)",
     "  stop     Stop a profile's service and tmux session, or every running job (--all-jobs)",
     "",
     "Options:",
@@ -759,6 +764,11 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<Cl
     }
   }
   // Operator commands (Phase 4/7) own their argv too (job id, --reason, --all-jobs).
+  // `jobs pending` stays an operator command; every other `jobs …` is the job list (block C).
+  if (first === "job" || first === "cancel" || first === "attach" || (first === "jobs" && argv[1] !== "pending")) {
+    const run = deps.runJobs ?? (await import("./cli/job-commands.js")).runRealJobCommand(deps.writer)
+    return toExitCode(await run(first, argv.slice(1)))
+  }
   if (first === "approve" || first === "reject" || first === "jobs" || first === "stop") {
     const run = deps.runOperator ?? (await import("./cli/operator-commands.js")).runOperatorCommand(deps.writer, deps.processRunner)
     return toExitCode(await run(first, argv.slice(1)))

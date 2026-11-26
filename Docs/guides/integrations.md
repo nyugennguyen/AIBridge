@@ -42,6 +42,7 @@ The Herdr workspace backend was removed in 3.1.1 and the `aibr tui` stub in 3.2.
 ```bash
 aibr jobs pending --profile <name>
 aibr approve <job_id> --profile <name>
+aibr jobs --profile <name>            # every job on this node; job <id> -f follows one, cancel <id> ends one
 aibr logs --profile <name> -f
 aibr stop --all-jobs --profile <name>
 ```

@@ -204,6 +204,8 @@ export const APPROVE_HELP = [
   "from AIBRIDGE_OPERATOR_TOKEN or <data>/aibridge/<profile>/secrets/operator_token.",
   "The profile defaults to \"default\".",
   "",
+  "To list all jobs, or to follow or cancel one, see aibr jobs, aibr job and aibr cancel.",
+  "",
 ].join("\n")
 
 /** `aibr approve` / `aibr reject`. */

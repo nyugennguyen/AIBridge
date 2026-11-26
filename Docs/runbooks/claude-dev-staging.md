@@ -244,6 +244,23 @@ aibr reject <job_id> --reason "touches the payment module" --profile staging
 
 The plugin has no approve tool on purpose. When Claude Code on dev reports `approval_required`, it should stop and ask you; it must not retry.
 
+## List, follow and cancel jobs
+
+```bash
+aibr jobs --profile staging                    # every job on this node, newest first (operator token, run on the worker)
+aibr jobs --status running --limit 20 --json  # filter; one JSON document
+aibr jobs --watch                              # refresh every 2 s until Ctrl-C (one line per change when not on a terminal)
+aibr jobs --all-nodes --profile dev            # ask every peer in agents[] (signed); a peer shows only jobs THIS node dispatched
+aibr job <job_id>                              # status, source, project, result
+aibr job <job_id> --events -f                  # what it did, until it ends (aibr attach <job_id> is the same, read-only)
+aibr cancel <job_id>                           # ends one job after asking; --yes skips the question
+aibr job <job_id> --node staging               # the same against a peer, signed
+```
+
+Run against this node, these use the operator token like `aibr approve`, and see every job. With `--node <peer>` or `--all-nodes` they send the peer's bearer token and this node's signature (`aibr enroll`), so the peer shows and cancels only jobs this node requested; an unsigned request answers 403. `--all-nodes` works on an orchestrator node with no local bridge; a peer that cannot be reached prints one line and the rest are still listed.
+
+`aibr cancel` ends one job as failed (`cancelled by operator`, or `by requester` through a peer) and the requester gets the report. A job awaiting approval cannot be cancelled (reject it with `aibr reject`), and a finished job answers "already ended". `aibr stop --all-jobs` is the kill switch for the whole node. `aibr attach` does not attach a terminal (Claude Code jobs run as child processes); it only prints events. `aibr logs` is still the bridge's own log.
+
 ## Kill switch
 
 On the worker:

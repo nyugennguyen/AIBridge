@@ -335,6 +335,10 @@ bun remove -g @nyugennguyen/aibridge
 | `aibr enroll` | Pairs nodes with one-time codes (issue, join, list, revoke). | Optional |
 | `aibr approve` / `aibr reject` | Decides a job held for operator approval (on the worker). | Optional |
 | `aibr jobs pending` | Lists jobs awaiting operator approval. | Optional |
+| `aibr jobs` | Lists this node's jobs (`--all-nodes`: ask every peer with signed requests; `--watch`; `--status`, `--limit`, `--json`). | Optional |
+| `aibr job <id>` | Shows one job; `--events` prints what it did, `-f` follows it until it ends. | Optional |
+| `aibr cancel <id>` | Cancels one job (asks first; `--yes`). Not `aibr stop`, which stops the service or every job. | Optional |
+| `aibr attach <id>` | Read-only `aibr job <id> --events -f`; attaches no terminal. | Optional |
 | `aibr plugin` | Installs, removes or reports the Claude Code plugin (`install\|uninstall\|status claude`). | No |
 | `aibr mcp` | MCP server used by the Claude Code plugin (`serve`, `summary`). | Optional |
 | `aibr update` | Checks for and installs latest version. | Optional |

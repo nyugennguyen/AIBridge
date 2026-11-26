@@ -29,9 +29,7 @@ import {
   type NotificationEnvelope,
   type NotificationRequest,
 } from "../../../src/notifications/index.js"
-import { compileRuleSet } from "../../../src/rules/compile.js"
-import { evaluateRules } from "../../../src/rules/evaluate.js"
-import { validContext, validRuleDocument } from "../rules/fixtures.js"
+import { SAFETY_FLOOR } from "../../../src/orchestration/policy/floor.js"
 import {
   createTestClock,
   FIXED_NOW,
@@ -386,14 +384,6 @@ describe("Structural Isolation: Boundary Discipline (M4/M5 Style)", () => {
     expect(offenders).toEqual([])
   })
 
-  it("rule modules never import from notifications", () => {
-    const ruleFiles = sourceFiles(join(REPOSITORY_ROOT, "src/rules"))
-    const offenders = ruleFiles
-      .flatMap((file) => importsOf(file.text).map((specifier) => ({ file: file.path, specifier })))
-      .filter(({ specifier }) => specifier.includes("/notifications/") || specifier.includes("notifications"))
-    expect(offenders).toEqual([])
-  })
-
   it("notification module imports NO orchestration command schemas or types", () => {
     const notificationFiles = sourceFiles(NOTIFICATIONS_DIR)
     for (const file of notificationFiles) {
@@ -406,17 +396,9 @@ describe("Structural Isolation: Boundary Discipline (M4/M5 Style)", () => {
 
 describe("Behavioral Canary: Notification State Changes Do Not Alter Orchestration Outcomes", () => {
 
-  it("leaves rule evaluation verdicts and decision digest 100% byte-identical across notification mutations", async () => {
-    const compiled = compileRuleSet([validRuleDocument({ ruleId: "rule-canary-1" })])
-    expect(compiled.ok).toBe(true)
-    if (!compiled.ok) return
-
-    const context = validContext()
-
-    // 1. Baseline evaluation before any notification state exists
-    const baseline = evaluateRules(compiled.value, context)
-    const baselineDigest = baseline.decisionDigest
-    const baselineDeny = JSON.stringify(baseline.deny)
+  it("leaves the kernel safety floor byte-identical across notification mutations", async () => {
+    // 1. Baseline snapshot before any notification state exists
+    const baseline = JSON.stringify(SAFETY_FLOOR)
 
     // 2. Perform massive notification mutations:
     // - Bus emissions across all categories
@@ -457,14 +439,12 @@ describe("Behavioral Canary: Notification State Changes Do Not Alter Orchestrati
     expect(bus.counters().emitted).toBeGreaterThan(0)
     expect(bus.counters().adapterErrors).toBeGreaterThan(0)
 
-    // 3. Re-evaluate rules after notification mutations
-    const afterMutation = evaluateRules(compiled.value, context)
+    // 3. Re-read the safety floor after notification mutations
+    const afterMutation = JSON.stringify(SAFETY_FLOOR)
 
     // INVARIANT ASSERTION:
-    // No notification state change can alter rule evaluation verdict or decision digest!
-    expect(afterMutation.decisionDigest).toBe(baselineDigest)
-    expect(JSON.stringify(afterMutation.deny)).toBe(baselineDeny)
-    expect(afterMutation.traces.length).toBe(baseline.traces.length)
+    // No notification state change can alter the kernel safety floor!
+    expect(afterMutation).toBe(baseline)
   })
 
   it("handles throwing adapters silently without affecting caller control flow", async () => {

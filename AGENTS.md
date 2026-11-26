@@ -83,7 +83,7 @@ Code that is built and tested but not reachable from the entry points. Decisions
 | `src/context` | V3 context snapshot | 3.4.0 | 3.5.0 |
 | `src/notifications` | V5 Discord and Telegram | 3.5.0 | 3.6.0 |
 
-Scheduled for removal in 3.2.0 (blocks D1 to D5, ADR 0016): the orchestration kernel (coordinator, scheduler, charter and roundtable runtime, `routes/orchestration.ts`), the dead part of `src/mesh` (leases, gateway, outbox transport, fault harness), and `src/rules`. (`src/budgets`, `src/workflows`, `src/simulation`, `src/routing`, `src/registry`, `src/sdk` and `src/upgrade` were removed in D1.) Until those PRs merge they are still in the tree, and the "Key Patterns" below about kernel authority, the immutable core, roundtables and rules describe that unwired code, not the running system.
+Scheduled for removal in 3.2.0 (blocks D1 to D5, ADR 0016): the orchestration kernel (coordinator, scheduler, charter and roundtable runtime, `routes/orchestration.ts`), and the dead part of `src/mesh` (leases, gateway, outbox transport, fault harness). (`src/rules` was removed in D2; `src/budgets`, `src/workflows`, `src/simulation`, `src/routing`, `src/registry`, `src/sdk` and `src/upgrade` were removed in D1.) Until those PRs merge they are still in the tree, and the "Key Patterns" below about kernel authority, the immutable core, and roundtables describe that unwired code, not the running system.
 
 ## Key Patterns
 

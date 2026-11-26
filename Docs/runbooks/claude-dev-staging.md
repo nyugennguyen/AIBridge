@@ -184,11 +184,13 @@ A revoked peer can only come back through a fresh code (`aibr enroll issue`, the
 
 `security.request_signing` in `<config>/config.json` on the worker:
 
-| Value | `/trigger` and `/report` |
-|---|---|
-| `off` (or absent) | Signatures ignored; bearer token only. Profiles created before Phase 3. |
-| `optional` | Signed requests are verified; unsigned ones still pass on the bearer. |
-| `required` | Unsigned → `401 signature_required`; unpinned or revoked key → 403; replay → 401; `source_agent_id` must match the signing key (`403 identity.source_mismatch`). New profiles from `aibr setup`. |
+| Value | `/trigger` and `/report` | `GET /jobs/:id` (since 3.2.0) |
+|---|---|---|
+| `off` (or absent) | Signatures ignored; bearer token only. Profiles created before Phase 3. | Bearer (or operator credential) required; any bearer holder reads any job. Anonymous reads are refused (401). |
+| `optional` | Signed requests are verified; unsigned ones still pass on the bearer. | Unsigned bearer reads any job; a signed request reads only the signer's own jobs (`403 not_job_requester`). |
+| `required` | Unsigned → `401 signature_required`; unpinned or revoked key → 403; replay → 401; `source_agent_id` must match the signing key (`403 identity.source_mismatch`). New profiles from `aibr setup`. | Signed requests only, and only the signer's own jobs. |
+
+The operator credential (rules of `aibr approve`, from this host by default) reads every job on every mode. `GET /jobs`, `GET /jobs/:id/events` and `POST /jobs/:id/cancel` always need a signature or the operator credential.
 
 To move an older profile to `required`:
 
@@ -301,7 +303,7 @@ On macOS use `shasum -a 256` instead of `sha256sum`. The ledger is local to the 
 
 ### Job records
 
-Each job is one file, `<state>/jobs/<job_id>.json`, and is the authoritative record:
+Each job is one file, `<state>/jobs/<job_id>.json`, and is the authoritative record. Since 3.2.0 a new `job_id` must match `^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$` (anything else is a 400 on `/trigger` and `/report`), and an id that differs from an existing one only in letter case is refused with 409. Jobs stored by older releases keep their ids and stay readable:
 
 ```bash
 ls -t ~/.local/state/aibridge/staging/jobs/ | head

@@ -74,7 +74,7 @@ aibr bundle --profile <profile> --preview
 - **Resolution:** Verify URL path spelling (`/trigger`, `/report`, `/jobs/:id`).
 
 ### `HTTP 409 Conflict`
-- **Cause:** Idempotency conflict. A command with the same `job_id` or `dispatch_id` was submitted with differing payload parameters.
+- **Cause:** Idempotency conflict. A command with the same `job_id` or `dispatch_id` was submitted with differing payload parameters. Since 3.2.0 also a `job_id` that differs from an existing job's only in letter case (the two would be one file on a case-insensitive filesystem).
 - **Resolution:** Ensure retry requests maintain exact payload identity, or assign a unique `job_id` for new work.
 
 ### `HTTP 503 Service Unavailable`

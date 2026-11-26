@@ -39,7 +39,7 @@ init prints the install commands. Non-interactive runs need the flags (`aibr ini
 
 ```bash
 aibr start  -p <profile>              # user service: launchd com.aibridge.<p> / systemd aibridge-<p>.service
-aibr start  -p <profile> --foreground # tmux session aibridge-<p> (dev; remain-on-exit)
+aibr start  -p <profile> --foreground # tmux session aibridge-<p> (dev; needs tmux, optional otherwise)
 aibr status -p <profile>              # launchd|systemd|tmux|unmanaged + /health
 aibr logs   -p <profile> -f           # ~/.local/state/aibridge/<p>/logs/aibridge.log
 aibr stop   -p <profile>              # unload + remove the unit, kill the tmux session

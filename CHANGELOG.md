@@ -22,6 +22,7 @@ These still work in 3.1.1 and are removed in 3.2.0.
 - **Dependencies** `@opentui/core` and `@fastify/websocket`.
 
 ### Changed
+- tmux is no longer a required prerequisite for workers: `aibr verify`, `aibr doctor`, setup preflight and the installer treat it as optional (a warning, no install prompt). Only `aibr start --foreground` needs it, and it now fails with a clear message and the install command when tmux is missing.
 - Preflight and `aibr verify` no longer probe for Herdr.
 - Newly generated launchd and systemd units no longer pass `--ipc-publish`.
 - TUI and Herdr documents moved to `Docs/archive/`; ADRs 0009 to 0011 are superseded by ADR 0014.

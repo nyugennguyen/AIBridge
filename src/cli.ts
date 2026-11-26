@@ -108,9 +108,10 @@ export interface CliDeps {
   }>
   /** Start a tmux profile (opencode + bridge windows): `aibr start --foreground`. */
   readonly startProfile: (profile: string) => Promise<{
-    readonly kind: "started" | "already_running" | "tmux_error"
+    readonly kind: "started" | "already_running" | "tmux_error" | "tmux_missing"
     readonly sessionName: string
     readonly stderr?: string
+    readonly installHint?: string
   }>
   /** Serve the bridge for a given profile (`withOpencode`: also supervise `opencode serve`). */
   readonly serveBridge: (profile: string, options?: { readonly shadowMode?: boolean; readonly withOpencode?: boolean }) => Promise<void>
@@ -383,9 +384,9 @@ const COMMAND_HELP: Readonly<Record<string, readonly string[]>> = {
     "Usage:",
     `  ${PROG} verify [--profile <name>]`,
     "",
-    "Checks the binaries the profile's role needs (worker+opencode: tmux, opencode,",
-    "tailscale; worker+claude: tmux, claude, tailscale; orchestrator: claude,",
-    "tailscale), Tailscale state, the config schema, project directories, the",
+    "Checks the binaries the profile's role needs (worker+opencode: opencode,",
+    "tailscale; worker+claude: claude, tailscale; orchestrator: claude,",
+    "tailscale; tmux is optional and only warns), Tailscale state, the config schema, project directories, the",
     "bearer-token secret, and (for OpenCode workers) the OpenCode password.",
     "The profile defaults to \"default\".",
     "",
@@ -1067,6 +1068,13 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<Cl
           return 0
         case "tmux_error":
           deps.writer(`tmux_error: ${result.stderr ?? "unknown error"}\n`)
+          return 1
+        case "tmux_missing":
+          deps.writer(
+            `Error: tmux is not installed, and "${PROG} start --foreground" runs the bridge in a tmux session.\n` +
+              `Install it: ${result.installHint ?? "install tmux with your package manager"}\n` +
+              `Or run "${PROG} start --profile ${profile}" (without --foreground): the user service does not need tmux.\n`,
+          )
           return 1
       }
     } catch (err) {

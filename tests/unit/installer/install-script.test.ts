@@ -93,7 +93,7 @@ describe("install.sh — confirmation gating", () => {
     const s = await readFile(SCRIPT, "utf8")
     expect(s).toContain("--yes")
     expect(s).toMatch(/read.*install.*tmux|prompt.*confirm/i)
-    expect(s).toContain("Install tmux?")
+    expect(s).toContain("Install tailscale?")
   })
   it("supports --help and --version flags", async () => {
     const s = await readFile(SCRIPT, "utf8")

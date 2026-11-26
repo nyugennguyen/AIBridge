@@ -484,6 +484,19 @@ describe("cli start", () => {
     expect(exitCode).not.toBe(0)
     expect(output).toContain("tmux_error")
   })
+
+  it("--foreground without tmux exits 1, names the install command and the service alternative", async () => {
+    const { exitCode, output } = await captureRun(["start", "--profile", "dev", "--foreground"], {
+      startRunner: async () => ({ kind: "tmux_missing" as const, sessionName: "aibridge-dev", installHint: "brew install tmux" }),
+    })
+
+    expect(exitCode).toBe(1)
+    expect(output).toContain("tmux is not installed")
+    expect(output).toContain("--foreground")
+    expect(output).toContain("brew install tmux")
+    expect(output).toContain("aibr start --profile dev")
+    expect(output).toContain("does not need tmux")
+  })
 })
 
 // ── serve command ──────────────────────────────────────────────────────

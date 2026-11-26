@@ -110,7 +110,7 @@ Either way a new Claude worker profile gets:
 sudo loginctl enable-linger "aibr"
 ```
 
-`aibr verify` checks `tmux`, `claude` and `tailscale` for a Claude worker (`tmux` is still on the list; the service itself does not use it, only `aibr start --foreground` does), the config schema, the project directories and the bearer-token secret. `aibr doctor` runs the `verify` checks plus `aibr status` and a signed ping of every peer in `agents[]`, and prints the fix for each failure. `aibr status` printing `healthy` only proves `/health` answers, which is unauthenticated: it says nothing about whether peers can authenticate. `aibr doctor` or `aibr ping <peer>` does.
+`aibr verify` checks `claude` and `tailscale` for a Claude worker (`tmux` is optional: a missing one is a warning, and only `aibr start --foreground` uses it), the config schema, the project directories and the bearer-token secret. `aibr doctor` runs the `verify` checks plus `aibr status` and a signed ping of every peer in `agents[]`, and prints the fix for each failure. `aibr status` printing `healthy` only proves `/health` answers, which is unauthenticated: it says nothing about whether peers can authenticate. `aibr doctor` or `aibr ping <peer>` does.
 
 Logs: `aibr logs --profile staging` prints the last 100 lines of `<state>/logs/aibridge.log` (`-f` follows, `-n <count>` sets the length). The service's stdout and stderr go there too, so a crash at startup is in this file.
 
@@ -143,7 +143,7 @@ aibr doctor --profile dev
 aibr ping staging --profile dev
 ```
 
-`aibr verify` for an orchestrator checks `claude` and `tailscale` only (no `tmux`). `aibr ping <peer>` takes an `agents[]` id, signs a no-op job to the worker and waits for the result, which proves the path a real job takes.
+`aibr verify` for an orchestrator checks `claude` and `tailscale` only (it does not look for `tmux`). `aibr ping <peer>` takes an `agents[]` id, signs a no-op job to the worker and waits for the result, which proves the path a real job takes.
 
 `aibr plugin install claude` defaults to `--scope user`. Exit code `2` means `claude` is not on `PATH`; `3` means Claude Code is too old for `claude plugin` and the manual steps are printed instead. Start a new Claude Code session: its first lines are a peer and job summary from the plugin's SessionStart hook. Usage: [Claude Code as orchestrator](../guides/claude-code-orchestrator.md).
 

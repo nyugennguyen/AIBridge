@@ -83,6 +83,12 @@ function resultMap(...entries: Array<[string, ProcessResult]>): Map<string, Proc
   return new Map<string, ProcessResult>(entries)
 }
 
+/**
+ * The default list no longer includes tmux (optional since 3.1.1), but the
+ * install-planning logic is still exercised with it: it stays in the table.
+ */
+const WITH_TMUX = ["tmux", "opencode", "tailscale"] as const
+
 // ── planPreflight ──────────────────────────────────────────────────────
 
 describe("planPreflight", () => {
@@ -93,7 +99,7 @@ describe("planPreflight", () => {
       })
       const runner = new SequenceProcessRunner(resultMap())
 
-      const result = await planPreflight({ platformInspector: inspector, processRunner: runner })
+      const result = await planPreflight({ prereqs: WITH_TMUX, platformInspector: inspector, processRunner: runner })
 
       expect(result.ok).toBe(false)
       expect(result.checks).toEqual([])
@@ -106,7 +112,7 @@ describe("planPreflight", () => {
       })
       const runner = new SequenceProcessRunner(resultMap())
 
-      const result = await planPreflight({ platformInspector: inspector, processRunner: runner })
+      const result = await planPreflight({ prereqs: WITH_TMUX, platformInspector: inspector, processRunner: runner })
 
       expect(result.ok).toBe(false)
       expect(result.checks).toEqual([])
@@ -121,7 +127,7 @@ describe("planPreflight", () => {
         ["which tailscale", successResult("/usr/local/bin/tailscale")],
       ))
 
-      const result = await planPreflight({ platformInspector: inspector, processRunner: runner })
+      const result = await planPreflight({ prereqs: WITH_TMUX, platformInspector: inspector, processRunner: runner })
 
       expect(result.ok).toBe(true)
     })
@@ -134,7 +140,7 @@ describe("planPreflight", () => {
         ["which tailscale", successResult("/usr/bin/tailscale")],
       ))
 
-      const result = await planPreflight({ platformInspector: inspector, processRunner: runner })
+      const result = await planPreflight({ prereqs: WITH_TMUX, platformInspector: inspector, processRunner: runner })
 
       expect(result.ok).toBe(true)
     })
@@ -147,7 +153,7 @@ describe("planPreflight", () => {
         ["which tailscale", successResult("/usr/bin/tailscale")],
       ))
 
-      const result = await planPreflight({ platformInspector: inspector, processRunner: runner })
+      const result = await planPreflight({ prereqs: WITH_TMUX, platformInspector: inspector, processRunner: runner })
 
       expect(result.ok).toBe(true)
     })
@@ -162,7 +168,7 @@ describe("planPreflight", () => {
         ["which tailscale", successResult("/usr/local/bin/tailscale")],
       ))
 
-      const result = await planPreflight({ platformInspector: inspector, processRunner: runner })
+      const result = await planPreflight({ prereqs: WITH_TMUX, platformInspector: inspector, processRunner: runner })
 
       expect(result.ok).toBe(true)
       expect(result.checks).toHaveLength(3)
@@ -182,6 +188,7 @@ describe("planPreflight", () => {
       const prompter = new FakePrompter({ confirmValue: "y" })
 
       await runPreflight({
+      prereqs: WITH_TMUX,
         platformInspector: inspector,
         processRunner: runner,
         prompter,
@@ -198,7 +205,7 @@ describe("planPreflight", () => {
         ["which tailscale", successResult("/usr/bin/tailscale")],
       ))
 
-      const result = await planPreflight({ platformInspector: inspector, processRunner: runner })
+      const result = await planPreflight({ prereqs: WITH_TMUX, platformInspector: inspector, processRunner: runner })
 
       expect(result.ok).toBe(true)
       for (const check of result.checks) {
@@ -216,7 +223,7 @@ describe("planPreflight", () => {
         ["which tailscale", successResult("/usr/local/bin/tailscale")],
       ))
 
-      const result = await planPreflight({ platformInspector: inspector, processRunner: runner })
+      const result = await planPreflight({ prereqs: WITH_TMUX, platformInspector: inspector, processRunner: runner })
 
       const tmux = result.checks.find((c: PreflightCheck) => c.name === "tmux")!
       expect(tmux.status).toBe("missing")
@@ -231,7 +238,7 @@ describe("planPreflight", () => {
         ["which tailscale", successResult("/usr/bin/tailscale")],
       ))
 
-      const result = await planPreflight({ platformInspector: inspector, processRunner: runner })
+      const result = await planPreflight({ prereqs: WITH_TMUX, platformInspector: inspector, processRunner: runner })
 
       const tmux = result.checks.find((c: PreflightCheck) => c.name === "tmux")!
       expect(tmux.status).toBe("missing")
@@ -246,7 +253,7 @@ describe("planPreflight", () => {
         ["which tailscale", failureResult()],
       ))
 
-      const result = await planPreflight({ platformInspector: inspector, processRunner: runner })
+      const result = await planPreflight({ prereqs: WITH_TMUX, platformInspector: inspector, processRunner: runner })
 
       const ts = result.checks.find((c: PreflightCheck) => c.name === "tailscale")!
       expect(ts.status).toBe("missing")
@@ -261,7 +268,7 @@ describe("planPreflight", () => {
         ["which tailscale", failureResult()],
       ))
 
-      const result = await planPreflight({ platformInspector: inspector, processRunner: runner })
+      const result = await planPreflight({ prereqs: WITH_TMUX, platformInspector: inspector, processRunner: runner })
 
       const ts = result.checks.find((c: PreflightCheck) => c.name === "tailscale")!
       expect(ts.status).toBe("missing")
@@ -280,7 +287,7 @@ describe("planPreflight", () => {
         ["which tailscale", successResult()],
       ))
 
-      const result = await planPreflight({ platformInspector: inspector, processRunner: runner })
+      const result = await planPreflight({ prereqs: WITH_TMUX, platformInspector: inspector, processRunner: runner })
 
       expect(result.ok).toBe(false)
     })
@@ -293,7 +300,7 @@ describe("planPreflight", () => {
         ["which tailscale", successResult()],
       ))
 
-      const result = await planPreflight({ platformInspector: inspector, processRunner: runner })
+      const result = await planPreflight({ prereqs: WITH_TMUX, platformInspector: inspector, processRunner: runner })
 
       expect(result.missing).toBe(2)
     })
@@ -306,7 +313,7 @@ describe("planPreflight", () => {
         ["which tailscale", failureResult()],
       ))
 
-      const result = await planPreflight({ platformInspector: inspector, processRunner: runner })
+      const result = await planPreflight({ prereqs: WITH_TMUX, platformInspector: inspector, processRunner: runner })
 
       expect(result.missing).toBe(3)
       // tmux and tailscale have install commands; opencode does not
@@ -324,7 +331,7 @@ describe("planPreflight", () => {
         ["which tailscale", successResult()],
       ))
 
-      const result = await planPreflight({ platformInspector: inspector, processRunner: runner })
+      const result = await planPreflight({ prereqs: WITH_TMUX, platformInspector: inspector, processRunner: runner })
 
       const oc = result.checks.find((c: PreflightCheck) => c.name === "opencode")!
       expect(oc.status).toBe("missing")
@@ -341,7 +348,7 @@ describe("planPreflight", () => {
         ["which tailscale", failureResult()],
       ))
 
-      const result = await planPreflight({ platformInspector: inspector, processRunner: runner })
+      const result = await planPreflight({ prereqs: WITH_TMUX, platformInspector: inspector, processRunner: runner })
 
       for (const check of result.checks) {
         if (check.installCmd !== null) {
@@ -364,7 +371,7 @@ describe("planPreflight", () => {
         ["which tailscale", failureResult()],
       ))
 
-      const result = await planPreflight({ platformInspector: inspector, processRunner: runner })
+      const result = await planPreflight({ prereqs: WITH_TMUX, platformInspector: inspector, processRunner: runner })
 
       const tmux = result.checks.find((c: PreflightCheck) => c.name === "tmux")!
       const ts = result.checks.find((c: PreflightCheck) => c.name === "tailscale")!
@@ -380,7 +387,7 @@ describe("planPreflight", () => {
         ["which tailscale", failureResult()],
       ))
 
-      const result = await planPreflight({ platformInspector: inspector, processRunner: runner })
+      const result = await planPreflight({ prereqs: WITH_TMUX, platformInspector: inspector, processRunner: runner })
 
       const tmux = result.checks.find((c: PreflightCheck) => c.name === "tmux")!
       const ts = result.checks.find((c: PreflightCheck) => c.name === "tailscale")!
@@ -396,7 +403,7 @@ describe("planPreflight", () => {
         ["which tailscale", failureResult()],
       ))
 
-      const result = await planPreflight({ platformInspector: inspector, processRunner: runner })
+      const result = await planPreflight({ prereqs: WITH_TMUX, platformInspector: inspector, processRunner: runner })
 
       for (const check of result.checks) {
         if (check.installCmd !== null) {
@@ -420,7 +427,7 @@ describe("planPreflight", () => {
         ["tailscale status", successResult("")],
       ))
 
-      await planPreflight({ platformInspector: inspector, processRunner: runner })
+      await planPreflight({ prereqs: WITH_TMUX, platformInspector: inspector, processRunner: runner })
 
       // tmux, opencode, tailscale — no herdr probe since 3.1.1.
       const whichCalls = runner.calls.filter((c) => c.argv[0] === "which")
@@ -440,7 +447,7 @@ describe("planPreflight", () => {
         ["which tailscale", successResult()],
       ))
 
-      const result = await planPreflight({ platformInspector: inspector, processRunner: runner })
+      const result = await planPreflight({ prereqs: WITH_TMUX, platformInspector: inspector, processRunner: runner })
 
       expect(result.platform).toBe("darwin")
     })
@@ -454,7 +461,7 @@ describe("planPreflight", () => {
         ["tailscale status", successResult(TAILSCALE_STATUS_OUTPUT)],
       ))
 
-      const result = await planPreflight({ platformInspector: inspector, processRunner: runner })
+      const result = await planPreflight({ prereqs: WITH_TMUX, platformInspector: inspector, processRunner: runner })
 
       expect(result.tailscale).toBeDefined()
       expect(typeof result.tailscale).toBe("object")
@@ -468,7 +475,7 @@ describe("planPreflight", () => {
         ["which tailscale", successResult()],
       ))
 
-      const result = await planPreflight({ platformInspector: inspector, processRunner: runner })
+      const result = await planPreflight({ prereqs: WITH_TMUX, platformInspector: inspector, processRunner: runner })
 
       expect(result.checks).toHaveLength(3)
       expect(result.checks.map((c: PreflightCheck) => c.name).sort()).toEqual(["opencode", "tailscale", "tmux"])
@@ -492,6 +499,7 @@ describe("runPreflight", () => {
       const prompter = new FakePrompter({ confirmValue: "y" })
 
       await runPreflight({
+      prereqs: WITH_TMUX,
         platformInspector: inspector,
         processRunner: runner,
         prompter,
@@ -514,6 +522,7 @@ describe("runPreflight", () => {
       const prompter = new FakePrompter({ confirmValue: "y" })
 
       await runPreflight({
+      prereqs: WITH_TMUX,
         platformInspector: inspector,
         processRunner: runner,
         prompter,
@@ -533,6 +542,7 @@ describe("runPreflight", () => {
       const prompter = new FakePrompter({ confirmValue: "y" })
 
       await runPreflight({
+      prereqs: WITH_TMUX,
         platformInspector: inspector,
         processRunner: runner,
         prompter,
@@ -553,6 +563,7 @@ describe("runPreflight", () => {
       const prompter = new FakePrompter({ confirmValue: "n" })
 
       const result = await runPreflight({
+      prereqs: WITH_TMUX,
         platformInspector: inspector,
         processRunner: runner,
         prompter,
@@ -574,6 +585,7 @@ describe("runPreflight", () => {
       const prompter = new FakePrompter({ confirmValue: "n" })
 
       const result = await runPreflight({
+      prereqs: WITH_TMUX,
         platformInspector: inspector,
         processRunner: runner,
         prompter,
@@ -595,6 +607,7 @@ describe("runPreflight", () => {
       const prompter = new FakePrompter({ confirmValue: "y" })
 
       await runPreflight({
+      prereqs: WITH_TMUX,
         platformInspector: inspector,
         processRunner: runner,
         prompter,
@@ -616,6 +629,7 @@ describe("runPreflight", () => {
       const prompter = new FakePrompter({ confirmValue: "y" })
 
       const result = await runPreflight({
+      prereqs: WITH_TMUX,
         platformInspector: inspector,
         processRunner: runner,
         prompter,
@@ -637,6 +651,7 @@ describe("runPreflight", () => {
       const prompter = new FakePrompter({ confirmValue: "y" })
 
       const result = await runPreflight({
+      prereqs: WITH_TMUX,
         platformInspector: inspector,
         processRunner: runner,
         prompter,
@@ -658,6 +673,7 @@ describe("runPreflight", () => {
       const prompter = new FakePrompter({ confirmValue: "y" })
 
       const result = await runPreflight({
+      prereqs: WITH_TMUX,
         platformInspector: inspector,
         processRunner: runner,
         prompter,
@@ -679,6 +695,7 @@ describe("runPreflight", () => {
       const prompter = new FakePrompter({ confirmValue: "y" })
 
       const result = await runPreflight({
+      prereqs: WITH_TMUX,
         platformInspector: inspector,
         processRunner: runner,
         prompter,
@@ -699,6 +716,7 @@ describe("runPreflight", () => {
       const prompter = new FakePrompter({ confirmValue: "y" })
 
       const result = await runPreflight({
+      prereqs: WITH_TMUX,
         platformInspector: inspector,
         processRunner: runner,
         prompter,
@@ -721,6 +739,7 @@ describe("runPreflight", () => {
       const prompter = new FakePrompter({ confirmValue: "y" })
 
       const result = await runPreflight({
+      prereqs: WITH_TMUX,
         platformInspector: inspector,
         processRunner: runner,
         prompter,
@@ -748,6 +767,7 @@ describe("runPreflight", () => {
       }
 
       const result = await runPreflight({
+      prereqs: WITH_TMUX,
         platformInspector: inspector,
         processRunner: runner,
         prompter,
@@ -769,7 +789,7 @@ describe("runPreflight", () => {
         ["which tailscale", failureResult()],
       ))
 
-      const result = await planPreflight({ platformInspector: inspector, processRunner: runner })
+      const result = await planPreflight({ prereqs: WITH_TMUX, platformInspector: inspector, processRunner: runner })
 
       for (const check of result.checks) {
         if (check.installCmd !== null) {
@@ -788,7 +808,7 @@ describe("runPreflight", () => {
         ["which tailscale", successResult()],
       ))
 
-      const result = await planPreflight({ platformInspector: inspector, processRunner: runner })
+      const result = await planPreflight({ prereqs: WITH_TMUX, platformInspector: inspector, processRunner: runner })
 
       const resultStr = JSON.stringify(result)
       expect(resultStr).not.toContain("0.0.0.0")
@@ -803,6 +823,7 @@ describe("runPreflight", () => {
       const prompter = new FakePrompter({ confirmValue: "y" })
 
       const result = await runPreflight({
+      prereqs: WITH_TMUX,
         platformInspector: inspector,
         processRunner: runner,
         prompter,
@@ -821,6 +842,7 @@ describe("runPreflight", () => {
       const prompter = new FakePrompter({ confirmValue: "y" })
 
       const result = await runPreflight({
+      prereqs: WITH_TMUX,
         platformInspector: inspector,
         processRunner: runner,
         prompter,

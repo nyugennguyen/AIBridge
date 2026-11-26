@@ -341,13 +341,13 @@ describe("runSetupWizard", () => {
 
   it("blocks when prereqs are missing", async () => {
     const { outcome } = await runWizard(
-      { inputs: ["", ""], confirms: ["n"] }, // profile, role; decline installing tmux
-      { processRunner: makeFakeProcessRunner({ tmux: false }) },
+      { inputs: ["", "", "opencode"], confirms: [] }, // profile, role, runtime; opencode has no auto-install
+      { processRunner: makeFakeProcessRunner({ opencode: false }) },
     )
 
     expect(outcome.kind).toBe("blocked")
     if (outcome.kind !== "blocked") return
-    expect(outcome.reason).toContain("Prerequisites missing: tmux")
+    expect(outcome.reason).toContain("Prerequisites missing: opencode")
   })
 
   it("blocks when Tailscale is inactive", async () => {
@@ -782,7 +782,7 @@ describe("node role and runtime", () => {
     expect(fileOps.writtenConfigs[CONFIG("w")]?.runtime).toEqual({ kind: "claude" })
   })
 
-  it("both: requires tmux, the runtime, claude and tailscale", async () => {
+  it("both: requires the runtime, claude and tailscale (not tmux)", async () => {
     const { outcome } = await runWizard(
       { inputs: ["b", "both"], confirms: [] },
       { processRunner: makeFakeProcessRunner({ claude: false, opencode: true }) },

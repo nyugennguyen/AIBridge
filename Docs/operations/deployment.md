@@ -48,9 +48,11 @@ The service restarts the bridge on failure and at login. Its stdout and stderr g
 sudo loginctl enable-linger "$USER"
 ```
 
-`aibr doctor` warns when it is off. Without a user bus (a container, `su` without a login session) `aibr start` fails with the systemd error; use `aibr start --foreground` there.
+`aibr doctor` warns when it is off. Without a user bus (a container, `su` without a login session) `aibr start` fails with the systemd error; use `aibr start --foreground` there (it needs tmux).
 
 ### 2.3 tmux (`--foreground`)
+
+tmux is optional: only this mode needs it, and `aibr start --foreground` exits 1 with the install command when it is absent. The user service does not use tmux.
 
 ```bash
 aibr start --profile <name> --foreground

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 import {
   nodeRoleFromConfig,
   parseNodeRole,
+  optionalPrereqsFor,
   parseRuntimeKind,
   prereqsFor,
 } from "../../../src/host/node-role.js"
@@ -10,11 +11,17 @@ import type { ProcessRunner } from "../../../src/host/types.js"
 
 describe("node role", () => {
   it("prereqsFor maps each role and runtime to its binaries", () => {
-    expect(prereqsFor("worker", "opencode")).toEqual(["tmux", "opencode", "tailscale"])
-    expect(prereqsFor("worker", "claude")).toEqual(["tmux", "claude", "tailscale"])
+    expect(prereqsFor("worker", "opencode")).toEqual(["opencode", "tailscale"])
+    expect(prereqsFor("worker", "claude")).toEqual(["claude", "tailscale"])
     expect(prereqsFor("orchestrator", null)).toEqual(["claude", "tailscale"])
-    expect(prereqsFor("both", "opencode")).toEqual(["tmux", "opencode", "claude", "tailscale"])
-    expect(prereqsFor("both", "claude")).toEqual(["tmux", "claude", "tailscale"])
+    expect(prereqsFor("both", "opencode")).toEqual(["opencode", "claude", "tailscale"])
+    expect(prereqsFor("both", "claude")).toEqual(["claude", "tailscale"])
+  })
+
+  it("optionalPrereqsFor lists tmux only for roles that run jobs", () => {
+    expect(optionalPrereqsFor("worker")).toEqual(["tmux"])
+    expect(optionalPrereqsFor("both")).toEqual(["tmux"])
+    expect(optionalPrereqsFor("orchestrator")).toEqual([])
   })
 
   it("parses roles and runtimes, including short forms, and rejects the rest", () => {
@@ -61,11 +68,12 @@ describe("role-aware preflight", () => {
     }
   }
 
-  it("defaults to the released worker + opencode list", async () => {
-    expect(DEFAULT_PREREQS).toEqual(["tmux", "opencode", "tailscale"])
+  it("defaults to the worker + opencode list (tmux is optional)", async () => {
+    expect(DEFAULT_PREREQS).toEqual(["opencode", "tailscale"])
     const calls: string[] = []
     const result = await planPreflight({ platformInspector: inspector, processRunner: runner([], calls) })
-    expect(result.checks.map((c) => c.name)).toEqual(["tmux", "opencode", "tailscale"])
+    expect(result.checks.map((c) => c.name)).toEqual(["opencode", "tailscale"])
+    expect(calls).not.toContain("which tmux")
   })
 
   it("does not block a Claude-only orchestrator on opencode or tmux", async () => {
@@ -86,7 +94,7 @@ describe("role-aware preflight", () => {
     const calls: string[] = []
     const result = await runPreflight({
       platformInspector: inspector,
-      processRunner: runner(["tmux", "tailscale"], calls),
+      processRunner: runner(["tailscale"], calls),
       prereqs: prereqsFor("worker", "claude"),
     })
 

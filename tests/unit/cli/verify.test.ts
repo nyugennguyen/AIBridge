@@ -222,7 +222,7 @@ describe("runVerify", () => {
     expect(report.profile).toBe("test-profile")
     expect(report.summary).toContain("Status: PASSED")
     expect(report.summary).toContain("Bun runtime")
-    expect(report.summary).toContain("Dependency tmux")
+    expect(report.summary).toContain("tmux: installed (optional)")
     expect(report.summary).toContain("Tailscale active")
     expect(report.summary).toContain("Configuration valid")
     expect(report.summary).toContain("Bearer token secret valid")
@@ -242,7 +242,7 @@ describe("runVerify", () => {
     expect(report.summary).toContain("Bun runtime >= 1.3.0 required")
   })
 
-  it("fails when a prerequisite is missing", async () => {
+  it("warns, but still passes, when tmux is missing", async () => {
     const report = await runVerify("test-profile", {
       processRunner: makeFakeProcessRunner({ tmuxInstalled: false }),
       platformInspector: makeFakePlatformInspector(),
@@ -251,8 +251,23 @@ describe("runVerify", () => {
       bunVersion: "1.3.0",
     })
 
+    expect(report.ok).toBe(true)
+    expect(report.summary).toContain('tmux: not found (optional — only "aibr start --foreground" uses it)')
+    expect(report.summary).toContain("Status: PASSED")
+    expect(report.summary).not.toContain("Dependency tmux")
+  })
+
+  it("fails when a prerequisite is missing", async () => {
+    const report = await runVerify("test-profile", {
+      processRunner: makeFakeProcessRunner({ opencodeInstalled: false }),
+      platformInspector: makeFakePlatformInspector(),
+      fileOps: makeFakeFileOps(),
+      env,
+      bunVersion: "1.3.0",
+    })
+
     expect(report.ok).toBe(false)
-    expect(report.summary).toContain("Dependency tmux: missing")
+    expect(report.summary).toContain("Dependency opencode: missing")
   })
 
   it("fails when Tailscale is not running", async () => {

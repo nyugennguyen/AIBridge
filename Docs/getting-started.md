@@ -17,7 +17,7 @@ Before installing AIBridge, verify that each participating machine meets the fol
 | Component | Minimum Version | Purpose |
 |---|---|---|
 | [Bun](https://bun.sh) | `>= 1.3.0` | Runtime for AIBridge CLI and worker daemon. |
-| [tmux](https://github.com/tmux/tmux) | `>= 3.0` | Process supervision for headless background sessions. |
+| [tmux](https://github.com/tmux/tmux) | `>= 3.0` (optional) | Only for `aibr start --foreground`. The default user service does not use it; `aibr verify` warns when it is missing. |
 | [OpenCode](https://opencode.ai) | Latest | Agent execution runtime. Bound strictly to `127.0.0.1:4096`. Install with `bun install -g opencode-ai`. |
 | [Tailscale](https://tailscale.com) | Running | Private WireGuard mesh network (`100.64.0.0/10`). Never exposed to public internet. |
 
@@ -39,9 +39,9 @@ For non-interactive or CI environments, pass `--yes`:
 curl -fsSL https://raw.githubusercontent.com/nyugennguyen/AIBridge/main/scripts/install.sh | bash -s -- --yes
 ```
 
-Prompts are read from `/dev/tty`, so piping works; with no terminal, use `--yes`. Choose the machine's role with `--role worker|orchestrator|both` (default `worker`) and the agent runtime with `--runtime opencode|claude|auto`. A worker needs Tailscale, tmux, and OpenCode or Claude Code; an orchestrator needs Tailscale and Claude Code only. Add `--with-claude-plugin` to install the Claude Code plugin when your `aibr` version provides the plugin installer.
+Prompts are read from `/dev/tty`, so piping works; with no terminal, use `--yes`. Choose the machine's role with `--role worker|orchestrator|both` (default `worker`) and the agent runtime with `--runtime opencode|claude|auto`. A worker needs Tailscale and OpenCode or Claude Code (tmux is optional, only for `aibr start --foreground`); an orchestrator needs Tailscale and Claude Code only. Add `--with-claude-plugin` to install the Claude Code plugin when your `aibr` version provides the plugin installer.
 
-The installer verifies prerequisites for the chosen role, offers to install tmux and Tailscale (Tailscale via its official installer, after confirmation; then run `sudo tailscale up`), installs the `@nyugennguyen/aibridge` package via Bun, offers to add Bun's global bin directory to your shell rc if `aibr` is not on `$PATH`, and ends with a summary of anything still missing. OpenCode and Claude Code are never installed automatically; the installer prints their install commands. Router and ingress-store provisioning only happens with `--ingress router`, and `--with-units` requires running the script from a repository checkout.
+The installer verifies prerequisites for the chosen role, offers to install Tailscale (via its official installer, after confirmation; then run `sudo tailscale up`), installs the `@nyugennguyen/aibridge` package via Bun, offers to add Bun's global bin directory to your shell rc if `aibr` is not on `$PATH`, and ends with a summary of anything still missing. OpenCode and Claude Code are never installed automatically; the installer prints their install commands. Router and ingress-store provisioning only happens with `--ingress router`, and `--with-units` requires running the script from a repository checkout.
 
 ### Manual Package Installation
 
@@ -97,9 +97,11 @@ For a typical two-machine setup, run `aibr init` on the worker first and paste t
 
 1. **Node role:** `worker` (runs jobs on this machine; the default), `orchestrator` (Claude Code dispatches work from this machine), or `both`. For a worker, the runtime — `opencode` or `claude` — is detected on `PATH` and only asked when both or neither are installed.
 2. **Preflight:** checks only what the role needs and offers to install what it can (with confirmation):
-   - worker + opencode: `tmux`, `opencode`, `tailscale`
-   - worker + claude: `tmux`, `claude`, `tailscale`
+   - worker + opencode: `opencode`, `tailscale`
+   - worker + claude: `claude`, `tailscale`
    - orchestrator: `claude`, `tailscale`
+
+   `tmux` is not required; `aibr verify` and `aibr doctor` report it as an optional warning, and only `aibr start --foreground` needs it.
 
    Tailscale must be up (`BackendState: Running`) with a Tailscale IPv4 address; the bridge binds to it.
 3. **Bearer token:** generate a 256-bit CSPRNG token (default), paste an existing one, or type `none` (refused unless the bridge binds a Tailscale CGNAT address, and only after an explicit confirmation). Secrets are saved with `0600` permissions and are never echoed while you type or paste them.

@@ -110,8 +110,8 @@ AIBridge is tested and supported on:
 
 Ensure each participating machine has:
 - [Bun](https://bun.sh) `>= 1.3.0` (install from bun.sh)
-- [tmux](https://github.com/tmux/tmux) `>= 3.0` on workers (used by `aibr start --foreground`; the default is a launchd/systemd user service)
-- An agent runtime on workers: [OpenCode](https://opencode.ai) bound strictly to loopback `127.0.0.1:4096` (`bun install -g opencode-ai`) or [Claude Code](https://claude.com/claude-code) 2.1.x or newer, logged in (`claude` once, or `CLAUDE_CODE_OAUTH_TOKEN` / `ANTHROPIC_API_KEY`). An orchestrator-only machine needs Claude Code but not OpenCode or tmux.
+- [tmux](https://github.com/tmux/tmux) `>= 3.0` is optional: only `aibr start --foreground` uses it (the default is a launchd/systemd user service). `aibr verify` and `aibr doctor` warn, not fail, when it is missing
+- An agent runtime on workers: [OpenCode](https://opencode.ai) bound strictly to loopback `127.0.0.1:4096` (`bun install -g opencode-ai`) or [Claude Code](https://claude.com/claude-code) 2.1.x or newer, logged in (`claude` once, or `CLAUDE_CODE_OAUTH_TOKEN` / `ANTHROPIC_API_KEY`). An orchestrator-only machine needs Claude Code but not OpenCode.
 - [Tailscale](https://tailscale.com) installed, logged in, and authenticated (bridge binds to private Tailscale IPv4, never public Internet)
 
 ---
@@ -130,7 +130,7 @@ curl -fsSL https://raw.githubusercontent.com/nyugennguyen/AIBridge/main/scripts/
 curl -fsSL https://raw.githubusercontent.com/nyugennguyen/AIBridge/main/scripts/install.sh | bash -s -- --role orchestrator
 ```
 
-Prompts are read from your terminal (`/dev/tty`), so the one-liner works when piped; without a terminal, pass `--yes`. Flags: `--role worker|orchestrator|both`, `--runtime opencode|claude|auto`, `--with-claude-plugin`, `--ingress router`, `--with-units` (needs a repository checkout). The installer offers to install tmux and Tailscale, never installs OpenCode or Claude Code (it prints the install command), and offers to add Bun's bin directory to your shell `PATH`.
+Prompts are read from your terminal (`/dev/tty`), so the one-liner works when piped; without a terminal, pass `--yes`. Flags: `--role worker|orchestrator|both`, `--runtime opencode|claude|auto`, `--with-claude-plugin`, `--ingress router`, `--with-units` (needs a repository checkout). The installer offers to install Tailscale, never installs OpenCode or Claude Code (it prints the install command), and only prints a note (no prompt) when tmux is absent on a worker, and offers to add Bun's bin directory to your shell `PATH`.
 
 Manual fallback via Bun:
 

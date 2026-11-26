@@ -58,7 +58,11 @@ export const projectConfigSchema = z.object({
   capabilities: z.array(z.string().min(1)),
 })
 
-/** Terminal backend selection. Default "tmux" for headless safety. */
+/**
+ * Terminal backend selection. Default "tmux" for headless safety.
+ * "herdr" is deprecated since 3.1.1 (backend removed): still accepted so older
+ * profiles load, ignored, and `loadConfig` warns. Remove in 3.2.0.
+ */
 export const terminalBackendSchema = z.enum(["tmux", "herdr"])
 export const terminalConfigSchema = z.object({
   backend: terminalBackendSchema.default("tmux"),

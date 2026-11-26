@@ -54,15 +54,10 @@ import {
   type BudgetReservation,
 } from "../../src/budgets/index.js"
 import {
-  buildNotificationTuiView,
   createNotificationBus,
   createNotificationStore,
-  createNotificationTuiAdapter,
-  initialNotificationTuiState,
-  loadNotificationTuiEntries,
   auditNotificationPayload,
   notificationEnvelopeSchema,
-  notificationNoticeLine,
   notificationRequestSchema,
   NOTIFICATION_EGRESS_PATHS,
   type NotificationAdapter,
@@ -116,6 +111,7 @@ import {
   type ResolvedStep,
   type RunTemplateInput,
 } from "../../src/workflows/index.js"
+import { createInMemoryAdapter } from "../unit/notifications/fixtures.js";
 import { InMemoryLocalApplicationService } from "../../src/application/service.js"
 import { runtimeSessionSchema } from "../../src/runtime/schemas.js"
 import {
@@ -1485,44 +1481,33 @@ export interface NotificationHarness {
   readonly clock: ReturnType<typeof notificationClock>;
   readonly store: ReturnType<typeof createNotificationStore>;
   readonly bus: ReturnType<typeof createNotificationBus>;
-  readonly tui: ReturnType<typeof createNotificationTuiAdapter>;
+  readonly tui: NotificationAdapter;
   /** The store's entries at rest, for an audit's `inbox_at_rest` path. */
   readonly entriesAtRest: () => readonly unknown[];
-  /** The rendered view's lines, built through the shipped reducer and view builder. */
-  readonly renderedLines: () => readonly string[];
-  /** The one-line notice the shell would show. */
-  readonly noticeLine: () => string | null;
 }
 
 /**
- * A store, a bus, the shipped in-TUI adapter and a clock, wired the way M6.8
+ * A store, a bus, an in-memory delivery adapter and a clock, wired the way M6.8
  * wires them.
- *
- * The rendered view goes through the REAL reducer and the REAL view builder, so a
- * no-secret assertion is made against text the product would actually show rather
- * than against a hand-written approximation of it.
  */
 export function notificationHarness(
   options: { readonly quieting?: NotificationQuieting; readonly adapters?: readonly NotificationAdapter[] } = {},
 ): NotificationHarness {
   const clock = notificationClock();
   const store = createNotificationStore({ clock });
-  const tui = createNotificationTuiAdapter();
+  const tui = createInMemoryAdapter();
   const bus = createNotificationBus({
     store,
     adapters: options.adapters ?? [tui],
     clock,
     ...(options.quieting === undefined ? {} : { quieting: options.quieting }),
   });
-  const stateAt = () => loadNotificationTuiEntries(store, initialNotificationTuiState(clock.now()), clock.now());
   return {
     clock,
     store,
     bus,
     tui,
     entriesAtRest: () => store.entries(),
-    renderedLines: () => buildNotificationTuiView(stateAt()).lines,
-    noticeLine: () => notificationNoticeLine(stateAt()),
   };
 }
 

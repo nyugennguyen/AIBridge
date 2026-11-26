@@ -38,7 +38,7 @@
  *
  * `NotificationAuditInput` declares every payload field as `unknown` and declares the
  * rendered view as `{ title?, lines }`. It does NOT import `NotificationEnvelope` or
- * `NotificationTuiViewModel`. So this test feeds the audit deliberately malformed
+ * the view-model type. So this test feeds the audit deliberately malformed
  * values — which it must be able to do, because a schema-derived type would have thrown
  * before the audit could look at the thing it exists to look at.
  */
@@ -48,16 +48,10 @@ import {
   MAX_NOTIFICATION_SUMMARY_CHARACTERS,
   NOTIFICATION_EGRESS_PATHS,
   auditNotificationPayload,
-  buildNotificationTuiView,
   createNotificationStore,
   describeNotificationAudit,
   findSeededNotificationSecret,
-  initialNotificationTuiState,
-  loadNotificationTuiEntries,
   notificationEnvelopeSchema,
-  notificationNoticeLine,
-  reduceNotificationTui,
-  routeNotificationKey,
   type NotificationAuditResult,
 } from "../../../src/notifications/index.js"
 import {
@@ -461,17 +455,13 @@ describe("M6.9 the audit says which paths it examined", () => {
 })
 
 describe("M6.9 a notification the bus produced carries nothing an audit would flag", () => {
-  it("audits clean across all four paths for a real emitted notification", async () => {
+  it("audits clean across the store paths for a real emitted notification", async () => {
     const { bus, store } = testHarness()
     await bus.emit(notificationRequest())
-    const state = loadNotificationTuiEntries(store, initialNotificationTuiState(FIXED_NOW), FIXED_NOW)
-    const view = buildNotificationTuiView(state)
     const result = auditNotificationPayload({
       seededSecrets: ALL_NOTIFICATION_CANARIES,
       envelopes: store.entries().map((entry) => entry.envelope),
       inboxEntries: store.entries(),
-      rendered: { title: view.title, lines: view.lines },
-      notice: notificationNoticeLine(state),
     })
     expect(result.findings).toEqual([])
     expect(result.passed).toBe(true)
@@ -489,14 +479,10 @@ describe("M6.9 a notification the bus produced carries nothing an audit would fl
         nodeId: "node-1",
       }),
     )
-    const state = loadNotificationTuiEntries(store, initialNotificationTuiState(FIXED_NOW), FIXED_NOW)
-    const view = buildNotificationTuiView(state)
     const result = auditNotificationPayload({
       seededSecrets: ALL_NOTIFICATION_CANARIES,
       envelopes: store.entries().map((entry) => entry.envelope),
       inboxEntries: store.entries(),
-      rendered: { title: view.title, lines: view.lines },
-      notice: notificationNoticeLine(state),
     })
     expect(result.passed).toBe(true)
   })
@@ -505,42 +491,8 @@ describe("M6.9 a notification the bus produced carries nothing an audit would fl
     const { bus, store } = testHarness()
     const [result] = await bus.emit(notificationRequest())
     store.acknowledge(result!.notificationId)
-    const state = loadNotificationTuiEntries(store, initialNotificationTuiState(FIXED_NOW), FIXED_NOW)
-    expect(notificationNoticeLine(state)).toBeNull()
-  })
-})
-
-describe("M6.9 a muted entry's subject is not rendered", () => {
-  it("withholds the subject line of a muted row but keeps its severity", async () => {
-    // A user who silenced a category asked not to be shown it; rendering the subject
-    // one glance later is showing it anyway. Severity survives because hiding
-    // "critical" would hide the reason to un-mute (tui-adapter.ts, `withheldDetail`).
-    const { bus, store } = testHarness({ quieting: { categories: ["run_blocked"], severities: [], pairs: [] } })
-    await bus.emit(notificationRequest({ runId: "run-secret-subject", ruleId: "rule-1" }))
-    const state = loadNotificationTuiEntries(store, initialNotificationTuiState(FIXED_NOW), FIXED_NOW)
-    const view = buildNotificationTuiView(state)
-    expect(view.rows[0]!.withheldDetail).toBe(true)
-    const rendered = view.lines.join("\n")
-    expect(rendered).not.toContain("run-secret-subject")
-    expect(rendered).toContain("critical")
-  })
-
-  it("still renders the subject of an unmuted row", async () => {
-    const { bus, store } = testHarness()
-    await bus.emit(notificationRequest({ runId: "run-1" }))
-    const state = loadNotificationTuiEntries(store, initialNotificationTuiState(FIXED_NOW), FIXED_NOW)
-    const view = buildNotificationTuiView(state)
-    expect(view.rows[0]!.withheldDetail).toBe(false)
-    expect(view.lines.join("\n")).toContain("run-1")
-  })
-
-  it("refuses pasted text on the notification screen rather than echoing it", () => {
-    // A searchable notification list would be a place content could be echoed back, so
-    // a paste is refused with a reason (N2, S13).
-    const state = initialNotificationTuiState(FIXED_NOW)
-    const intent = routeNotificationKey(state, { type: "paste", text: NOTIFICATION_CANARIES.prompt })
-    expect(intent.type).toBe("reject")
-    if (intent.type === "reject") expect(intent.reason).not.toContain(NOTIFICATION_CANARIES.prompt)
+    expect(store.pendingCount()).toBe(0)
+    expect(auditNotificationPayload({ seededSecrets: ALL_NOTIFICATION_CANARIES, envelopes: store.entries().map((entry) => entry.envelope), inboxEntries: store.entries() }).passed).toBe(true)
   })
 })
 
@@ -559,13 +511,5 @@ describe("M6.9 the store refuses an envelope the schema rejects", () => {
       // the store's state rather than about the throw.
     }
     expect(store.entries()).toEqual([])
-  })
-})
-
-describe("M6.9 the reducer cannot be made to render content", () => {
-  it("renders nothing from an entry that is not in the state", () => {
-    const state = initialNotificationTuiState(FIXED_NOW)
-    const next = reduceNotificationTui(state, { type: "entries-loaded", entries: [], now: FIXED_NOW })
-    expect(buildNotificationTuiView(next).lines.join("\n")).not.toContain("run-1")
   })
 })

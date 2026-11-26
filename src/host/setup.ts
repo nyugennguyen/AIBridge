@@ -35,7 +35,6 @@ export interface SetupPersisted {
   readonly profileName: string
   readonly configPath: string
   readonly preflight: PreflightResult
-  readonly launchTui?: boolean
   /**
    * What happened to the platform supervisor unit, if one was written.
    *

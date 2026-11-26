@@ -31,10 +31,10 @@ import {
   DEFAULT_NOTIFICATION_RETENTION_WINDOW_MS,
   createNotificationBus,
   createNotificationStore,
-  createNotificationTuiAdapter,
 } from "../../../src/notifications/index.js"
 import {
   FORGED_ENVELOPE_FIELDS,
+  createInMemoryAdapter,
   createTestClock,
   identityRecordingAdapter,
   nestedVandalousAdapter,
@@ -258,7 +258,7 @@ describe("M6.9 a duplicate is invisible to the producer", () => {
     // visible to the producer, which is the coupling N3 forbids.
     const clock = createTestClock()
     const store = createNotificationStore({ clock })
-    const tui = createNotificationTuiAdapter()
+    const tui = createInMemoryAdapter()
     const bus = createNotificationBus({ store, adapters: [tui], clock })
     await bus.emit(notificationRequest())
     const second = await bus.emit(notificationRequest())

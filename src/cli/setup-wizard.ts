@@ -821,7 +821,6 @@ export interface WizardState {
   peerId: string
   peerUrl: string
   bridgePort: number
-  launchTui: boolean
 }
 
 // ── Role & runtime ─────────────────────────────────────────────────────────
@@ -1539,7 +1538,6 @@ export class StepperFSM {
       peerId: "peer",
       peerUrl: "http://100.64.0.2:8787",
       bridgePort: 8787,
-      launchTui: false,
     }
   }
 

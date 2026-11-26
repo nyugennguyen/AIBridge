@@ -84,7 +84,6 @@ function fakeDeps(overrides: {
     runWorker: refuse,
     statusProfile: refuse,
     runOpencode: refuse,
-    runTui: (async () => { throw new Error("discover must not start a TUI") }) as CliDeps["runTui"],
     runBundle: (async () => { throw new Error("discover must not build a bundle") }) as CliDeps["runBundle"],
     verifyProfile: refuse,
     runUpdate: refuse,

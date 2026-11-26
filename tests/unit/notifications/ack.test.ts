@@ -29,12 +29,8 @@
 import { describe, expect, it } from "vitest"
 import {
   DEFAULT_NOTIFICATION_RETENTION_WINDOW_MS,
-  acknowledgeNotificationEntries,
   createNotificationBus,
   createNotificationStore,
-  initialNotificationTuiState,
-  loadNotificationTuiEntries,
-  routeNotificationKey,
 } from "../../../src/notifications/index.js"
 import {
   FIXED_NOW,
@@ -119,11 +115,10 @@ describe("M6.9 acknowledging an unknown id is a no-op and not an error", () => {
     const { bus, store } = testHarness()
     const [first] = await bus.emit(notificationRequest({ dedupeKey: "k-one" }))
     const [second] = await bus.emit(notificationRequest({ dedupeKey: "k-two" }))
-    const removed = acknowledgeNotificationEntries(store, [
-      "ntf-999999" as never,
-      first!.notificationId,
-      second!.notificationId,
-    ])
+    let removed = 0
+    for (const id of ["ntf-999999" as never, first!.notificationId, second!.notificationId]) {
+      if (store.acknowledge(id)) removed += 1
+    }
     expect(removed).toBe(2)
     expect(store.list()).toEqual([])
   })
@@ -338,7 +333,7 @@ describe("N14 acknowledgement still works against a frozen record", () => {
     expect(store.findByDedupeKey("run_blocked:run-1:task-1:rule-1")).toBeNull()
   })
 
-  it("acknowledges every pending id from a rendered view after a forgery attempt", async () => {
+  it("acknowledges every pending id from the store after a forgery attempt", async () => {
     // The TUI's write path end to end: the shell reads `store.entries()` into state,
     // the reducer turns a keystroke into ids, and the shell acknowledges them. Every
     // value in that chain is now frozen, and the chain still works — which is the
@@ -349,12 +344,16 @@ describe("N14 acknowledgement still works against a frozen record", () => {
     const bus = createNotificationBus({ store, adapters: [vandalousAdapter("v1")], clock })
     await bus.emit(notificationRequest({ dedupeKey: "k-one" }))
     await bus.emit(notificationRequest({ dedupeKey: "k-two" }))
-    const state = loadNotificationTuiEntries(store, initialNotificationTuiState(FIXED_NOW), FIXED_NOW)
-    const intent = routeNotificationKey(state, { type: "key", name: "a" })
-    expect(intent.type).toBe("acknowledge")
-    const ids = intent.type === "acknowledge" ? intent.notificationIds : []
+    const ids = store
+      .entries()
+      .filter((entry) => entry.disposition === "pending")
+      .map((entry) => entry.envelope.notificationId)
     expect(ids).toHaveLength(2)
-    expect(acknowledgeNotificationEntries(store, ids)).toBe(2)
+    let removed = 0
+    for (const id of ids) {
+      if (store.acknowledge(id)) removed += 1
+    }
+    expect(removed).toBe(2)
     expect(store.entries()).toEqual([])
     expect(store.pendingCount()).toBe(0)
   })

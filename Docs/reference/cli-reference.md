@@ -36,7 +36,6 @@ Commands:
   status   Check the service or tmux session and bridge health
   verify   Validate role-specific dependencies, bearer token, and config
   update   Check and update to the latest version
-  tui      Open the interactive manager (Herdr plugin)
   bundle   Generate diagnostic support bundle
   plugin   Install/remove the AIBridge plugin for Claude Code
   mcp      MCP server used by the Claude Code plugin (serve, summary)
@@ -48,7 +47,7 @@ Commands:
   stop     Stop a profile's service and tmux session, or every running job (--all-jobs)
 
 Options:
-  --profile, -p <name>   Profile name (required for start/serve/worker/status/tui)
+  --profile, -p <name>   Profile name (required for start/serve/worker/status)
   --config <path>        Config file to write instead of the standard path (for setup)
   --advanced             Also ask for bridge and OpenCode ports (for setup)
   --foreground, --tmux   Run in the tmux session aibridge-<profile> (for start)

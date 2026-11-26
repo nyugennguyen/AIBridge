@@ -1275,16 +1275,14 @@ describe("M6.10 — notification delivery cannot affect orchestration state, and
       }),
     );
 
-    // The shipped audit, over all four paths, with the canaries declared in the
+    // The shipped audit, over the payload and at-rest paths, with the canaries declared in the
     // FIXTURES rather than produced by the module under audit.
     const audit = auditNotificationPayload({
       seededSecrets: everyCanary(),
       envelopes: recorder.calls,
       inboxEntries: harness.entriesAtRest(),
-      rendered: { title: "AIBridge — Notifications", lines: harness.renderedLines() },
-      notice: harness.noticeLine(),
     });
-    expect([...audit.examinedPaths].sort()).toEqual([...NOTIFICATION_EGRESS_PATHS].sort());
+    expect([...audit.examinedPaths].sort()).toEqual(["envelope_payload", "inbox_at_rest"]);
     expect(audit.findings, `a canary left the notification: ${JSON.stringify(audit.findings)}`).toEqual([]);
     expect(audit.passed).toBe(true);
 
@@ -1292,7 +1290,6 @@ describe("M6.10 — notification delivery cannot affect orchestration state, and
     // the inbox at rest, every rendered line and the notice line.
     const findings = auditForCanaries({
       artifact: { envelopes: recorder.calls, inbox: harness.entriesAtRest() },
-      renderedText: [...harness.renderedLines(), harness.noticeLine() ?? ""],
       seededCanaries: Object.values(CANARIES),
     });
     expect(findings).toEqual([]);
@@ -1322,7 +1319,7 @@ describe("M6.10 — notification delivery cannot affect orchestration state, and
 
   it("the audit CATCHES a producer that puts content in, so the clean result is not a blind one", async () => {
     // The converse, and the reason the clean result above means anything: a canary
-    // placed in the summary is found at all four paths.
+    // placed in the summary is found at the payload and at-rest paths.
     const recorder = recordingAdapter("recorder");
     const harness = notificationHarness({ adapters: [recorder] });
     await harness.bus.emit(notificationRequest({ summary: `blocked while running: ${CANARIES.stepTitle}` }));
@@ -1330,16 +1327,12 @@ describe("M6.10 — notification delivery cannot affect orchestration state, and
       seededSecrets: everyCanary(),
       envelopes: recorder.calls,
       inboxEntries: harness.entriesAtRest(),
-      rendered: { lines: harness.renderedLines() },
-      notice: harness.noticeLine(),
     });
     expect(audit.passed).toBe(false);
     expect(audit.findings.length).toBeGreaterThan(0);
     const paths = new Set(audit.findings.map((finding) => finding.path));
     expect(paths.has("envelope_payload")).toBe(true);
     expect(paths.has("inbox_at_rest")).toBe(true);
-    expect(paths.has("tui_render")).toBe(true);
-    expect(paths.has("notice_line")).toBe(true);
     for (const finding of audit.findings) {
       expect(finding.severity).toBe("blocker");
       // The finding names the field and the path, never the content: a reviewer's

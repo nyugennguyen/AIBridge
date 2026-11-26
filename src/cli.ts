@@ -140,7 +140,7 @@ export interface CliDeps {
   }>
   /** Run `opencode serve` for a given profile. */
   readonly runOpencode: (profile: string) => Promise<void>
-  /** Process runner for executing system commands (Herdr, etc.). */
+  /** Process runner for executing system commands (tmux, tailscale, etc.). */
   readonly processRunner?: ProcessRunner
   /** Generate diagnostic support bundle. */
   readonly runBundle?: (profile: string, options?: { readonly preview?: boolean }) => Promise<CliExitCode>
@@ -193,7 +193,7 @@ export interface SetupCommandOptions {
 
 const PROG = "aibr"
 
-const COMMANDS = ["setup", "start", "serve", "worker", "status", "verify", "update", "tui", "bundle", "discover"] as const
+const COMMANDS = ["setup", "start", "serve", "worker", "status", "verify", "update", "bundle", "discover"] as const
 const ALL_COMMANDS = [...COMMANDS, "_opencode"] as const
 
 // ── Argv parsing ───────────────────────────────────────────────────────
@@ -233,8 +233,6 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
       knownFlags.push("--version")
     } else if (arg === "--shadow-mode") {
       knownFlags.push("--shadow-mode")
-    } else if (arg === "--ipc-publish") {
-      knownFlags.push("--ipc-publish")
     } else if (arg === "--preview") {
       // Known, and therefore NOT pushed onto `unknownFlags`. It used to be
       // pushed onto both lists, which made the unknown-flag guard below reject
@@ -314,7 +312,6 @@ function helpText(): string {
     "  --help, -h             Show this help",
     "  --version, -v          Show version",
     "  --shadow-mode          Run in shadow mode (mirroring ingress to router)",
-    "  --ipc-publish          Deprecated and ignored since 3.1.1 (the IPC bus was removed)",
     "",
     `Run "${PROG} <command> --help" for help on one command.`,
     "",
@@ -585,7 +582,7 @@ async function readEnrolledAgentIds(profile: string | undefined): Promise<readon
 /**
  * Bumped when a field is removed or changes meaning, never for an addition.
  *
- * The Herdr agent-manager plugin parses this document, so a consumer pinned to
+ * External consumers parse this document, so a consumer pinned to
  * `schemaVersion: 1` must be able to trust that `peers[i].reachable` still
  * means what it meant when it pinned. Additive keys stay additive.
  */
@@ -1012,18 +1009,6 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<Cl
     }
   }
 
-  // ── tui (removed in 3.1.1) ─────────────────────────────────────────
-  // The Herdr manager launcher is gone; the command stays one release so a
-  // script or habit gets a pointer instead of "unknown command".
-  if (command === "tui") {
-    deps.writer(
-      "aibr tui was removed in 3.1.1 (the Herdr manager is no longer supported).\n" +
-        "Use Claude Code with the AIBridge plugin to dispatch and follow jobs, and on the worker:\n" +
-        "  aibr jobs pending   aibr approve <job_id>   aibr logs -f   aibr stop --all-jobs\n",
-    )
-    return 1
-  }
-
   // ── Commands that require --profile ────────────────────────────────
   const profileErr = validateProfileArg(args.profile)
   if (profileErr !== null) {
@@ -1100,10 +1085,6 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<Cl
   // ── worker ─────────────────────────────────────────────────────────
   if (command === "worker") {
     try {
-      if (args.hasFlag("--ipc-publish")) {
-        // Accepted so a service unit written by an earlier release keeps starting.
-        deps.writer("warning: --ipc-publish is deprecated and ignored since 3.1.1 (the IPC bus was removed)\n")
-      }
       await deps.runWorker(profile)
       return 0
     } catch (err) {

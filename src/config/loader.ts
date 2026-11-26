@@ -2,9 +2,8 @@ import { readFile } from "node:fs/promises"
 import { bridgeConfigSchema } from "./schemas.js"
 import type { BridgeConfig } from "./types.js"
 
-export const HERDR_BACKEND_DEPRECATION =
-  'warning: terminal.backend "herdr" is deprecated and ignored since 3.1.1 (the Herdr backend was removed); ' +
-  'remove the "terminal" block or set it to "tmux".\n'
+export const TERMINAL_KEY_IGNORED =
+  'warning: "terminal" is no longer a config key and is ignored (removed in 3.2.0); delete it from the profile.\n'
 
 export async function loadConfig(
   path: string,
@@ -12,9 +11,10 @@ export async function loadConfig(
     process.stderr.write(message)
   },
 ): Promise<BridgeConfig> {
-  const raw = await readFile(path, "utf8")
-  const config = bridgeConfigSchema.parse(JSON.parse(raw))
-  // Still accepted so a profile written for 3.1.0 or earlier keeps loading.
-  if (config.terminal.backend === "herdr") warn(HERDR_BACKEND_DEPRECATION)
+  const raw: unknown = JSON.parse(await readFile(path, "utf8"))
+  const config = bridgeConfigSchema.parse(raw)
+  // The schema is not strict, so a profile written for 3.1.x keeps loading.
+  // Drop this warning in 3.3.0.
+  if (typeof raw === "object" && raw !== null && "terminal" in raw) warn(TERMINAL_KEY_IGNORED)
   return config
 }

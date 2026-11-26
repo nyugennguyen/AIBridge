@@ -27,6 +27,7 @@ import type {
   TriggerRequest,
 } from "../config/types.js"
 import { claudeConfigSchema } from "../config/schemas.js"
+import { approvalRequired } from "../planning/approval.js"
 import type { JobManager } from "../jobs/manager.js"
 import type { JobRecord, RuntimeJobResult, RuntimeJobUsage } from "../jobs/types.js"
 import type { RepoWorkspaceManager } from "./repo-workspace.js"
@@ -171,12 +172,12 @@ export function authorizeClaudeCapability(config: BridgeConfig, trigger: Trigger
   if (profile === undefined) {
     return { ok: false, statusCode: 403, body: { error: "Unknown capability profile", code: "unknown_capability_profile" } }
   }
-  const source = config.security.allowed_sources.find((candidate) => candidate.source_agent_id === trigger.source_agent_id)
-  const approvalRequired =
-    profile.requires_approval ||
-    config.planning.require_approval_for.includes(trigger.capability) ||
-    (source?.requires_plan_approval.includes(trigger.capability) ?? false)
-  return { ok: true, name: trigger.capability, profile, approvalRequired }
+  return {
+    ok: true,
+    name: trigger.capability,
+    profile,
+    approvalRequired: approvalRequired(config, trigger, { profileRequiresApproval: profile.requires_approval }),
+  }
 }
 
 /** Concurrent Claude/script jobs this node runs: `limits.max_concurrent_jobs`, default 2. */

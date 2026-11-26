@@ -190,7 +190,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
           timeoutMs: job.trigger.timeout_seconds * 1000,
           pollIntervalMs: 1000,
           permissionPolicy: new StaticPermissionPolicy(config.permissions),
-          planMetadata: job.trigger.metadata,
+          operatorApproved: job.approval?.status === "approved",
         })
         terminalJob = await jobManager.markCompleted(job.id)
         await taskGraphSyncer.syncJobToTask(job.trigger.task_id ?? `#${job.id}`, "done")

@@ -24,7 +24,7 @@ This directory is the canonical repository for all formal Architecture Decision 
 | [**ADR 0010**](0010-tui-daemon-modernization.md) | TUI & Daemon Modernization | Superseded by 0014 | 2026-10-07 | Terminal UI state machine and daemon communication (superseded by Herdr plugin in ADR 0011). |
 | [**ADR 0011**](0011-herdr-orchestration-architecture.md) | Herdr Orchestration Architecture | Superseded by 0014 | 2026-10-08 | Definitive separation: Herdr owns terminal presentation; AIBridge kernel owns intent. |
 | [**ADR 0012**](0012-request-signing-and-pairing.md) | Request Signing & Pairing | Accepted | 2026-11-25 | ed25519 node signatures on `/trigger` and `/report` (`security.request_signing`) and `aibr enroll` pairing; refused in router mode. |
-| [**ADR 0013**](0013-operator-approval-ledger.md) | Operator Approval Ledger | Accepted | 2026-11-25 | Claude-runtime jobs held as `awaiting_approval`; operator-only, same-host approve/reject; hash-chained local approval ledger instead of kernel dispatch approval. |
+| [**ADR 0013**](0013-operator-approval-ledger.md) | Operator Approval Ledger | Accepted | 2026-11-25 | Approval-gated jobs (every runtime since the 3.1.2 amendment) held as `awaiting_approval`; operator-only, same-host approve/reject; hash-chained local approval ledger instead of kernel dispatch approval. |
 | [**ADR 0014**](0014-claude-is-the-operator-interface.md) | Claude Is the Operator Interface | Accepted | 2026-11-26 | Claude Code with the AIBridge plugin is the main interface; human-only actions stay in the `aibr` CLI; TUI, Herdr, terminal gateway and IPC bus removed in 3.1.1. |
 
 ---

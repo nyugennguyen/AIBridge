@@ -1,7 +1,7 @@
 # Runbook: Claude Code dev → staging
 
 > **Status:** Current
-> **Applies to:** AIBridge 3.1.1
+> **Applies to:** AIBridge 3.2.0
 > **Owner:** Maintainers
 
 This runbook is for the operator of a two-node setup: a **dev** machine where Claude Code acts as the orchestrator through the AIBridge plugin, and a **staging** worker (a VPS or cloud VM) that runs Claude Code jobs under capability profiles. It is Phase 7 of the [Claude adapter & plugin plan](../implementation-plans/claude-adapter-and-plugin.md).
@@ -184,11 +184,13 @@ A revoked peer can only come back through a fresh code (`aibr enroll issue`, the
 
 `security.request_signing` in `<config>/config.json` on the worker:
 
-| Value | `/trigger` and `/report` |
-|---|---|
-| `off` (or absent) | Signatures ignored; bearer token only. Profiles created before Phase 3. |
-| `optional` | Signed requests are verified; unsigned ones still pass on the bearer. |
-| `required` | Unsigned → `401 signature_required`; unpinned or revoked key → 403; replay → 401; `source_agent_id` must match the signing key (`403 identity.source_mismatch`). New profiles from `aibr setup`. |
+| Value | `/trigger` and `/report` | `GET /jobs/:id` (since 3.2.0) |
+|---|---|---|
+| `off` (or absent) | Signatures ignored; bearer token only. Profiles created before Phase 3. | Bearer (or operator credential) required; any bearer holder reads any job. Anonymous reads are refused (401). |
+| `optional` | Signed requests are verified; unsigned ones still pass on the bearer. | Unsigned bearer reads any job; a signed request reads only the signer's own jobs (`403 not_job_requester`). |
+| `required` | Unsigned → `401 signature_required`; unpinned or revoked key → 403; replay → 401; `source_agent_id` must match the signing key (`403 identity.source_mismatch`). New profiles from `aibr setup`. | Signed requests only, and only the signer's own jobs. |
+
+The operator credential (rules of `aibr approve`, from this host by default) reads every job on every mode. `GET /jobs`, `GET /jobs/:id/events` and `POST /jobs/:id/cancel` always need a signature or the operator credential.
 
 To move an older profile to `required`:
 
@@ -241,6 +243,23 @@ aibr reject <job_id> --reason "touches the payment module" --profile staging
 - If the node is already at `limits.max_concurrent_jobs`, `approve` answers `429 node_at_capacity` and the job stays pending: approve again later.
 
 The plugin has no approve tool on purpose. When Claude Code on dev reports `approval_required`, it should stop and ask you; it must not retry.
+
+## List, follow and cancel jobs
+
+```bash
+aibr jobs --profile staging                    # every job on this node, newest first (operator token, run on the worker)
+aibr jobs --status running --limit 20 --json  # filter; one JSON document
+aibr jobs --watch                              # refresh every 2 s until Ctrl-C (one line per change when not on a terminal)
+aibr jobs --all-nodes --profile dev            # ask every peer in agents[] (signed); a peer shows only jobs THIS node dispatched
+aibr job <job_id>                              # status, source, project, result
+aibr job <job_id> --events -f                  # what it did, until it ends (aibr attach <job_id> is the same, read-only)
+aibr cancel <job_id>                           # ends one job after asking; --yes skips the question
+aibr job <job_id> --node staging               # the same against a peer, signed
+```
+
+Run against this node, these use the operator token like `aibr approve`, and see every job. With `--node <peer>` or `--all-nodes` they send the peer's bearer token and this node's signature (`aibr enroll`), so the peer shows and cancels only jobs this node requested (on a peer with `request_signing: off` signatures are not verified, so the bearer reads and cancels any job there); an unsigned request answers 403. `--all-nodes` works on an orchestrator node with no local bridge; a peer that cannot be reached prints one line and the rest are still listed.
+
+`aibr cancel` ends one job as failed (`cancelled by operator`, or `by requester` through a peer) and the requester gets the report. A job awaiting approval cannot be cancelled (reject it with `aibr reject`), and a finished job answers "already ended". `aibr stop --all-jobs` is the kill switch for the whole node. `aibr attach` does not attach a terminal (Claude Code jobs run as child processes); it only prints events. `aibr logs` is still the bridge's own log.
 
 ## Kill switch
 
@@ -301,7 +320,7 @@ On macOS use `shasum -a 256` instead of `sha256sum`. The ledger is local to the 
 
 ### Job records
 
-Each job is one file, `<state>/jobs/<job_id>.json`, and is the authoritative record:
+Each job is one file, `<state>/jobs/<job_id>.json`, and is the authoritative record. Since 3.2.0 a new `job_id` must match `^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$` (anything else is a 400 on `/trigger` and `/report`), and an id that differs from an existing one only in letter case is refused with 409. Jobs stored by older releases keep their ids and stay readable:
 
 ```bash
 ls -t ~/.local/state/aibridge/staging/jobs/ | head

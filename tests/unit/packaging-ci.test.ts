@@ -46,8 +46,8 @@ describe("Milestone 7 Packaging & CI Artefacts", () => {
     expect(content).toContain("lipo")
   })
 
-  it(".github/workflows/milestone-7.yml contains CI validation jobs", async () => {
-    const content = await readFile(".github/workflows/milestone-7.yml", "utf8")
+  it(".github/workflows/ci.yml router job contains CI validation steps", async () => {
+    const content = await readFile(".github/workflows/ci.yml", "utf8")
     expect(content).toContain("cargo zigbuild")
     expect(content).toContain("readelf -d")
     expect(content).toContain("NEEDED")

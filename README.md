@@ -20,7 +20,9 @@
 
 A typical setup: **Claude Code on your laptop is the orchestrator**. Through the AIBridge plugin it hands work (integration tests, bug reproduction, log reading, a fix on a branch) to worker nodes such as a staging VPS, then reads the findings and continues locally. Each worker runs the job with Claude Code or OpenCode, inside a capability profile it controls, pinned to an exact commit.
 
-**New in 3.1.1:** the unused TUI, Herdr, terminal and IPC layer is removed (about 54k lines, two Rust crates); `aibr tui`, `--ipc-publish` and `terminal.backend: "herdr"` are deprecated ([ADR 0014](Docs/adr/0014-claude-is-the-operator-interface.md), [CHANGELOG](CHANGELOG.md#311---2026-11-26)).
+**New in 3.2.0:** a job API and CLI (`aibr jobs`, `aibr job`, `aibr cancel`, `aibr attach`), job reconcile and orphan-process cleanup after a restart, security hardening (plan self-approval, `GET /jobs/:id`, job ids, wider secret redaction), and about 45k lines of unwired code removed. Read **Removed** and **Upgrade notes** in the [CHANGELOG](CHANGELOG.md#320---2026-11-26) before upgrading.
+
+**New in 3.1.1:** the unused TUI, Herdr, terminal and IPC layer is removed (about 54k lines, two Rust crates); `aibr tui`, `--ipc-publish` and `terminal.backend: "herdr"` were deprecated and are removed in 3.2.0 ([ADR 0014](Docs/adr/0014-claude-is-the-operator-interface.md), [CHANGELOG](CHANGELOG.md#311---2026-11-26)).
 
 **New in 3.1.0:** Claude Code as a worker runtime and as the orchestrator (plugin + MCP server), signed requests and one-code pairing (`aibr enroll`), operator approval with an audit ledger, jobs pinned to `repo@sha`, and a quickstart (`aibr init`, `aibr doctor`, `aibr ping`, `aibr send`). See the [CHANGELOG](CHANGELOG.md#310---2026-11-26), and its **Behaviour changes** before upgrading a running node.
 
@@ -80,8 +82,7 @@ For OpenCode workers that need a hardened, durable admission tier, `bridge.ingre
              │ • Sole semantic authorization authority         │
              │ • Source authorization & project allowlists     │
              │ • Plan review & safety policy enforcement       │
-             │ • Reusable workflows & deterministic rules      │
-             │ • Multi-project memory & secret redaction       │
+             │ • Per-job repo@sha worktree & result sanitizer  │
              │ • Durable egress callback outbox                │
              └───────────────────────┬─────────────────────────┘
                                      │ Loopback only (127.0.0.1:4096)
@@ -91,12 +92,24 @@ For OpenCode workers that need a hardened, durable admission tier, `bridge.ingre
              └─────────────────────────────────────────────────┘
 ```
 
+### Not yet wired
+
+Roughly 11,000 of the 50,000 lines in `src/` cannot be reached from the `aibr` and bridge entry points; `bun run docs:reachability` measures it. Almost all of it is code kept for the roadmap with deadlines (the rest is under 100 lines: `src/mesh/identity/memory-key-store.ts` and the `src/diagnostics/index.ts` barrel) ([ADR 0016](Docs/adr/0016-keep-selected-unwired-code-with-deadlines.md)). The rest of the unwired code was removed in 3.2.0: rules, budgets, workflows, simulation, routing, registry, sdk, upgrade, the dead part of the mesh (leases, gateway, inbox, outbox transport) and the orchestration kernel (coordinator, scheduler, projections, charter and roundtable runtime, the `/orchestration/*` routes). What remains of `src/mesh` is node identity and request signing, the wire ids and replay window, and the delivery backoff policy; what remains of `src/orchestration` outside the event store is the schemas, identifiers and digests the runtime, pairing and request signing use.
+
+| Path | Serves | Wire by | Delete by |
+|---|---|---|---|
+| `src/memory` | Handoff summaries, project memory | 3.3.0 | 3.4.0 |
+| `src/orchestration/event-store` | Durable job event log | 3.3.0 | 3.4.0 |
+| `src/runtime/codex-adapter.ts`, `src/runtime/discovery.ts` | Codex runtime | 3.3.0 | 3.4.0 |
+| `src/context` | Context snapshot attached to a job | 3.4.0 | 3.5.0 |
+| `src/notifications` | Discord and Telegram notifications | 3.5.0 | 3.6.0 |
+
 ### Core Design Invariants
 
 1. **Two-Tier Validation:** The router is a structural gate, never an authorization authority. The worker independently re-parses and enforces all semantic permissions, allowlists, and approvals.
 2. **Commit Before 202 (`SF-08`):** An admission response (`HTTP 202 Accepted`) is emitted **only** after work has been durably committed to SQLite disk storage (`synchronous=FULL`). No in-memory queues or fallback drop-paths exist.
 3. **Decoupled Interface:** Claude Code with the AIBridge plugin dispatches and follows work; human-only actions (approve, reject, kill switch) stay in the `aibr` CLI on the worker. Closing the interface never disrupts running background agents.
-4. **Append-Only Immutability:** Authoritative event logs are immutable. Repair and maintenance tools never rewrite or delete history.
+4. **Append-Only Evidence:** The operator approval ledger is hash-chained and append-only, and terminal outbox rows are kept. Nothing in AIBridge rewrites or deletes that history.
 5. **Terminal Outbox Rows are Evidence:** Errored or failed outbox records are preserved as permanent audit evidence with error taxonomy codes and attempt counters.
 6. **Automated Secret Redaction:** Prompts, transcripts, raw memory, bearer tokens, and private paths are scrubbed by default across all logs, telemetry, and diagnostics bundles.
 
@@ -214,7 +227,7 @@ aibr plugin status claude
 
 This registers the plugin bundled in the npm package through the official `claude plugin` CLI; it never edits `~/.claude` files. In Claude Code you then get:
 
-- MCP tools `bridge_peers`, `bridge_dispatch`, `bridge_status`, `bridge_await`, `bridge_result` and `bridge_cancel`. There is deliberately no approve tool: approval stays with the operator.
+- MCP tools `bridge_peers`, `bridge_dispatch`, `bridge_status`, `bridge_await`, `bridge_result`, `bridge_events` and `bridge_cancel` (cancels only jobs this node dispatched; needs signed requests). There is deliberately no approve tool: approval stays with the operator.
 - The `aibridge-dispatch` skill, which pushes the branch, dispatches with the commit sha, waits and reads the findings.
 - `/aibridge:bridge-send <peer> <capability> <task>` and `/aibridge:bridge-status`.
 - A short summary of peers and running jobs at session start.
@@ -324,6 +337,10 @@ bun remove -g @nyugennguyen/aibridge
 | `aibr enroll` | Pairs nodes with one-time codes (issue, join, list, revoke). | Optional |
 | `aibr approve` / `aibr reject` | Decides a job held for operator approval (on the worker). | Optional |
 | `aibr jobs pending` | Lists jobs awaiting operator approval. | Optional |
+| `aibr jobs` | Lists this node's jobs (`--all-nodes`: ask every peer with signed requests; `--watch`; `--status`, `--limit`, `--json`). | Optional |
+| `aibr job <id>` | Shows one job; `--events` prints what it did, `-f` follows it until it ends. | Optional |
+| `aibr cancel <id>` | Cancels one job (asks first; `--yes`). Not `aibr stop`, which stops the service or every job. | Optional |
+| `aibr attach <id>` | Read-only `aibr job <id> --events -f`; attaches no terminal. | Optional |
 | `aibr plugin` | Installs, removes or reports the Claude Code plugin (`install\|uninstall\|status claude`). | No |
 | `aibr mcp` | MCP server used by the Claude Code plugin (`serve`, `summary`). | Optional |
 | `aibr update` | Checks for and installs latest version. | Optional |
@@ -341,7 +358,7 @@ Comprehensive documentation is organized around clear user needs in [`Docs/`](Do
 - [**Documentation Index**](Docs/README.md) — Documentation map and navigation hub.
 - [**Getting Started**](Docs/getting-started.md) — Step-by-step installation, profile setup, and first task dispatch.
 - [**Current Architecture**](Docs/architecture/current-state.md) — Authoritative guide to components, trust boundaries, and persistence.
-- [**Architecture Decisions (ADRs)**](Docs/adr/README.md) — Index of all 13 architectural decision records.
+- [**Architecture Decisions (ADRs)**](Docs/adr/README.md) — Index of all 16 architectural decision records.
 - [**Claude Code as Orchestrator**](Docs/guides/claude-code-orchestrator.md) — Installing and using the AIBridge Claude Code plugin.
 - [**Pairing Guide**](Docs/guides/pairing.md) — Signed requests and `aibr enroll`.
 - [**Claude Dev → Staging Runbook**](Docs/runbooks/claude-dev-staging.md) — End-to-end setup of a Claude Code orchestrator and a staging worker.

@@ -124,14 +124,30 @@ XDG paths, **not** the repo-local `.aibridge/` (`src/host/paths.ts:75-115`):
 ```
 config   ~/.config/aibridge/<profile>/config.json
 secrets  ~/.local/share/aibridge/<profile>/secrets/{bearer_token,opencode_password}  (0600)
-state    ~/.local/state/aibridge/<profile>/{jobs/*.json,tasks.md,egress_outbox.db}
+state    ~/.local/state/aibridge/<profile>/{jobs/*.json,tasks.md,egress_outbox.db,aibridge.lock}
+```
+
+`aibridge.lock` (`src/host/state-lock.ts`) is held by the one `aibr serve` / `aibr worker` of the
+profile for its lifetime: JSON with `pid`, `start` and a token. `start` is a raw string compared
+exactly, independent of TZ and locale (`readProcessStartTime`): `linux:<boot_id>:<stat field 22>` on
+Linux, `ps:<lstart>` under `TZ=UTC LC_ALL=C` elsewhere. **Stale only if the PID is dead, or both start
+times were read and differ** (reused PID); a PID that is alive but unverifiable (start unreadable, or
+missing from an older lock file) counts as **held**. A second process exits with "Another AIBridge
+process (PID n) is already running on this profile" and touches no job. Manual recovery, only if PID
+n is not AIBridge:
+
+```bash
+aibr stop -p <profile>                                   # stops the service and the tmux session
+cat ~/.local/state/aibridge/<profile>/aibridge.lock      # {"pid":…,"start":…,"token":…}
+ps -o pid=,lstart=,command= -p <pid>                     # is it really an AIBridge process?
+rm ~/.local/state/aibridge/<profile>/aibridge.lock       # only if it is not
 ```
 
 Repo `.aibridge/` is only used by the legacy `bun run dev` entrypoint (`src/index.ts:11`).
 
 To reset: `aibr stop -p <profile>` first (service and tmux), then `rm -rf ~/.local/state/aibridge/<profile>`.
-Never delete terminal outbox rows to clear a backlog — they are forensic evidence and retention
-is enforced in `src/storage/outbox-repair.ts`.
+Never delete terminal outbox rows to clear a backlog — they are forensic evidence. No shipped
+command prunes them (the unwired `src/storage/outbox-repair.ts` was removed in 3.2.0).
 
 ## `timed_out` and stuck jobs
 
@@ -147,13 +163,26 @@ Check in this order:
 2. **Fake-success trap.** `getSessionStatus` returns `state?.type ?? "idle"` (`src/opencode/client.ts:57-58`).
    An unknown session reads as `idle`, so a job can be marked `completed` with zero messages.
    Always confirm with `curl -u opencode:$PW http://127.0.0.1:4096/session/<id>/message`.
-3. **Permission deadlock.** `bash`/`edit`/`write` are gated on `metadata.plan_status === "approved"`
-   (`src/opencode/permissions.ts:7-13`). Missing metadata ⇒ `reject` for all three, which looks
-   identical to an unapproved plan.
+3. **Permission deadlock.** Tools in `permissions.require_plan_approval_for_tools` (by default
+   `bash`/`edit`/`write`) are answered `reject` unless an operator approved **this job** with
+   `aibr approve` (`job.approval.status === "approved"`, `src/opencode/permissions.ts`). A job whose
+   capability is not approval-gated can never use them, which looks identical to a broken session.
+   Since 3.1.2 the caller's `metadata.plan_status` grants nothing, so setting it is not a workaround:
+   gate the capability (`planning.require_approval_for`) and approve the job, or move the tool to
+   `permissions.allow_tools`.
 4. **Terminal vs failed.** `Timed out waiting for OpenCode session …` always lands on status
    **`failed`**. Status `timed_out` with message `Job timed out` comes from `sweepExpiredJobs`
-   at **bridge startup** (`src/bridge.ts:47`) — i.e. a job left `running` across a restart.
+   (`src/jobs/manager.ts`), which runs at startup and every 60 s; the deadline counts from
+   `launchStartedAt`, else the approval, else creation. Jobs a live runner drives are skipped.
    If a report pairs them, the reporting peer is wrong.
+5. **Restart.** `interrupted: bridge restarted` = the job was running (or its launch had begun,
+   `launchStartedAt` set) when the bridge restarted; never retried. `not relaunched after restart:
+   <reason> (never started)` = an approved job that never started and may not launch now. Rules:
+   `src/jobs/reconcile.ts`. A Claude Code or script process a killed bridge left running is
+   stopped at the next start (`src/runtime/orphan-processes.ts`, records in
+   `<state>/runtime-processes/`) only if its PID's start time still matches; otherwise the log
+   says `could not be verified … NOT stopped` (manual recovery: troubleshooting.md).
+   `interrupted: bridge stopped` = the bridge was stopped normally and stopped the job itself.
 
 ## The Rust router
 

@@ -24,10 +24,13 @@ import type { BridgeConfig } from "../config/types.js"
 import type { JobRecord } from "../jobs/types.js"
 import { JobManager } from "../jobs/manager.js"
 import { JsonFileJobStore } from "../jobs/store.js"
+import { FileJobEventLog } from "../jobs/events.js"
+import { finishEndedJob } from "../jobs/dependents.js"
 import { SdkOpencodeClientAdapter } from "../opencode/client.js"
 import type { OpencodeClient } from "../opencode/types.js"
 import { StaticPermissionPolicy } from "../opencode/permissions.js"
 import { waitForIdle } from "../opencode/monitor.js"
+import { startOpencodeSession } from "../opencode/launch.js"
 import { CallbackReporter } from "../callback/reporter.js"
 import { EgressOutboxStore } from "../callback/egress-outbox.js"
 import { FileTaskGraphSyncer } from "../tasks/syncer.js"
@@ -35,6 +38,9 @@ import { createTerminalJobReporter } from "../jobs/report.js"
 import { createProfileRequestSigner } from "../pairing/signer.js"
 import { ClaudeJobRunner, type ClaudeJobRunnerOptions } from "../runtime/claude-job-runner.js"
 import { RepoWorkspaceManager } from "../runtime/repo-workspace.js"
+import { FileRuntimeProcessRegistry, RUNTIME_PROCESSES_DIR } from "../runtime/process-registry.js"
+import { terminateOrphanedRuntimeProcesses, type OrphanOutcome } from "../runtime/orphan-processes.js"
+import { redactSecretsFromText } from "../runtime/sanitizer.js"
 
 /**
  * The OpenCode client of a node whose runtime is not OpenCode. Health is
@@ -85,6 +91,8 @@ export interface RuntimeOptions {
    */
   readonly operatorToken?: string | null
   readonly environment: Record<string, string>
+  /** Where startup actions are logged (the orphaned-process pass). Default: stderr. */
+  readonly log?: (level: "info" | "warn" | "error", message: string) => void
   readonly deps?: {
     readonly opencodeClient?: OpencodeClient
     readonly monitorSession?: (job: JobRecord) => Promise<void>
@@ -111,6 +119,16 @@ export interface Runtime {
   readonly monitorSession: (job: JobRecord) => Promise<void>
   /** Re-delivers the report of a job already known to be terminal. */
   readonly reportTerminalJob: (job: JobRecord) => Promise<void>
+  /**
+   * Whether a monitor in THIS process is driving the job (an OpenCode session
+   * monitor or the Claude runner). The periodic sweep leaves such jobs to
+   * their monitor, which enforces the deadline and stops the process.
+   */
+  readonly isJobActive: (jobId: string) => boolean
+  /** Runtime processes (Claude Code, scripts) spawned for jobs, recorded until they exit. */
+  readonly processRegistry: FileRuntimeProcessRegistry
+  /** What startup did with the runtime processes a previous bridge left running. */
+  readonly orphanedProcesses: readonly OrphanOutcome[]
 }
 
 export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
@@ -129,7 +147,23 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
         })
       : new UnconfiguredOpencodeClient())
 
-  const jobManager = new JobManager(new JsonFileJobStore(join(options.stateDir, "jobs")))
+  // Every error stored on a job is served by `GET /jobs/:id` and, for jobs
+  // without a runtime result (OpenCode), is the `/report` summary. Text from
+  // OpenCode or its client library is scrubbed of this node's secrets first.
+  const knownSecrets = [
+    options.bearerToken,
+    options.operatorToken,
+    opencodeConfig !== undefined ? options.environment[opencodeConfig.password_env] : undefined,
+  ].filter((value): value is string => typeof value === "string" && value.length > 0)
+  // `GET /jobs/:id/events`: `<state>/jobs/<sha256(id)>.events.jsonl`, redacted like
+  // job results (block R) before anything is written.
+  const jobEvents = new FileJobEventLog(join(options.stateDir, "jobs"), {
+    redact: (text) => redactSecretsFromText(text, knownSecrets),
+  })
+  const jobManager = new JobManager(new JsonFileJobStore(join(options.stateDir, "jobs")), {
+    redactError: (text) => redactSecretsFromText(text, knownSecrets),
+    events: jobEvents,
+  })
   const taskGraphSyncer = new FileTaskGraphSyncer(join(options.stateDir, "tasks.md"))
   const egressOutboxStore =
     options.deps?.egressOutboxStore ??
@@ -149,6 +183,17 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     bearerToken: options.bearerToken,
   })
 
+  // Runtime processes a previous bridge spawned and could not stop (it was
+  // SIGKILLed or crashed): stopped first, before their worktrees are swept,
+  // jobs are reconciled or relaunched, or anything is served. Only a verified
+  // process is signalled (`terminateOrphanedRuntimeProcesses`). The caller
+  // holds the profile's state lock, so no live process owns these records.
+  const processRegistry = new FileRuntimeProcessRegistry(join(options.stateDir, RUNTIME_PROCESSES_DIR))
+  const orphanedProcesses = await terminateOrphanedRuntimeProcesses({
+    registry: processRegistry,
+    ...(options.log !== undefined ? { log: options.log } : {}),
+  })
+
   // Per-job worktrees under `<state>/repos` and `<state>/worktrees` (Phase 5).
   // Nothing runs yet, so every worktree on disk was left by a previous process.
   const repoWorkspaces =
@@ -164,6 +209,8 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
           jobManager,
           taskGraphSyncer,
           reportTerminalJob,
+          events: jobEvents,
+          processTracker: processRegistry,
           ...(repoWorkspaces !== undefined ? { workspaces: repoWorkspaces } : {}),
           // Redacted from script output tails, should a script echo them.
           knownSecrets: [options.bearerToken, options.operatorToken].filter(
@@ -179,58 +226,69 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
         })
       : undefined
 
-  const monitorSession =
+  // OpenCode jobs whose session monitor is running in this process. The
+  // periodic sweep skips them: `waitForIdle` enforces their deadline itself.
+  const monitoredJobs = new Set<string>()
+  const baseMonitorSession: (job: JobRecord) => Promise<void> =
     options.deps?.monitorSession ??
     (async (job) => {
       if (!job.opencodeSessionId) throw new Error(`Job ${job.id} has no opencode session`)
-      let terminalJob: Awaited<ReturnType<typeof jobManager.getJob>>
+      let failure: string | undefined
       try {
         await waitForIdle(opencodeClient, job.opencodeSessionId, {
           directory: job.trigger.project_dir,
           timeoutMs: job.trigger.timeout_seconds * 1000,
           pollIntervalMs: 1000,
           permissionPolicy: new StaticPermissionPolicy(config.permissions),
-          planMetadata: job.trigger.metadata,
+          operatorApproved: job.approval?.status === "approved",
         })
-        terminalJob = await jobManager.markCompleted(job.id)
-        await taskGraphSyncer.syncJobToTask(job.trigger.task_id ?? `#${job.id}`, "done")
       } catch (error) {
-        terminalJob = await jobManager.markFailed(
-          job.id,
-          error instanceof Error ? error.message : "Session failed",
-        )
-        await taskGraphSyncer.syncJobToTask(job.trigger.task_id ?? `#${job.id}`, "failed")
+        failure = error instanceof Error ? error.message : "Session failed"
       }
+      let terminalJob: JobRecord
+      try {
+        terminalJob = failure === undefined ? await jobManager.markCompleted(job.id) : await jobManager.markFailed(job.id, failure)
+      } catch {
+        // Already terminal: whoever ended it owns its report.
+        return
+      }
+      await taskGraphSyncer
+        .syncJobToTask(job.trigger.task_id ?? `#${job.id}`, failure === undefined ? "done" : "failed")
+        .catch(() => undefined)
 
-      const unblockedJobs = await jobManager.unblockDependents(job.id)
-      for (const unblocked of unblockedJobs) {
-        try {
-          const session = await opencodeClient.createSession(
-            `AIBridge ${unblocked.id}`,
-            unblocked.trigger.project_dir,
-          )
-          await jobManager.attachSession(unblocked.id, session.id)
-          await opencodeClient.sendPromptAsync(
-            session.id,
-            unblocked.trigger.prompt,
-            unblocked.trigger.project_dir,
-          )
-          const running = await jobManager.markRunning(unblocked.id)
-          void monitorSession(running).catch(async (err: unknown) => {
-            await jobManager.markFailed(
-              unblocked.id,
-              err instanceof Error ? err.message : "Session monitor failed",
-            )
-          })
-        } catch (error) {
-          await jobManager.markFailed(
-            unblocked.id,
-            error instanceof Error ? error.message : "Execution failed",
-          )
-        }
-      }
-      await reportTerminalJob(terminalJob)
+      // Dependents are settled with guarded writes (a dependent a cancel or
+      // the sweep ended meanwhile is skipped), the ones failed here are
+      // reported here, and nothing in it can stop this job's own report.
+      await finishEndedJob(terminalJob, {
+        jobManager,
+        reportTerminalJob,
+        syncFailedTask: (failed) => taskGraphSyncer.syncJobToTask(failed.trigger.task_id ?? `#${failed.id}`, "failed"),
+        launch: async (unblocked) => {
+          try {
+            const { running } = await startOpencodeSession(unblocked, { jobManager, opencodeClient, reportTerminalJob })
+            void monitorSession(running).catch(async (err: unknown) => {
+              const failed = await jobManager
+                .markFailed(unblocked.id, err instanceof Error ? err.message : "Session monitor failed")
+                .catch(() => undefined)
+              if (failed !== undefined) await reportTerminalJob(failed)
+            })
+          } catch {
+            // OpenCode refused: the job is already failed and reported. The
+            // marker refused: another path owns this job; leave it alone.
+          }
+        },
+      })
     })
+  const monitorSession = async (job: JobRecord): Promise<void> => {
+    monitoredJobs.add(job.id)
+    try {
+      await baseMonitorSession(job)
+    } finally {
+      monitoredJobs.delete(job.id)
+    }
+  }
+  const isJobActive = (jobId: string): boolean =>
+    monitoredJobs.has(jobId) || (claudeJobRunner?.activeJobIds().includes(jobId) ?? false)
 
   return {
     config,
@@ -243,5 +301,8 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     ...(repoWorkspaces ? { repoWorkspaces } : {}),
     monitorSession,
     reportTerminalJob,
+    isJobActive,
+    processRegistry,
+    orphanedProcesses,
   }
 }

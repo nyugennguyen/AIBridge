@@ -35,6 +35,13 @@ export interface JobRecord {
   remoteDependencies?: RemoteDependencyState[]
   callbackDelivery?: CallbackDeliveryState
   blockedAt?: string         // when entered blocked state
+  /**
+   * When this node began launching the job on its runtime, written BEFORE any
+   * runtime contact (worktree, spawn, OpenCode session or prompt). An
+   * `accepted` job without it provably never reached a runtime, so a restart
+   * may launch it; with it, the job may have run and is never relaunched.
+   */
+  launchStartedAt?: string
   createdAt: string
   updatedAt: string
 }

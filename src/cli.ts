@@ -58,6 +58,8 @@ export interface CliDeps {
   readonly runPlugin?: (args: readonly string[]) => Promise<number>
   /** `aibr approve|reject|jobs|stop …` handler (tests inject a fake; default: src/cli/operator-commands.ts). */
   readonly runOperator?: (command: "approve" | "reject" | "jobs" | "stop", args: readonly string[]) => Promise<number>
+  /** `aibr jobs|job|cancel|attach …` handler (tests inject a fake; default: src/cli/job-commands.ts). `aibr jobs pending` goes to `runOperator`. */
+  readonly runJobs?: (command: "jobs" | "job" | "cancel" | "attach", args: readonly string[]) => Promise<number>
   /** `aibr mcp serve|summary …` handler (tests inject a fake; default: src/cli/mcp.ts). */
   readonly runMcp?: (sub: "serve" | "summary", args: readonly string[]) => Promise<number>
   /** Overridable for tests; defaults to `runEnrollCommand` (src/cli/enroll.ts). */
@@ -118,7 +120,7 @@ export interface CliDeps {
   /**
    * Run the Tier 2 ingress drain loop for a profile until a signal arrives.
    *
-   * Resolves on `SIGINT`/`SIGTERM`. Binds no socket: ingress belongs to the
+   * Resolves on `SIGINT`/`SIGTERM`/`SIGHUP`. Binds no socket: ingress belongs to the
    * router once cut over, and a worker that could accept requests would be a
    * second authority (ADR 0008 §2.2).
    */
@@ -140,7 +142,7 @@ export interface CliDeps {
   }>
   /** Run `opencode serve` for a given profile. */
   readonly runOpencode: (profile: string) => Promise<void>
-  /** Process runner for executing system commands (Herdr, etc.). */
+  /** Process runner for executing system commands (tmux, tailscale, etc.). */
   readonly processRunner?: ProcessRunner
   /** Generate diagnostic support bundle. */
   readonly runBundle?: (profile: string, options?: { readonly preview?: boolean }) => Promise<CliExitCode>
@@ -193,7 +195,10 @@ export interface SetupCommandOptions {
 
 const PROG = "aibr"
 
-const COMMANDS = ["setup", "start", "serve", "worker", "status", "verify", "update", "tui", "bundle", "discover"] as const
+/** The signals that stop `aibr serve` and `aibr worker` cleanly. */
+const STOP_SIGNALS: readonly NodeJS.Signals[] = ["SIGINT", "SIGTERM", "SIGHUP"]
+
+const COMMANDS = ["setup", "start", "serve", "worker", "status", "verify", "update", "bundle", "discover"] as const
 const ALL_COMMANDS = [...COMMANDS, "_opencode"] as const
 
 // ── Argv parsing ───────────────────────────────────────────────────────
@@ -233,8 +238,6 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
       knownFlags.push("--version")
     } else if (arg === "--shadow-mode") {
       knownFlags.push("--shadow-mode")
-    } else if (arg === "--ipc-publish") {
-      knownFlags.push("--ipc-publish")
     } else if (arg === "--preview") {
       // Known, and therefore NOT pushed onto `unknownFlags`. It used to be
       // pushed onto both lists, which made the unknown-flag guard below reject
@@ -300,7 +303,10 @@ function helpText(): string {
     "  enroll   Pair nodes with a one-time code (issue, join, list, revoke)",
     "  approve  Approve a job held for operator approval (on the worker node)",
     "  reject   Reject a job held for operator approval",
-    "  jobs     List jobs awaiting approval (jobs pending)",
+    "  jobs     List jobs on this node or your peers (--all-nodes, --watch); jobs pending: awaiting approval",
+    "  job      Show one job, its events (--events) or follow it until it ends (-f)",
+    "  cancel   Cancel one job (stop ends the service or, with --all-jobs, every job)",
+    "  attach   Watch a job's events until it ends (read-only; attaches no terminal)",
     "  stop     Stop a profile's service and tmux session, or every running job (--all-jobs)",
     "",
     "Options:",
@@ -314,7 +320,6 @@ function helpText(): string {
     "  --help, -h             Show this help",
     "  --version, -v          Show version",
     "  --shadow-mode          Run in shadow mode (mirroring ingress to router)",
-    "  --ipc-publish          Deprecated and ignored since 3.1.1 (the IPC bus was removed)",
     "",
     `Run "${PROG} <command> --help" for help on one command.`,
     "",
@@ -585,7 +590,7 @@ async function readEnrolledAgentIds(profile: string | undefined): Promise<readon
 /**
  * Bumped when a field is removed or changes meaning, never for an addition.
  *
- * The Herdr agent-manager plugin parses this document, so a consumer pinned to
+ * External consumers parse this document, so a consumer pinned to
  * `schemaVersion: 1` must be able to trust that `peers[i].reachable` still
  * means what it meant when it pinned. Additive keys stay additive.
  */
@@ -762,6 +767,11 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<Cl
     }
   }
   // Operator commands (Phase 4/7) own their argv too (job id, --reason, --all-jobs).
+  // `jobs pending` stays an operator command; every other `jobs …` is the job list (block C).
+  if (first === "job" || first === "cancel" || first === "attach" || (first === "jobs" && argv[1] !== "pending")) {
+    const run = deps.runJobs ?? (await import("./cli/job-commands.js")).runRealJobCommand(deps.writer)
+    return toExitCode(await run(first, argv.slice(1)))
+  }
   if (first === "approve" || first === "reject" || first === "jobs" || first === "stop") {
     const run = deps.runOperator ?? (await import("./cli/operator-commands.js")).runOperatorCommand(deps.writer, deps.processRunner)
     return toExitCode(await run(first, argv.slice(1)))
@@ -1012,18 +1022,6 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<Cl
     }
   }
 
-  // ── tui (removed in 3.1.1) ─────────────────────────────────────────
-  // The Herdr manager launcher is gone; the command stays one release so a
-  // script or habit gets a pointer instead of "unknown command".
-  if (command === "tui") {
-    deps.writer(
-      "aibr tui was removed in 3.1.1 (the Herdr manager is no longer supported).\n" +
-        "Use Claude Code with the AIBridge plugin to dispatch and follow jobs, and on the worker:\n" +
-        "  aibr jobs pending   aibr approve <job_id>   aibr logs -f   aibr stop --all-jobs\n",
-    )
-    return 1
-  }
-
   // ── Commands that require --profile ────────────────────────────────
   const profileErr = validateProfileArg(args.profile)
   if (profileErr !== null) {
@@ -1100,10 +1098,6 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<Cl
   // ── worker ─────────────────────────────────────────────────────────
   if (command === "worker") {
     try {
-      if (args.hasFlag("--ipc-publish")) {
-        // Accepted so a service unit written by an earlier release keeps starting.
-        deps.writer("warning: --ipc-publish is deprecated and ignored since 3.1.1 (the IPC bus was removed)\n")
-      }
       await deps.runWorker(profile)
       return 0
     } catch (err) {
@@ -1370,6 +1364,7 @@ async function createRealDeps(): Promise<CliDeps> {
           bearerToken,
           operatorToken,
           profileName: profile,
+          log: (level, message) => logger.log(level, message),
           environment: {
             ...process.env as Record<string, string>,
             ...(ocPassword ? { OPENCODE_SERVER_PASSWORD: ocPassword } : {}),
@@ -1403,15 +1398,18 @@ async function createRealDeps(): Promise<CliDeps> {
         `listening on ${bridge.config.bridge.host}:${bridge.config.bridge.port} as ${bridge.config.agent_id} ` +
           `(${bridge.config.role}, ${bridge.config.runtime.kind} runtime, request_signing ${bridge.config.security.request_signing ?? "off"})`,
       )
+      // SIGHUP too: `aibr stop` ends a `--foreground` deployment with `tmux
+      // kill-session`, which hangs the bridge up. Closing stops the running
+      // jobs' process groups (they no longer get the terminal's signals).
       await new Promise<void>((resolve) => {
-        const onSignal = (): void => {
+        const onSignal = (signal: NodeJS.Signals): void => {
+          if (stopping) return
           stopping = true
-          logger.info("stopping (signal)")
+          logger.info(`stopping (${signal})`)
           opencodeChild?.kill("SIGTERM")
           void bridge.app.close().then(() => resolve(), () => resolve())
         }
-        process.once("SIGINT", onSignal)
-        process.once("SIGTERM", onSignal)
+        for (const signal of STOP_SIGNALS) process.on(signal, onSignal)
       })
       logger.info("stopped")
       logger.close()
@@ -1433,12 +1431,14 @@ async function createRealDeps(): Promise<CliDeps> {
       // mid-claim on every deploy, and the row would sit in 'sending' until
       // `recoverStale` noticed the lease had expired.
       await new Promise<void>((resolve) => {
+        let stopped = false
         const onSignal = (): void => {
+          if (stopped) return
+          stopped = true
           worker.stop()
           resolve()
         }
-        process.once("SIGINT", onSignal)
-        process.once("SIGTERM", onSignal)
+        for (const signal of STOP_SIGNALS) process.on(signal, onSignal)
       })
     },
 

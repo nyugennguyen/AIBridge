@@ -276,6 +276,8 @@ export class EgressOutboxStore {
       readonly nowMs?: number
       /** Phase 3: node-signature headers, minted per delivery attempt. */
       readonly signer?: RequestSigner
+      /** Per-request timeout; default `EGRESS_REQUEST_TIMEOUT_MS`. A timeout requeues the row like any failure. */
+      readonly timeoutMs?: number
     },
   ): Promise<void> {
     const fetcher = options?.fetcher ?? fetch
@@ -303,6 +305,7 @@ export class EgressOutboxStore {
           body: row.payload_json,
         },
         row.destination_origin,
+        options?.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {},
       )
 
       if (response.ok) {

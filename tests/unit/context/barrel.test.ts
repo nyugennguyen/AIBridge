@@ -68,10 +68,7 @@ describe("M5 the milestone surface is reachable through its barrels", () => {
     expect(typeof memory.ScopeLatticeAccessPolicy).toBe("function")
   })
 
-  it("the memory barrel exports the migration, the redaction, and the summarization", () => {
-    expect(typeof memory.planLegacyMemoryDataMigration).toBe("function")
-    expect(typeof memory.planV1MemoryMigration).toBe("function")
-    expect(typeof memory.applyLegacyMemoryMigration).toBe("function")
+  it("the memory barrel exports the redaction, and the summarization", () => {
     expect(typeof memory.DeterministicRedactionPipeline).toBe("function")
     expect(typeof memory.defaultRedactionPolicy).toBe("function")
     expect(typeof memory.handoffToMemoryRecord).toBe("function")
@@ -121,7 +118,7 @@ describe("M5 the dependency edge runs one way", () => {
 
   it("no module in either directory imports the other through the CLI or the server", () => {
     // A memory read that went through an HTTP route would have a transport
-    // between it and the record, and the isolation audit's "seven egress paths"
+    // between it and the record, and the isolation audit's "six egress paths"
     // would be missing one.
     const forbidden = ["/server/", "/cli.js", "/bridge.js", "/index.js"]
     const offenders = [...sourceFiles(MEMORY_DIRECTORY), ...sourceFiles(CONTEXT_DIRECTORY)]

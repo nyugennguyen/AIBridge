@@ -2,20 +2,23 @@
  * Launching an accepted Claude-runtime job, shared by `/trigger` (jobs that
  * need no approval) and `POST /jobs/:id/approve` (jobs an operator approved).
  */
+import { LaunchRefusedError } from "../../jobs/manager.js"
+import { notRelaunchedError } from "../../jobs/reconcile.js"
 import { createTerminalJobReporter } from "../../jobs/report.js"
 import type { JobRecord } from "../../jobs/types.js"
-import { RunnerAtCapacityError, type ClaudeJobLaunch } from "../../runtime/claude-job-runner.js"
+import { ClaudeLaunchError, RunnerAtCapacityError, type ClaudeJobLaunch } from "../../runtime/claude-job-runner.js"
 import type { AppDependencies } from "../app.js"
 
 export type ClaudeLaunchOutcome =
   | { readonly ok: true; readonly launch: ClaudeJobLaunch }
-  | { readonly ok: false; readonly statusCode: 429 | 500 | 503; readonly body: { readonly error: string; readonly code?: string } }
+  | { readonly ok: false; readonly statusCode: 409 | 429 | 500 | 503; readonly body: { readonly error: string; readonly code?: string } }
 
 /**
  * Starts the job on the Claude runner, syncs the task graph and hands it to
  * the runner's monitor. On failure the job is marked failed; `reportFailure`
  * also delivers its report (the approve path: the original caller is waiting
- * for a callback, not for this HTTP response).
+ * for a callback, not for this HTTP response). A failure after the launch
+ * marker is always reported, by the runner (`ClaudeLaunchError`).
  */
 export async function launchClaudeJob(
   job: JobRecord,
@@ -30,6 +33,15 @@ export async function launchClaudeJob(
   try {
     launch = await runner.start(job)
   } catch (error) {
+    // Past the marker the runner already failed and reported the job.
+    if (error instanceof ClaudeLaunchError) {
+      return { ok: false, statusCode: 500, body: { error: error.message, code: error.code } }
+    }
+    // The marker was refused (not `accepted`, already launched or launching):
+    // the job belongs to another path. Leave it untouched; report nothing.
+    if (error instanceof LaunchRefusedError) {
+      return { ok: false, statusCode: 409, body: { error: error.message, code: error.code } }
+    }
     const atCapacity = error instanceof RunnerAtCapacityError
     const message = error instanceof Error ? error.message : "Claude Code launch failed"
     const failed = await dependencies.jobManager.markFailed(job.id, message).catch(() => undefined)
@@ -48,6 +60,25 @@ export async function launchClaudeJob(
   return { ok: true, launch }
 }
 
+/**
+ * Launches an `accepted` job that a restart found never launched
+ * (`reconcileJobsAfterRestart`), as `aibr approve` does: failing and reporting
+ * it on error. Startup awaits this before serving, so it never waits for a
+ * slot: when the node is full (more cleared jobs than
+ * `limits.max_concurrent_jobs`) the job is declined (`notRelaunchedError`:
+ * it never started) and the requester decides whether to dispatch it again.
+ */
+export async function relaunchClaudeJob(job: JobRecord, dependencies: AppDependencies): Promise<void> {
+  if (dependencies.claudeJobRunner?.hasCapacity?.() === false) {
+    const failed = await dependencies.jobManager
+      .markFailed(job.id, notRelaunchedError("no free slot (limits.max_concurrent_jobs)"))
+      .catch(() => undefined)
+    if (failed !== undefined) await terminalReporter(dependencies)(failed)
+    return
+  }
+  await launchClaudeJob(job, dependencies, { reportFailure: true })
+}
+
 /** The answer when the node is already running its limit of jobs. */
 export function atCapacityBody(dependencies: AppDependencies): { error: string; code: string } {
   const limit = dependencies.config.limits?.max_concurrent_jobs ?? 2
@@ -57,7 +88,9 @@ export function atCapacityBody(dependencies: AppDependencies): { error: string; 
   }
 }
 
-export function terminalReporter(dependencies: AppDependencies): (job: JobRecord) => Promise<void> {
+export function terminalReporter(
+  dependencies: Pick<AppDependencies, "reportTerminalJob" | "jobManager" | "callbackReporter" | "config" | "bearerToken">,
+): (job: JobRecord) => Promise<void> {
   return (
     dependencies.reportTerminalJob ??
     createTerminalJobReporter({

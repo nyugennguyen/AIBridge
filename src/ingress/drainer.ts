@@ -18,19 +18,20 @@ import {
   reportCallbackSchema,
 } from "../config/schemas.js"
 import type { BridgeConfig } from "../config/types.js"
-import type { JobManager } from "../jobs/manager.js"
+import { RemoteReportApplyError, type DependentsOutcome, type JobManager } from "../jobs/manager.js"
 import type { JobRecord } from "../jobs/types.js"
+import { JobIdRejectedError } from "../jobs/store.js"
 import type { OpencodeClient } from "../opencode/types.js"
+import { startOpencodeSession } from "../opencode/launch.js"
 import type { TaskGraphSyncer } from "../tasks/types.js"
 import type { CallbackReporter } from "../callback/reporter.js"
-import type { LegacyTranslation } from "../orchestration/legacy/translation.js"
 import {
   createSqliteDriver,
   type SqliteDriver,
 } from "../orchestration/event-store/sqlite-driver.js"
 import { assertSourceAuthorized } from "../security/source-authorization.js"
 import { assertProjectAllowed } from "../security/allowlist.js"
-import { ConfigPlanReviewProvider } from "../planning/provider.js"
+import { approvalRequired } from "../planning/approval.js"
 import {
   backoffDelayMs,
   exceedsMaxAttempts,
@@ -91,11 +92,12 @@ export interface IngressDrainerDependencies {
   readonly callbackReporter?: CallbackReporter
   readonly taskGraphSyncer: TaskGraphSyncer
   readonly monitorSession: (job: JobRecord) => Promise<void>
+  /** Delivers the report of a job whose launch OpenCode refused. `aibr worker` always passes it. */
+  readonly reportTerminalJob?: (job: JobRecord) => Promise<void>
   /** Optional; see {@link IngressLifecycleObserver} for why it is not a return value. */
   readonly observer?: IngressLifecycleObserver
-  readonly orchestration?: {
-    readonly translation: LegacyTranslation
-  }
+  /** Where the drainer notes what it cannot surface otherwise. Default: stderr (the service's log file). */
+  readonly log?: (level: "info" | "warn" | "error", message: string) => void
 }
 
 export class IngressDrainer {
@@ -105,9 +107,9 @@ export class IngressDrainer {
   readonly #opencodeClient: OpencodeClient
   readonly #taskGraphSyncer: TaskGraphSyncer
   readonly #monitorSession: (job: JobRecord) => Promise<void>
-  readonly #orchestration?: { readonly translation: LegacyTranslation }
-  readonly #planReview: ConfigPlanReviewProvider
+  readonly #reportTerminalJob?: (job: JobRecord) => Promise<void>
   readonly #observer?: IngressLifecycleObserver
+  readonly #log: (level: "info" | "warn" | "error", message: string) => void
   private running = false
   private timer: NodeJS.Timeout | null = null
 
@@ -118,11 +120,13 @@ export class IngressDrainer {
     this.#opencodeClient = dependencies.opencodeClient
     this.#taskGraphSyncer = dependencies.taskGraphSyncer
     this.#monitorSession = dependencies.monitorSession
+    this.#reportTerminalJob = dependencies.reportTerminalJob
     this.#observer = dependencies.observer
-    this.#orchestration = dependencies.orchestration
-    this.#planReview = new ConfigPlanReviewProvider(
-      dependencies.config.planning.require_approval_for,
-    )
+    this.#log =
+      dependencies.log ??
+      ((level, message) => {
+        process.stderr.write(`${new Date().toISOString()} ${level.toUpperCase()} ${message}\n`)
+      })
   }
 
   /**
@@ -362,7 +366,11 @@ export class IngressDrainer {
     )
     assertProjectAllowed(trigger.project_dir, this.#config.projects)
 
-    if (!this.#planReview.isApproved(trigger.capability, trigger.metadata)) {
+    // Router ingress has no operator approval path: the operator endpoints are
+    // served by `aibr serve` in engine mode, and nothing here holds a job for
+    // `aibr approve`. So a capability this node gates on approval is refused,
+    // whatever the caller's `metadata.plan_status` says (ADR 0013).
+    if (approvalRequired(this.#config, trigger)) {
       this.fail(record.job_id, claimToken, "PLAN_APPROVAL_REQUIRED", Date.now())
       return
     }
@@ -399,6 +407,12 @@ export class IngressDrainer {
         job_id: record.job_id,
       })
     } catch (error) {
+      // Not the same job: an id that differs from a stored one only in case
+      // would share its file on a case-insensitive filesystem.
+      if (error instanceof JobIdRejectedError) {
+        this.fail(record.job_id, claimToken, error.code.toUpperCase(), Date.now())
+        return
+      }
       const message = error instanceof Error ? error.message : "Creation failed"
       if (message.includes("already exists")) {
         // ON CONFLICT convergence: already created, acknowledge admission
@@ -412,37 +426,30 @@ export class IngressDrainer {
     const hasRemoteDependencies = localDependencyIds.length !== dependencyReferences.length
 
     if (hasDeps && (hasRemoteDependencies || !depJobs.every((dep) => dep.status === "completed"))) {
-      const blocked = await this.#jobManager.markBlocked(job.id, dependencyReferences)
-      const blockedAcceptance = this.#orchestration?.translation.acceptTrigger(blocked)
-      if (blockedAcceptance !== undefined && !blockedAcceptance.ok) {
-        await this.#jobManager.markFailed(job.id, blockedAcceptance.error.message)
-        this.fail(record.job_id, claimToken, blockedAcceptance.error.message, Date.now())
-        return
-      }
+      await this.#jobManager.markBlocked(job.id, dependencyReferences)
       await this.#taskGraphSyncer.syncJobToTask(resolvedTaskId, "blocked", { Job: job.id })
       this.acknowledge(record.job_id, claimToken)
       return
     }
 
-    const acceptance = this.#orchestration?.translation.acceptTrigger(job)
-    if (acceptance !== undefined && !acceptance.ok) {
-      await this.#jobManager.markFailed(job.id, acceptance.error.message)
-      this.fail(record.job_id, claimToken, acceptance.error.message, Date.now())
-      return
-    }
-
-    const session = await this.#opencodeClient.createSession(`AIBridge ${job.id}`, trigger.project_dir)
-    await this.#jobManager.attachSession(job.id, session.id)
-    await this.#opencodeClient.sendPromptAsync(session.id, trigger.prompt, trigger.project_dir)
-    const running = await this.#jobManager.markRunning(job.id)
+    // A launch OpenCode refuses fails and reports the job, then throws: the
+    // row is failed by `processRecord` with the (redacted) launch error.
+    const { sessionId, running } = await startOpencodeSession(job, {
+      jobManager: this.#jobManager,
+      opencodeClient: this.#opencodeClient,
+      ...(this.#reportTerminalJob !== undefined ? { reportTerminalJob: this.#reportTerminalJob } : {}),
+    })
 
     await this.#taskGraphSyncer.syncJobToTask(resolvedTaskId, "running", {
       Job: job.id,
-      Session: session.id,
+      Session: sessionId,
     })
 
     void this.#monitorSession(running).catch(async (error: unknown) => {
-      await this.#jobManager.markFailed(job.id, error instanceof Error ? error.message : "Session monitor failed")
+      const failed = await this.#jobManager
+        .markFailed(job.id, error instanceof Error ? error.message : "Session monitor failed")
+        .catch(() => undefined)
+      if (failed !== undefined) await this.#reportTerminalJob?.(failed)
     })
 
     // Second durable write: acknowledge upon successful dispatch
@@ -478,38 +485,51 @@ export class IngressDrainer {
       return
     }
 
-    const unblocked = await this.#jobManager.recordRemoteReport({
-      source_agent_id: report.source_agent_id,
-      job_id: report.job_id,
-      status: report.status,
-    })
+    let outcome: DependentsOutcome
+    let failure: RemoteReportApplyError | undefined
+    try {
+      outcome = await this.#jobManager.applyRemoteReport({
+        source_agent_id: report.source_agent_id,
+        job_id: report.job_id,
+        status: report.status,
+      })
+    } catch (error) {
+      // The store failed: launch and report what was settled anyway, then
+      // fail the row (it is retried) instead of acknowledging it.
+      if (!(error instanceof RemoteReportApplyError)) throw error
+      failure = error
+      outcome = error.outcome
+    }
+    const { unblocked, failed } = outcome
+    // A dependent this report failed is reported by this call: it made the
+    // terminal write. Not awaited: the report is an outbound POST to the
+    // dependent's requester, which may be offline, and must never stall the
+    // drain loop. The delivery is marked `pending` first, so a crash before it
+    // goes out is re-delivered when `aibr worker` starts (`listCallbackRetries`).
+    for (const failedJob of failed) {
+      await this.#jobManager.markCallbackDelivery(failedJob.id, "pending").catch(() => undefined)
+      void this.#reportTerminalJob?.(failedJob).catch((error: unknown) => {
+        this.#log("warn", `report of dependent job ${failedJob.id} failed: ${error instanceof Error ? error.message : String(error)}`)
+      })
+    }
 
     for (const unblockedJob of unblocked) {
-      const recorded = this.#orchestration?.translation.recordReport(unblockedJob)
-      if (recorded !== undefined && !recorded.ok) {
-        throw new Error(recorded.error.message)
-      }
       try {
-        const session = await this.#opencodeClient.createSession(
-          `AIBridge ${unblockedJob.id}`,
-          unblockedJob.trigger.project_dir,
-        )
-        await this.#jobManager.attachSession(unblockedJob.id, session.id)
-        await this.#opencodeClient.sendPromptAsync(
-          session.id,
-          unblockedJob.trigger.prompt,
-          unblockedJob.trigger.project_dir,
-        )
-        const running = await this.#jobManager.markRunning(unblockedJob.id)
+        const { running } = await startOpencodeSession(unblockedJob, {
+          jobManager: this.#jobManager,
+          opencodeClient: this.#opencodeClient,
+          ...(this.#reportTerminalJob !== undefined ? { reportTerminalJob: this.#reportTerminalJob } : {}),
+        })
         void this.#monitorSession(running)
-      } catch (err) {
-        await this.#jobManager.markFailed(
-          unblockedJob.id,
-          err instanceof Error ? err.message : "Execution failed",
-        )
+      } catch {
+        // OpenCode refused: the job is already failed and reported. The
+        // marker refused: another path owns this job; leave it alone.
       }
     }
 
+    // As before this change, a store error leaves the row unacknowledged
+    // (`processRecord` fails it and it is retried).
+    if (failure !== undefined) throw failure.reason
     this.acknowledge(record.job_id, claimToken)
   }
 

@@ -1,4 +1,4 @@
-# ADR 0013: Operator Approval for Claude-Runtime Jobs Uses a Local Approval Ledger
+# ADR 0013: Operator Approval for Approval-Gated Jobs Uses a Local Approval Ledger
 
 - **Status:** Accepted
 - **Date:** 2026-11-25
@@ -19,6 +19,8 @@ through `POST /orchestration/commands`. Two facts make that disproportionate tod
    a PENDING task (M4-A). Making it schedulable needs a controller lease, run activation, task
    promotion and a canonical `approval.decided`, none of which the Claude job runner consumes:
    it launches from the job record, not from a kernel effect.
+
+(3.2.0: the kernel and `POST /orchestration/commands` were removed, [ADR 0016](0016-keep-selected-unwired-code-with-deadlines.md); this ledger is the approval record.)
 
 ## Decision
 
@@ -59,3 +61,23 @@ through `POST /orchestration/commands`. Two facts make that disproportionate tod
   `AIBRIDGE_*` variable from the Claude and script children, and the safety floor denies reading
   the AIBridge data directory at its default location. A custom `XDG_DATA_HOME` is not covered by
   that deny rule; the worker's OS user remains the real boundary.
+
+## Amendment (3.1.2): every runtime
+
+Decision 1 originally applied to the Claude runtime only. The OpenCode runtime (the default
+`runtime.kind`) and the router drainer still took the caller-written `metadata.plan_status:
+"approved"` as an approval, and so did the OpenCode tool permission policy for
+`permissions.require_plan_approval_for_tools`. A peer could approve its own work, which this ADR
+exists to prevent. From 3.1.2:
+
+1. The decision is one function, `approvalRequired` (`src/planning/approval.ts`), used by every
+   runtime and both ingress modes. `metadata.plan_status` is not an input anywhere; the bridge only
+   logs a warning when a caller sends `"approved"`.
+2. On the engine ingress, a gated OpenCode job is held as `awaiting_approval` with an
+   `approval.requested` ledger event, exactly like a Claude job, and `POST /jobs/:id/approve`
+   launches it on the OpenCode runtime. A gated OpenCode trigger with `depends_on` is refused with
+   `501`, as on the Claude runtime.
+3. The router ingress has no operator approval path (the router serves no operator routes), so the
+   drainer refuses gated capabilities with `PLAN_APPROVAL_REQUIRED`.
+4. OpenCode tools in `require_plan_approval_for_tools` are allowed only for a job whose `approval`
+   record says an operator approved it.

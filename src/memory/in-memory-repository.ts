@@ -170,8 +170,8 @@ export interface StoredTrustDecision {
  * The id-derivation salts.
  *
  * Both are versioned, and both are the *shape* of the derivation the M0 legacy
- * migration already uses (`deterministicId` in
- * `src/orchestration/legacy/migration.ts`): sha256 over a domain-separated
+ * migration used (`deterministicId` in `src/orchestration/legacy/migration.ts`,
+ * removed in 3.2.0): sha256 over a domain-separated
  * source key, truncated to 40 hex characters, behind a fixed prefix.
  *
  * Two salts, because two different questions are being asked.

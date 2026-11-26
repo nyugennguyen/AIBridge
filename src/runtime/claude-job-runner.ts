@@ -27,11 +27,14 @@ import type {
   TriggerRequest,
 } from "../config/types.js"
 import { claudeConfigSchema } from "../config/schemas.js"
-import type { JobManager } from "../jobs/manager.js"
+import { approvalRequired } from "../planning/approval.js"
+import { LaunchRefusedError, type JobManager } from "../jobs/manager.js"
 import type { JobRecord, RuntimeJobResult, RuntimeJobUsage } from "../jobs/types.js"
+import { appendJobEvent, type JobEventInput, type JobEventLog } from "../jobs/events.js"
 import type { RepoWorkspaceManager } from "./repo-workspace.js"
 import { CLAUDE_PROVIDER_ENV_KEYS } from "./sanitizer.js"
 import { ScriptRunner, type RunningScript } from "./script-runner.js"
+import type { RuntimeProcessTracker } from "./process-registry.js"
 import { digestDispatchEnvelope, digestJson } from "../orchestration/digest.js"
 import { contractErrorSchema, type Result } from "../orchestration/errors.js"
 import type { TaskGraphSyncer } from "../tasks/types.js"
@@ -43,7 +46,13 @@ import {
   type ClaudePermissionDenial,
   type ClaudeRunUsage,
 } from "./claude-adapter.js"
-import { launchAgentRequestSchema, type LaunchAgentRequest, type RuntimeOperationContext, type RuntimeSession } from "./schemas.js"
+import {
+  launchAgentRequestSchema,
+  type AgentRuntimeEvent,
+  type LaunchAgentRequest,
+  type RuntimeOperationContext,
+  type RuntimeSession,
+} from "./schemas.js"
 
 /**
  * Deny rules every Claude Code launch gets, whatever its capability profile
@@ -171,12 +180,12 @@ export function authorizeClaudeCapability(config: BridgeConfig, trigger: Trigger
   if (profile === undefined) {
     return { ok: false, statusCode: 403, body: { error: "Unknown capability profile", code: "unknown_capability_profile" } }
   }
-  const source = config.security.allowed_sources.find((candidate) => candidate.source_agent_id === trigger.source_agent_id)
-  const approvalRequired =
-    profile.requires_approval ||
-    config.planning.require_approval_for.includes(trigger.capability) ||
-    (source?.requires_plan_approval.includes(trigger.capability) ?? false)
-  return { ok: true, name: trigger.capability, profile, approvalRequired }
+  return {
+    ok: true,
+    name: trigger.capability,
+    profile,
+    approvalRequired: approvalRequired(config, trigger, { profileRequiresApproval: profile.requires_approval }),
+  }
 }
 
 /** Concurrent Claude/script jobs this node runs: `limits.max_concurrent_jobs`, default 2. */
@@ -418,6 +427,17 @@ export interface ClaudeJobRunnerOptions {
   /** Milliseconds clock, for timeouts. */
   readonly clock?: () => number
   readonly sleep?: (ms: number) => Promise<void>
+  /**
+   * Where the runner records what a job does while it runs (`message`,
+   * `tool`, `result` events). Status events come from the `JobManager`.
+   */
+  readonly events?: JobEventLog
+  /**
+   * Where every spawned runtime process (Claude Code, `pre` / `script` /
+   * `post`) is recorded until it exits, so the next bridge can stop the ones
+   * a killed bridge left behind (`terminateOrphanedRuntimeProcesses`).
+   */
+  readonly processTracker?: RuntimeProcessTracker
 }
 
 /** A started Claude Code process of one job. */
@@ -444,6 +464,21 @@ export interface ClaudeJobLaunch {
   readonly startedAtMs?: number
 }
 
+/**
+ * Thrown by `start` when the launch failed after `launchStartedAt` was
+ * written. The job is already `failed` (its stored error is this message) and
+ * reported: callers must not fail or report it again.
+ */
+export class ClaudeLaunchError extends Error {
+  readonly code = "claude_launch_failed"
+  constructor(
+    message: string,
+    readonly job: JobRecord | undefined,
+  ) {
+    super(message)
+  }
+}
+
 /** Thrown by `start` when `limits.max_concurrent_jobs` jobs are already running. */
 export class RunnerAtCapacityError extends Error {
   readonly code = "node_at_capacity"
@@ -451,6 +486,14 @@ export class RunnerAtCapacityError extends Error {
 
 /** The reason `stopAll` records on every job it stops. */
 export const STOPPED_BY_OPERATOR = "stopped by operator"
+
+/**
+ * The reason recorded on every job still running when the bridge stops
+ * (SIGTERM, SIGINT, Ctrl-C in `aibr start --foreground`). Its processes lead
+ * their own process groups, so they no longer get the terminal's or the
+ * service manager's signal: the bridge stops them itself.
+ */
+export const STOPPED_BY_BRIDGE_SHUTDOWN = "interrupted: bridge stopped"
 
 type TerminalState = "completed" | "failed" | "unknown" | "timed_out"
 
@@ -471,8 +514,17 @@ interface ActiveJob {
   script?: RunningScript
   /** Settles when `monitor` has recorded and reported the job. */
   done?: Promise<unknown>
+  /** Resolved when the job leaves `#active` (its terminal write is done, or `start` gave up). */
+  readonly released: Promise<void>
+  release: () => void
   /** Set by `start` when it created a worktree, so cleanup knows what to remove. */
   worktreeRepo?: string
+}
+
+function newActiveJob(jobId: string): ActiveJob {
+  let release: () => void = () => undefined
+  const released = new Promise<void>((resolve) => (release = resolve))
+  return { jobId, released, release }
 }
 
 export class ClaudeJobRunner {
@@ -490,9 +542,15 @@ export class ClaudeJobRunner {
   /** projectPathId -> worktree path, consulted by the adapter's project resolver. */
   readonly #worktrees = new Map<string, string>()
   readonly #active = new Map<string, ActiveJob>()
+  readonly #events?: JobEventLog
+  readonly #processTracker?: RuntimeProcessTracker
+  /** dispatchId -> job id, for the Claude launches in progress (`trackProcess`). */
+  readonly #launchingDispatches = new Map<string, string>()
 
   constructor(options: ClaudeJobRunnerOptions) {
     this.#config = options.config
+    this.#events = options.events
+    this.#processTracker = options.processTracker
     this.nodeId = toOpaqueId(options.config.agent_id, "node")
     this.#jobManager = options.jobManager
     this.#reportTerminalJob = options.reportTerminalJob
@@ -521,6 +579,14 @@ export class ClaudeJobRunner {
         projects: createConfigProjectResolver(options.config.projects, this.#worktrees),
         allowedProjectRoots: options.config.projects.map((project) => resolve(project.path)),
         launchProfile: (request) => this.launchProfileFor(request),
+        ...(this.#processTracker !== undefined
+          ? {
+              trackProcess: ({ dispatchId, pid, processGroup }: { dispatchId: string; pid: number; processGroup: boolean }) => {
+                const jobId = this.#launchingDispatches.get(dispatchId)
+                return jobId === undefined ? undefined : this.#processTracker?.track({ jobId, role: "claude", pid, processGroup })
+              },
+            }
+          : {}),
       })
   }
 
@@ -544,32 +610,50 @@ export class ClaudeJobRunner {
     return [...this.#active.keys()]
   }
 
+  /** Whether the job is between `start` and the end of `monitor` in this runner. */
+  isActive(jobId: string): boolean {
+    return this.#active.has(jobId)
+  }
+
   /**
-   * Claims a concurrency slot, prepares the job's working directory (its own
+   * Claims a concurrency slot, records `launchStartedAt` (refused unless the
+   * job is `accepted` and was never launched), prepares the job's working directory (its own
    * worktree at the pinned sha when the job has a `checkout`) and, when the
    * profile's first step is Claude Code, launches it. Moves the job to
-   * `running`. Throws `RunnerAtCapacityError` when the node is full, or the
-   * launch error; on a throw the slot and any worktree are released and the
-   * job is left for the caller to fail.
+   * `running`. Throws `RunnerAtCapacityError` when the node is full and the
+   * marker's refusal as is (the job is left alone). A failure after the
+   * marker fails and reports the job, then throws `ClaudeLaunchError`. On any
+   * throw the slot and any worktree are released.
    */
   async start(job: JobRecord): Promise<ClaudeJobLaunch> {
-    if (this.#active.has(job.id)) throw new Error(`Job ${job.id} is already running`)
+    if (this.#active.has(job.id)) throw new LaunchRefusedError(`Job ${job.id} is already running`)
     if (!this.hasCapacity()) {
       throw new RunnerAtCapacityError(
         `This node is already running ${this.#active.size} job(s), its limit (limits.max_concurrent_jobs = ${maxConcurrentJobs(this.#config)}). Retry later.`,
       )
     }
-    const active: ActiveJob = { jobId: job.id }
+    const active = newActiveJob(job.id)
     this.#active.set(job.id, active)
     const startedAt = this.#clock()
     const timeoutSeconds = claudeTimeoutSeconds(this.#config, job.trigger)
+    // Before any side effect (worktree, spawn, script): after a restart, a
+    // job without this marker provably never ran and may be launched again.
+    // A refusal (not `accepted`, or launched before) leaves the job alone.
+    try {
+      await this.#jobManager.markLaunchStarted(job.id)
+    } catch (error) {
+      await this.#releaseJob(job, active)
+      throw error
+    }
     try {
       const cwd = await this.#prepareWorkingDirectory(job, active)
       const profile = capabilityProfile(this.#config, job.trigger.capability)
       if (profile === undefined) throw new Error(`Unknown capability profile: ${job.trigger.capability}`)
 
       let claude: ClaudeStepLaunch | undefined
-      if (profile.script === undefined && (profile.pre ?? []).length === 0) {
+      // A job stopped while launching (cancel, kill switch) spawns nothing:
+      // its monitor sees the stop before the main step and fails it.
+      if (profile.script === undefined && (profile.pre ?? []).length === 0 && active.stopReason === undefined) {
         claude = await this.#launchClaude(job, active, timeoutSeconds)
       }
       const running = await this.#jobManager.markRunning(job.id)
@@ -581,8 +665,18 @@ export class ClaudeJobRunner {
         startedAtMs: startedAt,
       }
     } catch (error) {
+      // Past the marker the job may have done something: fail it now with the
+      // launch error and report it, rather than leave it `accepted`. The slot
+      // is released only after the terminal write, so the sweep never sees
+      // the job both inactive and unfinished.
+      const message = error instanceof Error ? error.message : "Claude Code launch failed"
+      const failed = await this.#jobManager.markFailed(job.id, message, undefined, { maxLength: MAX_ERROR_LENGTH }).catch(() => undefined)
       await this.#releaseJob(job, active)
-      throw error
+      if (failed !== undefined) {
+        await this.#taskGraphSyncer?.syncJobToTask(job.trigger.task_id ?? `#${job.id}`, "failed").catch(() => undefined)
+        await this.#reportTerminalJob(failed).catch(() => undefined)
+      }
+      throw new ClaudeLaunchError(failed?.error ?? "Claude Code launch failed", failed)
     }
   }
 
@@ -595,7 +689,7 @@ export class ClaudeJobRunner {
    * terminal by another path.
    */
   monitor(launch: ClaudeJobLaunch): Promise<JobRecord | undefined> {
-    const active = this.#active.get(launch.job.id) ?? { jobId: launch.job.id }
+    const active = this.#active.get(launch.job.id) ?? newActiveJob(launch.job.id)
     this.#active.set(launch.job.id, active)
     const done = this.#monitor(launch, active)
     active.done = done
@@ -612,18 +706,52 @@ export class ClaudeJobRunner {
     const stopped: ActiveJob[] = []
     for (const active of this.#active.values()) {
       if (active.stopReason !== undefined) continue
-      active.stopReason = reason
       stopped.push(active)
-      if (active.claude !== undefined) {
-        await this.#adapter.terminate(active.claude.session, active.claude.operation).catch(() => undefined)
-      }
-      active.script?.kill()
+      await this.#requestStop(active, reason)
     }
     const settled = Promise.all(stopped.map((active) => active.done ?? Promise.resolve()))
     let timer: ReturnType<typeof setTimeout> | undefined
     await Promise.race([settled, new Promise((done) => (timer = setTimeout(done, waitMs)))])
     if (timer !== undefined) clearTimeout(timer)
     return stopped.map((active) => active.jobId)
+  }
+
+  /**
+   * Stops one job the way `stopAll` stops every job: records `reason`,
+   * terminates its Claude Code process or kills its script, and leaves the
+   * ending to the job's own monitor (or to `start`, when the job is still
+   * launching), which fails it with `reason` and reports it exactly once.
+   * Resolves once the job is ended and reported, or after `waitMs`.
+   *
+   * - `stopping`: this call asked the job to stop;
+   * - `already_stopping`: another stop (`stopAll`, an earlier `stop`) asked first, with its own reason;
+   * - `not_active`: the runner is not driving the job; nothing was done.
+   */
+  async stop(jobId: string, reason: string, waitMs = 15_000): Promise<"stopping" | "already_stopping" | "not_active"> {
+    const active = this.#active.get(jobId)
+    if (active === undefined) return "not_active"
+    const first = active.stopReason === undefined
+    if (first) await this.#requestStop(active, reason)
+    // `done` exists once `monitor` took the job over. Before that the job is
+    // still launching: `start` launches nothing more once a stop is recorded,
+    // and the job is ended by its monitor or, if the launch fails, by `start`;
+    // `released` settles in both cases, after the terminal write.
+    const settled = (async () => {
+      await (active.done ?? active.released)
+      await active.done
+    })()
+    let timer: ReturnType<typeof setTimeout> | undefined
+    await Promise.race([settled, new Promise((done) => (timer = setTimeout(done, waitMs)))])
+    if (timer !== undefined) clearTimeout(timer)
+    return first ? "stopping" : "already_stopping"
+  }
+
+  async #requestStop(active: ActiveJob, reason: string): Promise<void> {
+    active.stopReason = reason
+    if (active.claude !== undefined) {
+      await this.#adapter.terminate(active.claude.session, active.claude.operation).catch(() => undefined)
+    }
+    active.script?.kill()
   }
 
   async #monitor(launch: ClaudeJobLaunch, active: ActiveJob): Promise<JobRecord | undefined> {
@@ -645,8 +773,6 @@ export class ClaudeJobRunner {
         error: stopReason,
       }
     }
-    await this.#releaseJob(launch.job, active)
-
     const result: RuntimeJobResult = {
       summary: outcome.summary,
       findings: outcome.findings,
@@ -654,6 +780,9 @@ export class ClaudeJobRunner {
       ...(scriptResults.length > 0 ? { scriptResults } : {}),
     }
 
+    // The job stays in `#active` until its terminal write, so the periodic
+    // sweep (which skips active jobs) cannot end it in between and report it
+    // a second time. Redaction happens before truncation (`maxLength`).
     let terminal: JobRecord
     try {
       await this.#jobManager.recordRuntimeResult(jobId, result)
@@ -662,11 +791,13 @@ export class ClaudeJobRunner {
           ? await this.#jobManager.markCompleted(jobId)
           : outcome.state === "timed_out"
             ? await this.#jobManager.markTimedOut(jobId)
-            : await this.#jobManager.markFailed(jobId, truncate(outcome.error ?? outcome.summary, MAX_ERROR_LENGTH))
+            : await this.#jobManager.markFailed(jobId, outcome.error ?? outcome.summary, undefined, { maxLength: MAX_ERROR_LENGTH })
     } catch {
       // Already terminal (e.g. swept at startup): its report is owned elsewhere.
+      await this.#releaseJob(launch.job, active)
       return undefined
     }
+    await this.#releaseJob(launch.job, active)
 
     try {
       await this.#taskGraphSyncer?.syncJobToTask(
@@ -748,6 +879,12 @@ export class ClaudeJobRunner {
         AIBR_SCRIPT_PHASE: phase,
         ...(launch.job.checkout !== undefined ? { AIBR_SHA: launch.job.checkout.sha } : {}),
       },
+      ...(this.#processTracker !== undefined
+        ? {
+            trackProcess: (pid: number, processGroup: boolean) =>
+              this.#processTracker?.track({ jobId: launch.job.id, role: "script", pid, processGroup }),
+          }
+        : {}),
     })
     active.script = running
     let result: ScriptResult
@@ -757,6 +894,18 @@ export class ClaudeJobRunner {
       active.script = undefined
     }
     scriptResults.push(result)
+    await appendJobEvent(this.#events, launch.job.id, {
+      type: "tool",
+      data: {
+        tool: "script",
+        phase,
+        script,
+        exit_code: result.exit_code,
+        timed_out: result.timed_out,
+        duration_ms: result.duration_ms,
+        ...(result.signal !== undefined ? { signal: result.signal } : {}),
+      },
+    })
     if (active.stopReason !== undefined) {
       return { state: "failed", summary: capitalize(active.stopReason), findings: [], error: active.stopReason }
     }
@@ -795,6 +944,7 @@ export class ClaudeJobRunner {
       active.worktreeRepo = undefined
     }
     if (this.#active.get(job.id) === active) this.#active.delete(job.id)
+    active.release()
   }
 
   /**
@@ -812,7 +962,14 @@ export class ClaudeJobRunner {
       inWorktree: job.checkout !== undefined,
       timeoutSeconds,
     })
-    const launched = await this.#adapter.launch(request)
+    const dispatchId = request.dispatchEnvelope.dispatchId
+    this.#launchingDispatches.set(dispatchId, job.id)
+    let launched: Awaited<ReturnType<ClaudeRuntimeAdapterPort["launch"]>>
+    try {
+      launched = await this.#adapter.launch(request)
+    } finally {
+      this.#launchingDispatches.delete(dispatchId)
+    }
     if (!launched.ok) throw new Error(`Claude Code launch failed: ${launched.error.message}`)
     const session = launched.value
     active.claude = { session, operation: request.operation }
@@ -851,6 +1008,8 @@ export class ClaudeJobRunner {
       for await (const observed of this.#adapter.observe(claude.session, claude.operation)) {
         if (!observed.ok) return { state: "failed", detail: observed.error.message }
         if (observed.value.type === "lifecycle") latest = observed.value.state
+        const event = jobEventFromRuntime(observed.value)
+        if (event !== undefined) await appendJobEvent(this.#events, active.jobId, event)
       }
       if (active.stopReason !== undefined) {
         await this.#adapter.terminate(claude.session, claude.operation)
@@ -902,6 +1061,32 @@ export class ClaudeJobRunner {
         permissionDenials: usage?.permissionDenials.length ?? 0,
       },
     }
+  }
+}
+
+/** The adapter's polling heartbeat ("still executing"), which says nothing new. */
+const HEARTBEAT_DETAIL = "Claude Code executing"
+
+/**
+ * What one adapter observation adds to the job's event log, or `undefined`
+ * for nothing. Only the adapter's short, already-redacted texts are kept:
+ * tool names and counts, lifecycle notes, and the final result summary.
+ * The text goes through the log's redaction again before it is stored.
+ */
+export function jobEventFromRuntime(event: AgentRuntimeEvent): JobEventInput | undefined {
+  switch (event.type) {
+    case "lifecycle": {
+      const detail = event.detail
+      if (detail === undefined || detail === HEARTBEAT_DETAIL) return undefined
+      // Terminal lifecycle states are reported by the job's status and result events.
+      if (event.state === "completed" || event.state === "failed" || event.state === "unknown") return undefined
+      const isTool = detail.startsWith("Tool call") || detail.startsWith("Tool result") || detail.startsWith("Permission denied")
+      return { type: isTool ? "tool" : "message", data: { detail } }
+    }
+    case "result_available":
+      return { type: "result", data: { outcome: event.result.outcome, summary: event.result.summary } }
+    case "permission_requested":
+      return { type: "tool", data: { detail: `Permission requested: ${event.permission}` } }
   }
 }
 

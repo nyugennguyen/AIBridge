@@ -1,7 +1,7 @@
 # Claude Code as Orchestrator
 
 > **Status:** Current  
-> **Applies to:** AIBridge 3.1.1  
+> **Applies to:** AIBridge 3.2.0  
 > **Owner:** Maintainers  
 
 The AIBridge Claude Code plugin lets a Claude Code session on your workstation hand work (integration tests, bug reproduction, log reading, fixes on a branch) to remote AIBridge worker nodes, then read the results and continue locally. The plugin adds an MCP server, a dispatch skill, two slash commands and a SessionStart summary.
@@ -26,7 +26,9 @@ Optional hardening: `aibr plugin install claude --deny-secrets` asks for confirm
 
 ## Use
 
-Tools exposed to the model: `bridge_peers`, `bridge_dispatch`, `bridge_status`, `bridge_result`, `bridge_await` (at most 120 s per call; the skill loops) and `bridge_cancel` (reports "not supported" on current bridges). There is deliberately no approve tool: approval stays with the operator.
+Tools exposed to the model: `bridge_peers`, `bridge_dispatch`, `bridge_status`, `bridge_result`, `bridge_await` (at most 120 s per call; the skill loops), `bridge_events` (a job's status changes, messages, tool use and result, a page at a time) and `bridge_cancel` (ends a job this node dispatched: `failed`, `cancelled by requester`). There is deliberately no approve, reject or stop-all tool: approval and the node-wide kill switch stay with the operator (ADR 0015).
+
+`bridge_events` and `bridge_cancel` need signed requests: the worker only shows and cancels the jobs whose verified signer dispatched them, so this machine must be paired with the worker (`aibr enroll`) and the worker must have `security.request_signing` set to `optional` or `required`. A worker running an older aibr answers `not_supported`.
 
 Typical flow, driven by the `aibridge-dispatch` skill or `/aibridge:bridge-send <peer> <capability> <task>`:
 

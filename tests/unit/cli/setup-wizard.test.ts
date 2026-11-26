@@ -404,7 +404,6 @@ describe("re-running setup on an existing profile (C3)", () => {
     role: "worker",
     runtime: { kind: "opencode" },
     bridge: { host: "100.64.0.1", port: 9797, public_url: "http://myhost.ts.net:9797", ingress_mode: "engine" },
-    terminal: { backend: "tmux" },
     opencode: {
       base_url: "http://127.0.0.1:4545",
       server_port: 4545,
@@ -484,7 +483,6 @@ describe("re-running setup on an existing profile (C3)", () => {
     expect(saved.projects).toEqual(existingConfig.projects)
     expect(saved.permissions).toEqual(existingConfig.permissions)
     expect(saved.timeouts).toEqual(existingConfig.timeouts)
-    expect(saved.terminal).toEqual(existingConfig.terminal)
     expect(() => bridgeConfigSchema.parse(saved)).not.toThrow()
   })
 

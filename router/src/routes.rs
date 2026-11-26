@@ -21,10 +21,11 @@
 //!
 //! # Every route is behind the bearer, including reads
 //!
-//! That is the whole of finding `F-03`. `createApp()` registers `/jobs/:id` with no
-//! authentication at all ([`src/server/app.ts:38`](../../src/server/app.ts)), and
-//! the record it returns carries prompt text, an absolute project path, the source
-//! agent id and callback metadata. Moving the route here and authenticating it is
+//! That is the whole of finding `F-03`. Until 3.2.0 `createApp()` registered
+//! `/jobs/:id` with no authentication at all (it now authorizes the reader,
+//! [`src/server/routes/jobs.ts`](../../src/server/routes/jobs.ts)), and the record
+//! it returns carries prompt text, an absolute project path, the source agent id
+//! and callback metadata. Authenticating the route here is the router's half of
 //! the closure; leaving reads unauthenticated "because reads are harmless" is the
 //! reasoning that produced the finding.
 //!
@@ -536,7 +537,7 @@ async fn report(
         state.bounds,
     )?;
 
-    validate::require_job_id(&report.job_id, "job_id must match [A-Za-z0-9_-]{1,128}")?;
+    validate::require_job_id(&report.job_id, validate::JOB_ID_RULE)?;
 
     // Committed before the `202`, exactly as on `/trigger`. The `202` body carries no
     // job id, so this is the one route where a caller cannot correlate its own

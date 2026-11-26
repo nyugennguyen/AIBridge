@@ -1,7 +1,7 @@
 /**
  * Small shared Zod primitives for the memory subsystem.
  *
- * The orchestration kernel keeps these private inside `src/orchestration/schemas.ts`
+ * The orchestration schemas keep these private inside `src/orchestration/schemas.ts`
  * because that file is inside the M0 contract digest and must not export new
  * names. Re-declaring them here is the alternative to editing a signed file, and
  * these are the same three-line shapes, not a new vocabulary: bounds and

@@ -3,15 +3,16 @@ import { triggerRequestSchema, triggerResponseSchema } from "../../config/schema
 import { createAuthProvider } from "../../security/auth-provider.js"
 import { assertProjectAllowed } from "../../security/allowlist.js"
 import { assertSourceAuthorized } from "../../security/source-authorization.js"
-import { ConfigPlanReviewProvider } from "../../planning/provider.js"
+import { approvalRequired, callerClaimsPlanApproval } from "../../planning/approval.js"
 import { authorizeClaudeCapability } from "../../runtime/claude-job-runner.js"
 import { requireIdentityGuard } from "../../pairing/verifier.js"
 import { GitRefNotFoundError, resolveConfiguredRepository } from "../../runtime/repo-workspace.js"
-import { legacyJobProjection } from "../../jobs/legacy-projection.js"
 import type { JobCheckout } from "../../jobs/types.js"
 import type { TriggerRequest } from "../../config/types.js"
 import type { AppDependencies } from "../app.js"
-import { approveHint, atCapacityBody, launchClaudeJob, terminalReporter } from "./claude-dispatch.js"
+import { atCapacityBody, launchClaudeJob, terminalReporter } from "./claude-dispatch.js"
+import { holdForApproval } from "./approval-hold.js"
+import { dispatchOpencodeJob } from "./opencode-dispatch.js"
 import { PING_CAPABILITY, buildPong } from "../../jobs/ping.js"
 import { CLI_VERSION } from "../../version.js"
 
@@ -23,7 +24,6 @@ export function registerTriggerRoute(app: FastifyInstance, dependencies: AppDepe
     dependencies.config.security.auth_mode,
     dependencies.bearerToken,
   )
-  const planReview = new ConfigPlanReviewProvider(dependencies.config.planning.require_approval_for)
   // Optional chaining: a hand-built config object (tests, embedders) may predate the field.
   const runtimeKind = dependencies.config.runtime?.kind ?? "opencode"
 
@@ -46,6 +46,16 @@ export function registerTriggerRoute(app: FastifyInstance, dependencies: AppDepe
 
     if (trigger.target_agent_id !== dependencies.config.agent_id) return reply.code(404).send({ error: "Target agent not found here" })
 
+    // Before 3.1.2 the OpenCode runtime took this caller-written field as an
+    // approval. It no longer grants anything on any runtime; say so once per
+    // request so a caller relying on it can see why its job is held.
+    if (callerClaimsPlanApproval(trigger)) {
+      request.log.warn(
+        { source_agent_id: trigger.source_agent_id, capability: trigger.capability },
+        'Ignoring metadata.plan_status "approved": only an operator on this node approves jobs (aibr approve)',
+      )
+    }
+
     // `aibr ping`: after the same authentication as any trigger, before anything
     // that would run work. See src/jobs/ping.ts.
     if (trigger.capability === PING_CAPABILITY) return await handlePing(trigger, reply, dependencies)
@@ -53,11 +63,6 @@ export function registerTriggerRoute(app: FastifyInstance, dependencies: AppDepe
     try {
       assertSourceAuthorized(trigger.source_agent_id, trigger.capability, dependencies.config.security.allowed_sources)
       assertProjectAllowed(trigger.project_dir, dependencies.config.projects)
-      // The Claude runtime does not trust the caller-written `metadata.plan_status`;
-      // its approval gate is `authorizeClaudeCapability` below.
-      if (runtimeKind !== "claude" && !planReview.isApproved(trigger.capability, trigger.metadata)) {
-        return reply.code(403).send({ error: "Plan approval required" })
-      }
     } catch (error) {
       return reply.code(403).send({ error: error instanceof Error ? error.message : "Forbidden" })
     }
@@ -70,101 +75,56 @@ export function registerTriggerRoute(app: FastifyInstance, dependencies: AppDepe
         .send({ error: "repo/ref pinning is only implemented for runtime claude", code: "not_implemented" })
     }
 
-    if (!(await dependencies.opencodeClient.health())) return reply.code(503).send({ error: "OpenCode server unhealthy" })
+    // Approval is decided from this node's config only, never from the
+    // caller's `metadata.plan_status` (ADR 0013): a peer cannot approve itself.
+    const holdForOperator = approvalRequired(dependencies.config, trigger)
+
+    // A held job is not `blocked`, so a dependency's report that arrives while
+    // it waits for the operator would be dropped, and the job would then block
+    // forever. Refused rather than half-supported, as on the Claude runtime.
+    if (holdForOperator && (trigger.depends_on ?? []).length > 0) {
+      return reply.code(501).send({
+        error: "depends_on is not implemented for jobs that need operator approval",
+        code: "not_implemented",
+      })
+    }
+
+    // An approval-held job never reaches OpenCode until it is approved, so the
+    // server's health is checked at approval time instead.
+    if (!holdForOperator && !(await dependencies.opencodeClient.health())) {
+      return reply.code(503).send({ error: "OpenCode server unhealthy" })
+    }
 
     try {
-      const { depends_on, task_id, ...triggerData } = trigger
-      const dependencyReferences = depends_on ?? []
-      const localDependencyIds = dependencyReferences.filter((dependency): dependency is string => typeof dependency === "string")
-      const hasDeps = dependencyReferences.length > 0
-
-      const depJobs = []
-      if (localDependencyIds.length > 0) {
-        for (const depId of localDependencyIds) {
-          try {
-            depJobs.push(await dependencies.jobManager.getJob(depId))
-          } catch {
-            return reply.code(400).send({ error: `Dependency job not found: ${depId}` })
-          }
+      const localDependencyIds = (trigger.depends_on ?? []).filter((dependency): dependency is string => typeof dependency === "string")
+      for (const dependencyId of localDependencyIds) {
+        try {
+          await dependencies.jobManager.getJob(dependencyId)
+        } catch {
+          return reply.code(400).send({ error: `Dependency job not found: ${dependencyId}` })
         }
       }
 
-      const job = await dependencies.jobManager.createJob(trigger)
-      const resolvedTaskId = task_id ?? `#${job.id}`
-
-      const hasRemoteDependencies = localDependencyIds.length !== dependencyReferences.length
-      if (hasDeps && (hasRemoteDependencies || !depJobs.every((dep) => dep.status === "completed"))) {
-        const blocked = await dependencies.jobManager.markBlocked(job.id, dependencyReferences)
-
-        // A blocked job is still ACCEPTED work, so the kernel records it. It
-        // maps to a paused draft run and names no launch effect: the job must not
-        // reach a runtime until its dependencies are satisfied.
-        const blockedAcceptance = dependencies.orchestration?.translation?.acceptTrigger(blocked)
-        if (blockedAcceptance !== undefined && !blockedAcceptance.ok) {
-          await dependencies.jobManager.markFailed(job.id, blockedAcceptance.error.message)
-          return reply.code(500).send({ error: blockedAcceptance.error.message, code: blockedAcceptance.error.code })
-        }
-        await dependencies.taskGraphSyncer.syncJobToTask(resolvedTaskId, "blocked", { Job: job.id })
-
-        return reply.code(202).send(
-          triggerResponseSchema.parse({
-            accepted: true,
-            job_id: job.id,
-            target_agent_id: dependencies.config.agent_id,
-            status_url: `${dependencies.config.bridge.public_url}/jobs/${job.id}`,
-            status: "blocked",
-            task_id: task_id,
-          }),
-        )
+      const job = await dependencies.jobManager.createJob(trigger, undefined, { awaitingApproval: holdForOperator })
+      const base = {
+        accepted: true,
+        job_id: job.id,
+        target_agent_id: dependencies.config.agent_id,
+        status_url: `${dependencies.config.bridge.public_url}/jobs/${job.id}`,
+        task_id: trigger.task_id,
       }
 
-      // M4-A. The kernel is asked to record the accepted intent FIRST, and that
-      // is all it is asked to do. It returns no launch effect, so there is
-      // nothing here to acknowledge and nothing the kernel has vouched for: the
-      // `createSession`/`sendPromptAsync` pair below is the RELEASED legacy
-      // behaviour, authorized by this route's own bearer, source/capability,
-      // allowlist and plan-review checks. It is deliberately not canonical work,
-      // which is why the recorded run stays a DRAFT+PAUSED run holding a PENDING
-      // task — the canonical record honestly shows that nothing canonical is
-      // running, and if this work is to run canonically an operator must approve
-      // it through `dispatch.propose` -> `dispatch.approve` -> `dispatch.execute`.
-      // Before M4-A this call returned a named `legacy.runtime.launch` outbox
-      // record carrying the route's checks as an `authorization` block, which
-      // was threat-model finding F-05: integrity standing in for authenticity.
-        const acceptance = dependencies.orchestration?.translation?.acceptTrigger(job)
-      if (acceptance !== undefined && !acceptance.ok) {
-        // Fail closed: the legacy job exists in the JSON store but the kernel
-        // cannot account for it. Reporting 202 here would tell the caller work
-        // started when the canonical record does not exist, so the job is
-        // failed with a diagnosable message instead.
-        await dependencies.jobManager.markFailed(job.id, acceptance.error.message)
-        return reply.code(500).send({ error: acceptance.error.message, code: acceptance.error.code })
-      }
+      if (holdForOperator) return await holdForApproval(job, request.body, reply, dependencies, base)
 
-      const session = await dependencies.opencodeClient.createSession(`AIBridge ${job.id}`, triggerData.project_dir)
-      await dependencies.jobManager.attachSession(job.id, session.id)
-      await dependencies.opencodeClient.sendPromptAsync(session.id, triggerData.prompt, triggerData.project_dir)
-      const running = await dependencies.jobManager.markRunning(job.id)
+      const dispatched = await dispatchOpencodeJob(job, dependencies)
+      if (!dispatched.ok) return reply.code(dispatched.statusCode).send(dispatched.body)
 
-      await dependencies.taskGraphSyncer.syncJobToTask(resolvedTaskId, "running", {
-        Job: job.id,
-        Session: session.id,
-      })
-
-      void dependencies.monitorSession(running).catch(async (error: unknown) => {
-        await dependencies.jobManager.markFailed(job.id, error instanceof Error ? error.message : "Session monitor failed")
-      })
-
-      dependencies.shadowMirror?.mirrorTrigger(request.body, true)
+      if (dispatched.status === "accepted") dependencies.shadowMirror?.mirrorTrigger(request.body, true)
       return reply.code(202).send(
         triggerResponseSchema.parse({
-          accepted: true,
-          job_id: job.id,
-          target_agent_id: dependencies.config.agent_id,
-          opencode_session_id: session.id,
-          status_url: `${dependencies.config.bridge.public_url}/jobs/${job.id}`,
-          status: "accepted",
-          task_id: task_id,
+          ...base,
+          ...(dispatched.sessionId !== undefined ? { opencode_session_id: dispatched.sessionId } : {}),
+          status: dispatched.status,
         }),
       )
     } catch (error) {
@@ -248,15 +208,6 @@ async function handleClaudeTrigger(
     return reply.code(500).send({ error: message })
   }
 
-  // Same kernel seam as the OpenCode path: record the accepted intent first,
-  // and fail closed if the kernel cannot account for it. A held job is, to the
-  // kernel, the same held DRAFT/PAUSED run every legacy trigger records.
-  const acceptance = dependencies.orchestration?.translation?.acceptTrigger(legacyJobProjection(job))
-  if (acceptance !== undefined && !acceptance.ok) {
-    await dependencies.jobManager.markFailed(job.id, acceptance.error.message)
-    return reply.code(500).send({ error: acceptance.error.message, code: acceptance.error.code })
-  }
-
   const base = {
     accepted: true,
     job_id: job.id,
@@ -266,33 +217,7 @@ async function handleClaudeTrigger(
     ...(checkout !== undefined ? { sha: checkout.sha } : {}),
   }
 
-  if (decision.approvalRequired) {
-    // Fail closed: an approval nobody can audit is not one this node holds.
-    try {
-      await dependencies.approvalLedger?.append({
-        type: "approval.requested",
-        jobId: job.id,
-        capability: trigger.capability,
-        sourceAgentId: trigger.source_agent_id,
-        ...(checkout !== undefined ? { sha: checkout.sha } : {}),
-        actor: "trigger",
-        at: job.createdAt,
-      })
-    } catch (error) {
-      const message = `Approval request could not be recorded: ${error instanceof Error ? error.message : "ledger error"}`
-      await dependencies.jobManager.markFailed(job.id, message).catch(() => undefined)
-      return reply.code(500).send({ error: message })
-    }
-    await dependencies.taskGraphSyncer.syncJobToTask(trigger.task_id ?? `#${job.id}`, "blocked", { Job: job.id })
-    dependencies.shadowMirror?.mirrorTrigger(rawBody, true)
-    return reply.code(202).send(
-      triggerResponseSchema.parse({
-        ...base,
-        status: "awaiting_approval",
-        approve_hint: approveHint(job.id, dependencies.profileName),
-      }),
-    )
-  }
+  if (decision.approvalRequired) return await holdForApproval(job, rawBody, reply, dependencies, base)
 
   const launched = await launchClaudeJob(job, dependencies, { reportFailure: false })
   if (!launched.ok) return reply.code(launched.statusCode).send(launched.body)
@@ -309,8 +234,7 @@ async function handleClaudeTrigger(
 
 /**
  * A no-op job: the caller is an enrolled source, nothing runs, the job is
- * completed at once and reported back through the normal callback path. It is
- * not recorded in the kernel: no work was accepted, so there is no run.
+ * completed at once and reported back through the normal callback path.
  */
 async function handlePing(trigger: TriggerRequest, reply: FastifyReply, dependencies: AppDependencies): Promise<FastifyReply> {
   const source = dependencies.config.security.allowed_sources.find((s) => s.source_agent_id === trigger.source_agent_id)

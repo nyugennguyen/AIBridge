@@ -29,6 +29,26 @@ export class CrossOriginRedirectError extends Error {
   }
 }
 
+/**
+ * The peer did not answer within the egress timeout. A delivery failure like
+ * any other: the outbox row is requeued (`EgressOutboxStore.fail`), never
+ * marked delivered.
+ */
+export class EgressTimeoutError extends Error {
+  readonly code = "EGRESS_TIMEOUT"
+  constructor(readonly timeoutMs: number) {
+    super(`EGRESS_TIMEOUT: no response within ${timeoutMs} ms`)
+    this.name = "EgressTimeoutError"
+  }
+}
+
+/**
+ * How long an outbound POST to a peer (`/report`) may wait for the response
+ * headers. Without it an offline peer held the caller until the OS gave up
+ * on the TCP connection, minutes later.
+ */
+export const EGRESS_REQUEST_TIMEOUT_MS = 15_000
+
 export class NonCgnatAddressError extends Error {
   readonly code = "EGRESS_NON_CGNAT_ADDRESS"
   constructor(message: string) {
@@ -108,17 +128,34 @@ export function assertDestinationOriginAllowed(
  * Performs a fetch that forbids cross-origin redirects.
  *
  * Uses `redirect: "manual"` to intercept redirects and refuse cross-origin hops.
+ * Gives up after `timeoutMs` (default `EGRESS_REQUEST_TIMEOUT_MS`) with an
+ * `EgressTimeoutError`, aborting the request; a fetcher that ignores the
+ * abort signal is not waited for either.
  */
 export async function safeEgressFetch(
   fetcher: (url: string, init?: RequestInit) => Promise<Response>,
   targetUrl: string,
   init: RequestInit,
   expectedOrigin: string,
+  options: { readonly timeoutMs?: number } = {},
 ): Promise<Response> {
-  const response = await fetcher(targetUrl, {
-    ...init,
-    redirect: "manual",
-  })
+  const timeoutMs = options.timeoutMs ?? EGRESS_REQUEST_TIMEOUT_MS
+  const controller = new AbortController()
+  const { promise: timedOut, reject } = Promise.withResolvers<never>()
+  const timer = setTimeout(() => {
+    controller.abort()
+    reject(new EgressTimeoutError(timeoutMs))
+  }, timeoutMs)
+  const signal = init.signal ? AbortSignal.any([init.signal, controller.signal]) : controller.signal
+  let response: Response
+  try {
+    response = await Promise.race([fetcher(targetUrl, { ...init, redirect: "manual", signal }), timedOut])
+  } catch (error) {
+    if (controller.signal.aborted) throw new EgressTimeoutError(timeoutMs)
+    throw error
+  } finally {
+    clearTimeout(timer)
+  }
 
   if (response.status >= 300 && response.status < 400) {
     const location = response.headers.get("location")

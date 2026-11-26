@@ -27,6 +27,8 @@ export interface CallbackReporterOptions {
   outboxStore?: EgressOutboxStore
   /** Phase 3: adds node-signature headers to each transmission (fresh nonce per attempt). */
   signer?: RequestSigner
+  /** Per-request timeout of each POST; default `EGRESS_REQUEST_TIMEOUT_MS` (15 s). */
+  requestTimeoutMs?: number
 }
 
 export class CallbackReporter {
@@ -73,6 +75,7 @@ export class CallbackReporter {
         await this.options.outboxStore.deliverClaimedRow(claimedRow, token, bearerToken, {
           fetcher: this.fetcher,
           ...(this.options.signer ? { signer: this.options.signer } : {}),
+          ...this.timeoutOption(),
         })
       }
       const updated = this.options.outboxStore.get(row.outbox_id)
@@ -112,6 +115,7 @@ export class CallbackReporter {
           body: JSON.stringify(report),
         },
         expectedOrigin,
+        this.timeoutOption(),
       )
       if (response.ok) return
       lastStatus = response.status
@@ -121,6 +125,10 @@ export class CallbackReporter {
       }
     }
     throw new Error(`Callback failed after ${this.options.attempts} attempts with status ${lastStatus}`)
+  }
+
+  private timeoutOption(): { readonly timeoutMs?: number } {
+    return this.options.requestTimeoutMs !== undefined ? { timeoutMs: this.options.requestTimeoutMs } : {}
   }
 
   /**
@@ -146,6 +154,7 @@ export class CallbackReporter {
       await this.options.outboxStore.deliverClaimedRow(row, token, bearerToken, {
         fetcher: this.fetcher,
         ...(this.options.signer ? { signer: this.options.signer } : {}),
+        ...this.timeoutOption(),
         nowMs,
       })
       const after = this.options.outboxStore.get(row.outbox_id)

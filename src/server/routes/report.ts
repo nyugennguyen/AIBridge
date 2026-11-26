@@ -2,7 +2,10 @@ import type { FastifyInstance } from "fastify"
 import { reportCallbackSchema } from "../../config/schemas.js"
 import { createAuthProvider } from "../../security/auth-provider.js"
 import { requireIdentityGuard } from "../../pairing/verifier.js"
+import { startOpencodeSession } from "../../opencode/launch.js"
+import { RemoteReportApplyError, type DependentsOutcome } from "../../jobs/manager.js"
 import type { AppDependencies } from "../app.js"
+import { terminalReporter } from "./claude-dispatch.js"
 
 export function registerReportRoute(app: FastifyInstance, dependencies: AppDependencies): void {
   const auth = createAuthProvider(
@@ -33,29 +36,45 @@ export function registerReportRoute(app: FastifyInstance, dependencies: AppDepen
     )
     if (!source) return reply.code(403).send({ error: `Source ${report.source_agent_id} is not authorized` })
 
-    const unblocked = await dependencies.jobManager.recordRemoteReport({
-      source_agent_id: report.source_agent_id,
-      job_id: report.job_id,
-      status: report.status,
-    })
+    let outcome: DependentsOutcome
+    let failure: RemoteReportApplyError | undefined
+    try {
+      outcome = await dependencies.jobManager.applyRemoteReport({
+        source_agent_id: report.source_agent_id,
+        job_id: report.job_id,
+        status: report.status,
+      })
+    } catch (error) {
+      // The store failed: launch and report what was settled anyway, then
+      // answer 500 as before so the sender retries.
+      if (!(error instanceof RemoteReportApplyError)) throw error
+      failure = error
+      outcome = error.outcome
+    }
+    const { unblocked, failed } = outcome
+    // A dependent this report failed is reported by this call: it made the
+    // terminal write. The report is an outbound POST to that dependent's own
+    // requester, which may be offline, so it is NOT awaited: the peer sending
+    // this `/report` must get its answer now. The delivery is marked `pending`
+    // first, so a crash before it goes out is re-delivered at startup
+    // (`listCallbackRetries`), and the reporter's durable outbox retries it.
+    for (const job of failed) {
+      await dependencies.jobManager.markCallbackDelivery(job.id, "pending").catch(() => undefined)
+      void dependencies.taskGraphSyncer.syncJobToTask(job.trigger.task_id ?? `#${job.id}`, "failed").catch(() => undefined)
+      void terminalReporter(dependencies)(job).catch((error: unknown) => {
+        dependencies.log?.("warn", `report of dependent job ${job.id} failed: ${error instanceof Error ? error.message : String(error)}`)
+      })
+    }
     for (const job of unblocked) {
-      // A report is an observation, not an authority: recording it must not
-      // fabricate a canonical lifecycle event, so the translation only
-      // correlates the job and names any launch it owes.
-      const recorded = dependencies.orchestration?.translation?.recordReport(job)
-      if (recorded !== undefined && !recorded.ok) {
-        return reply.code(500).send({ error: recorded.error.message, code: recorded.error.code })
-      }
       try {
-        const session = await dependencies.opencodeClient.createSession(`AIBridge ${job.id}`, job.trigger.project_dir)
-        await dependencies.jobManager.attachSession(job.id, session.id)
-        await dependencies.opencodeClient.sendPromptAsync(session.id, job.trigger.prompt, job.trigger.project_dir)
-        const running = await dependencies.jobManager.markRunning(job.id)
+        const { running } = await startOpencodeSession(job, { ...dependencies, reportTerminalJob: terminalReporter(dependencies) })
         void dependencies.monitorSession(running)
-      } catch (error) {
-        await dependencies.jobManager.markFailed(job.id, error instanceof Error ? error.message : "Execution failed")
+      } catch {
+        // OpenCode refused: the job is already failed and reported. The marker
+        // refused: another path owns this job; leave it alone.
       }
     }
+    if (failure !== undefined) throw failure.reason
     dependencies.shadowMirror?.mirrorReport(request.body, true)
     return reply.code(202).send({ accepted: true })
   })

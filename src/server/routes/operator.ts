@@ -1,7 +1,7 @@
 /**
  * Operator endpoints (Phase 4 approval, Phase 7 kill switch).
  *
- *   POST /jobs/:id/approve        awaiting_approval -> launched (exactly once; again -> 409)
+ *   POST /jobs/:id/approve        awaiting_approval -> launched on this node's runtime (exactly once; again -> 409)
  *   POST /jobs/:id/reject         awaiting_approval -> failed "rejected by operator", callback sent
  *   GET  /operator/pending-jobs   the jobs awaiting approval, with what an operator must see
  *   POST /operator/stop-all-jobs  terminates every running Claude/script job ("stopped by operator")
@@ -17,6 +17,7 @@ import type { JobRecord } from "../../jobs/types.js"
 import { authorizeOperatorRequest } from "../../security/operator-auth.js"
 import type { AppDependencies } from "../app.js"
 import { atCapacityBody, launchClaudeJob, terminalReporter } from "./claude-dispatch.js"
+import { dispatchOpencodeJob, settleFailedDispatch } from "./opencode-dispatch.js"
 
 const rejectBodySchema = z
   .object({ reason: z.string().trim().min(1).max(500).optional() })
@@ -46,6 +47,8 @@ export function pendingJobView(job: JobRecord): Record<string, unknown> {
 
 export function registerOperatorRoutes(app: FastifyInstance, dependencies: AppDependencies): void {
   const report = terminalReporter(dependencies)
+  // Optional chaining: a hand-built config object (tests, embedders) may predate the field.
+  const runtimeKind = dependencies.config.runtime?.kind ?? "opencode"
   /** Job ids with a decision in flight: two concurrent approvals cannot both launch. */
   const deciding = new Set<string>()
 
@@ -87,12 +90,17 @@ export function registerOperatorRoutes(app: FastifyInstance, dependencies: AppDe
         await report(expired)
         return reply.code(409).send({ error: "The approval window for this job has expired", code: "approval_expired" })
       }
-      if (dependencies.claudeJobRunner === undefined) {
-        return reply.code(503).send({ error: "Claude Code runtime is not available", code: "runtime_unavailable" })
+      // Runtime checks come BEFORE the decision is recorded: a full node or an
+      // unhealthy OpenCode server leaves the job awaiting approval, so the
+      // operator can simply retry.
+      if (runtimeKind === "claude") {
+        if (dependencies.claudeJobRunner === undefined) {
+          return reply.code(503).send({ error: "Claude Code runtime is not available", code: "runtime_unavailable" })
+        }
+        if (dependencies.claudeJobRunner.hasCapacity?.() === false) return reply.code(429).send(atCapacityBody(dependencies))
+      } else if (!(await dependencies.opencodeClient.health())) {
+        return reply.code(503).send({ error: "OpenCode server unhealthy", code: "runtime_unavailable" })
       }
-      // Checked BEFORE the decision is recorded: a full node leaves the job
-      // awaiting approval, so the operator can simply retry.
-      if (dependencies.claudeJobRunner.hasCapacity?.() === false) return reply.code(429).send(atCapacityBody(dependencies))
 
       // Ledger first: a decision that was not recorded must not take effect.
       const decidedAt = new Date().toISOString()
@@ -106,6 +114,7 @@ export function registerOperatorRoutes(app: FastifyInstance, dependencies: AppDe
         at: decidedAt,
       })
       const approved = await dependencies.jobManager.approve(jobId, decidedAt)
+      if (runtimeKind !== "claude") return await launchApprovedOpencodeJob(approved, reply)
       const launched = await launchClaudeJob(approved, dependencies, { reportFailure: true })
       if (!launched.ok) return reply.code(launched.statusCode).send(launched.body)
       return reply.code(200).send({
@@ -118,6 +127,31 @@ export function registerOperatorRoutes(app: FastifyInstance, dependencies: AppDe
       deciding.delete(jobId)
     }
   })
+
+  /**
+   * Starts an approved OpenCode job, or holds it `blocked` on unfinished
+   * dependencies. A failure fails the job and delivers its report: the
+   * original caller is waiting for a callback, not for this response.
+   */
+  const launchApprovedOpencodeJob = async (approved: JobRecord, reply: FastifyReply): Promise<FastifyReply> => {
+    try {
+      const dispatched = await dispatchOpencodeJob(approved, dependencies)
+      if (!dispatched.ok) {
+        // Fails and reports the job at most once, or leaves it to its owner.
+        await settleFailedDispatch(approved, dispatched, dependencies)
+        return reply.code(dispatched.statusCode).send(dispatched.body)
+      }
+      return reply.code(200).send({
+        job_id: approved.id,
+        status: dispatched.job.status,
+        ...(dispatched.sessionId !== undefined ? { opencode_session_id: dispatched.sessionId } : {}),
+      })
+    } catch (error) {
+      const body = { error: error instanceof Error ? error.message : "OpenCode launch failed" }
+      await settleFailedDispatch(approved, { body }, dependencies)
+      return reply.code(500).send({ error: (await dependencies.jobManager.getJob(approved.id).catch(() => undefined))?.error ?? body.error })
+    }
+  }
 
   app.post<{ Params: { id: string } }>("/jobs/:id/reject", async (request, reply) => {
     const refused = guard(request, reply)

@@ -203,8 +203,9 @@ describe("M6.9 the notifications module has no upward import edge", () => {
   it("documents itself: every file it owns opens with a docblock over a thousand characters", () => {
     // A module boundary nobody can read is a module boundary nobody can check. The
     // routing barrel test asserts the same for `src/routing/`.
+    // types, store, bus, index (consumer.ts went with the kernel in 3.2.0 D5).
     const files = sourceFiles(NOTIFICATIONS_DIRECTORY)
-    expect(files.length).toBeGreaterThanOrEqual(5)
+    expect(files.length).toBeGreaterThanOrEqual(4)
     for (const file of files) {
       expect(file.text.startsWith("/**")).toBe(true)
       expect(file.text.length).toBeGreaterThan(1_000)

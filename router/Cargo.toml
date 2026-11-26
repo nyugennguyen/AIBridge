@@ -197,7 +197,7 @@ rusqlite = { version = "=0.40.2", default-features = false, features = ["bundled
 # `[profile.release]` lived here until the workspace root moved to
 # `../Cargo.toml`; Cargo honours profiles only at the root, so the table now
 # lives there. It was copied verbatim, because the musl binary-size gate in
-# `.github/workflows/milestone-7.yml` is calibrated on exactly those flags.
+# `.github/workflows/ci.yml` (`router` job, formerly `milestone-7.yml`) is calibrated on exactly those flags.
 
 # `clippy::large_enum_variant` is allowed for the GENERATED module only, and the
 # reason is that the lint's remedy is the wrong remedy here.

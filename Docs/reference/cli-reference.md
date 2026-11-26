@@ -43,7 +43,10 @@ Commands:
   enroll   Pair nodes with a one-time code (issue, join, list, revoke)
   approve  Approve a job held for operator approval (on the worker node)
   reject   Reject a job held for operator approval
-  jobs     List jobs awaiting approval (jobs pending)
+  jobs     List jobs on this node or your peers (--all-nodes, --watch); jobs pending: awaiting approval
+  job      Show one job, its events (--events) or follow it until it ends (-f)
+  cancel   Cancel one job (stop ends the service or, with --all-jobs, every job)
+  attach   Watch a job's events until it ends (read-only; attaches no terminal)
   stop     Stop a profile's service and tmux session, or every running job (--all-jobs)
 
 Options:
@@ -57,7 +60,6 @@ Options:
   --help, -h             Show this help
   --version, -v          Show version
   --shadow-mode          Run in shadow mode (mirroring ingress to router)
-  --ipc-publish          Deprecated and ignored since 3.1.1 (the IPC bus was removed)
 
 Run "aibr <command> --help" for help on one command.
 ```

@@ -36,7 +36,6 @@ export function testConfig(): BridgeConfig {
     agent_id: "test-vps",
     role: "worker",
     bridge: { host: "0.0.0.0", port: 8787, public_url: "http://test-vps.tailnet:8787", ingress_mode: "engine" },
-    terminal: { backend: "tmux" },
     runtime: { kind: "opencode" },
     opencode: { base_url: "http://127.0.0.1:4096", server_port: 4096, username: "opencode", password_env: "OPENCODE_SERVER_PASSWORD" },
     security: {
@@ -132,15 +131,9 @@ export interface BuildTestAppOverrides {
   bearerToken?: string | null
   /**
    * The operator credential presented by human-authority callers. `null`
-   * (the default) fail-closes user-kind `actor` claims at the seam.
+   * (the default) fail-closes the operator routes.
    */
   operatorToken?: string | null
-  /**
-   * Attaches the orchestration kernel to the legacy routes. Omitted by default
-   * so the pre-existing suites keep exercising the RELEASED behaviour; the
-   * compatibility suite passes one to prove the contract is identical either way.
-   */
-  orchestration?: AppDependencies["orchestration"]
   /** The Claude job runner, for a config whose `runtime.kind` is `claude`. */
   claudeJobRunner?: AppDependencies["claudeJobRunner"]
   /** Phase 4/5 seams: repository pinning, approval ledger, reporting, same-host check. */
@@ -165,7 +158,6 @@ export async function buildTestApp(overrides: BuildTestAppOverrides = {}) {
     callbackReporter: new CallbackReporter({ attempts: 1, baseDelayMs: 1, fetcher: async () => new Response(null, { status: 200 }) }),
     monitorSession: async () => undefined,
     taskGraphSyncer,
-    ...(overrides.orchestration === undefined ? {} : { orchestration: overrides.orchestration }),
     ...(overrides.claudeJobRunner === undefined ? {} : { claudeJobRunner: overrides.claudeJobRunner }),
     ...(overrides.repoWorkspaces === undefined ? {} : { repoWorkspaces: overrides.repoWorkspaces }),
     ...(overrides.approvalLedger === undefined ? {} : { approvalLedger: overrides.approvalLedger }),

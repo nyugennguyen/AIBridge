@@ -80,10 +80,24 @@ describe("trigger flow", () => {
     const { app } = await buildTestApp()
     await app.inject({ method: "POST", url: "/trigger", headers: { authorization: "Bearer secret" }, payload: validTrigger() })
 
-    const response = await app.inject({ method: "GET", url: "/jobs/job_1" })
+    const response = await app.inject({ method: "GET", url: "/jobs/job_1", headers: { authorization: "Bearer secret" } })
 
     expect(response.statusCode).toBe(200)
     expect(response.json()).toMatchObject({ id: "job_1", status: "running" })
+  })
+
+  it("answers /jobs/:id with the stored record, adding no field to an OpenCode job", async () => {
+    const { app, jobManager } = await buildTestApp()
+    await app.inject({ method: "POST", url: "/trigger", headers: { authorization: "Bearer secret" }, payload: validTrigger() })
+
+    const response = await app.inject({ method: "GET", url: "/jobs/job_1", headers: { authorization: "Bearer secret" } })
+
+    // Byte-identical to the stored record: an OpenCode job has no runtime
+    // result, so `jobResultFields` adds nothing, and the kernel correlation
+    // field that 3.1.x could add (never in `aibr serve`) was removed in 3.2.0.
+    expect(response.statusCode).toBe(200)
+    expect(response.json()).toEqual(JSON.parse(JSON.stringify(await jobManager.getJob("job_1"))))
+    expect(response.json().orchestration).toBeUndefined()
   })
 })
 

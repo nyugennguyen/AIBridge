@@ -1,6 +1,6 @@
 # ADR 0007: Rule Language, Evaluation, Budgets, and Simulation
 
-Status: Accepted for Milestone 6 implementation
+Status: Superseded by [ADR 0016](0016-keep-selected-unwired-code-with-deadlines.md) (accepted for Milestone 6 implementation before that). The rule engine was never wired into `aibr serve` and was removed in 3.2.0 (block D2); the kernel policy evaluation and immutable core went in block D5. The design stays in the `archive/kernel-mesh-3.1.1` tag.
 Date: 2026-10-01
 Deciders: Core Architecture Team, Advisor & Reviewer
 Amended: 2026-10-02 — see "Amendment — 2026-10-02". Section 8's non-universality

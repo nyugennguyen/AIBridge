@@ -1,4 +1,5 @@
 import { z } from "zod"
+import { jobIdSchema } from "../jobs/job-id.js"
 
 export const planStatusSchema = z.enum(["none", "submitted", "approved", "rejected"])
 export const permissionResponseSchema = z.enum(["reject", "once", "always"])
@@ -56,16 +57,6 @@ export const projectConfigSchema = z.object({
   id: z.string().min(1),
   path: z.string().min(1),
   capabilities: z.array(z.string().min(1)),
-})
-
-/**
- * Terminal backend selection. Default "tmux" for headless safety.
- * "herdr" is deprecated since 3.1.1 (backend removed): still accepted so older
- * profiles load, ignored, and `loadConfig` warns. Remove in 3.2.0.
- */
-export const terminalBackendSchema = z.enum(["tmux", "herdr"])
-export const terminalConfigSchema = z.object({
-  backend: terminalBackendSchema.default("tmux"),
 })
 
 /**
@@ -184,7 +175,6 @@ export const bridgeConfigSchema = z.object({
     public_url: z.url(),
     ingress_mode: z.enum(["engine", "router"]).default("engine"),
   }),
-  terminal: terminalConfigSchema.default({ backend: "tmux" }),
   runtime: runtimeConfigSchema.default({ kind: "opencode" }),
   /** Required when `runtime.kind` is `opencode` (the default); unused for `claude`. */
   opencode: opencodeConfigSchema.optional(),
@@ -282,13 +272,14 @@ export const planMetadataSchema = z
 
 export const remoteDependencySchema = z.object({
   agent_id: z.string().min(1),
-  job_id: z.string().min(1),
+  job_id: jobIdSchema,
 })
 
 export const dependencyReferenceSchema = z.union([z.string().min(1), remoteDependencySchema])
 
 export const triggerRequestSchema = z.object({
-  job_id: z.string().min(1).optional(),
+  /** See `src/jobs/job-id.ts`: it names a file on the worker, so it is a strict charset. */
+  job_id: jobIdSchema.optional(),
   source_agent_id: z.string().min(1),
   target_agent_id: z.string().min(1),
   capability: z.string().min(1),
@@ -339,7 +330,7 @@ export const scriptResultSchema = z.object({
 })
 
 export const reportCallbackSchema = z.object({
-  job_id: z.string().min(1),
+  job_id: jobIdSchema,
   source_agent_id: z.string().min(1),
   target_agent_id: z.string().min(1),
   opencode_session_id: z.string().min(1).optional(),

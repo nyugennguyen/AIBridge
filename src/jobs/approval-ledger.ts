@@ -3,13 +3,12 @@
  * Claude-runtime jobs (ADR 0013).
  *
  * Why not the kernel's `dispatch.propose -> dispatch.approve -> dispatch.execute`:
- * the profile bridge (`aibr serve`) does not attach the orchestration kernel at
- * all today, and when it is attached a legacy `/trigger` only records a held
- * DRAFT/PAUSED run that nothing can schedule. Wiring a real kernel approval
- * would need a controller lease, a run activation and a task promotion per
- * job, none of which the Claude runner consumes. This ledger is the minimal
- * record that makes every approval auditable now; ADR 0013 records the move
- * to kernel events as follow-up work.
+ * the profile bridge (`aibr serve`) never attached the orchestration kernel,
+ * and the kernel was removed in 3.2.0 (ADR 0016). Wiring a kernel approval
+ * would have needed a controller lease, a run activation and a task promotion
+ * per job, none of which the Claude runner consumes. This ledger is the
+ * minimal record that makes every approval auditable; moving job records to
+ * the event store is roadmap V4 (3.3.0).
  *
  * Each entry carries `seq` and `prev` (the sha256 of the previous line), so a
  * deleted or edited line breaks the chain and `verifyApprovalLedger` reports it.

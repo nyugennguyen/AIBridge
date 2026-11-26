@@ -3,7 +3,6 @@ import { createSqliteDriver } from "../../src/orchestration/event-store/sqlite-d
 import { runMigrations } from "../../src/orchestration/event-store/migrations.js"
 import { SqliteEventStore } from "../../src/orchestration/event-store/event-store.js"
 import { orchestrationCommandSchema, orchestrationEventSchema } from "../../src/orchestration/schemas.js"
-import { ProjectionEngine } from "../../src/orchestration/projections/projection-engine.js"
 
 describe("M8.5: Enforced Resource Caps and Burst Processing", () => {
   it("enforces documented system operating limits", () => {
@@ -36,11 +35,10 @@ describe("M8.5: Enforced Resource Caps and Burst Processing", () => {
     expect(evaluateBufferPressure(96_000, maxBuf)).toBe("critical")
   })
 
-  it("sustains burst event append and projection reduction throughput", async () => {
+  it("sustains burst event append and stream read throughput", () => {
     const driver = createSqliteDriver({ path: ":memory:" })
     runMigrations(driver)
     const store = new SqliteEventStore(driver)
-    const engine = new ProjectionEngine(store)
 
     const runId = "burst-run-1"
     const eventCount = 100
@@ -90,14 +88,14 @@ describe("M8.5: Enforced Resource Caps and Burst Processing", () => {
     // Append 100 events should complete in well under 1000ms
     expect(appendDurationMs).toBeLessThan(2000)
 
-    // Rebuild projection from stream
-    const tRebuildStart = performance.now()
-    const projection = await engine.rebuildRun(runId)
-    const tRebuildEnd = performance.now()
-    const rebuildDurationMs = tRebuildEnd - tRebuildStart
+    // Read the stream back. (The projection rebuild this case used to time
+    // went with the kernel in 3.2.0 D5; the event store itself is kept.)
+    const tReadStart = performance.now()
+    const stream = store.readStream(runId)
+    const readDurationMs = performance.now() - tReadStart
 
-    expect(projection.lastAppliedSequence).toBe(eventCount)
-    expect(rebuildDurationMs).toBeLessThan(500)
+    expect(stream).toHaveLength(eventCount)
+    expect(readDurationMs).toBeLessThan(500)
 
     driver.close()
   })

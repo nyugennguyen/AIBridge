@@ -124,10 +124,11 @@ describe("the M6.9 surface is reachable through its barrel", () => {
     expect(typeof notifications.describeNotificationAudit).toBe("function")
     expect(typeof notifications.findSeededNotificationSecret).toBe("function")
   })
-  it("exports the orchestration event consumer and refusal translators", () => {
-    expect(typeof notifications.createOrchestrationNotificationConsumer).toBe("function")
-    expect(typeof notifications.orchestrationEventToNotification).toBe("function")
-    expect(typeof notifications.dispatchRefusalToNotification).toBe("function")
+  it("no longer exports the orchestration consumer, which went with the kernel (3.2.0 D5)", () => {
+    const surface = notifications as Record<string, unknown>
+    expect(surface.createOrchestrationNotificationConsumer).toBeUndefined()
+    expect(surface.orchestrationEventToNotification).toBeUndefined()
+    expect(surface.dispatchRefusalToNotification).toBeUndefined()
   })
 
 
@@ -349,25 +350,6 @@ describe("the restated identifier schemas have not drifted from the kernel's", (
 })
 
 describe("no name is exported by two M6 barrels", () => {
-  const siblingPaths = {
-    rules: "../../../src/rules/index.js",
-    routing: "../../../src/routing/index.js",
-    budgets: "../../../src/budgets/index.js",
-    workflows: "../../../src/workflows/index.js",
-  } as const
-
-  for (const [sibling, path] of Object.entries(siblingPaths)) {
-    it(`shares no export name with src/${sibling}`, async () => {
-      const sibling = await optionalBarrel(new URL(path, import.meta.url).pathname)
-      // `null` means the sibling has not been written yet. A module that does not
-      // exist cannot export a colliding name, which is what this check asks.
-      if (sibling === null) return
-      const mine = new Set(Object.keys(notifications))
-      const collisions = Object.keys(sibling).filter((name) => mine.has(name))
-      expect(collisions).toEqual([])
-    })
-  }
-
   it("shares no export name with the M5 barrels the milestone sits above", async () => {
     for (const path of ["../../../src/context/index.js", "../../../src/memory/index.js", "../../../src/mesh/tui/index.js"]) {
       const sibling = await optionalBarrel(new URL(path, import.meta.url).pathname)

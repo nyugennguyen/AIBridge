@@ -13,21 +13,12 @@ function pingTrigger(overrides: Record<string, unknown> = {}) {
 
 async function setup(config: BridgeConfig = testConfig()) {
   const reports: JobRecord[] = []
-  const acceptCalls: unknown[] = []
   const claudeCalls: string[] = []
-  const translation = {
-    acceptTrigger: (job: unknown) => {
-      acceptCalls.push(job)
-      return { ok: true }
-    },
-    correlate: () => ({ ok: true, correlation: {} }),
-  } as unknown as NonNullable<NonNullable<Parameters<typeof buildTestApp>[0]>["orchestration"]>["translation"]
   const built = await buildTestApp({
     config,
     reportTerminalJob: async (job) => {
       reports.push(job)
     },
-    orchestration: { translation },
     claudeJobRunner: {
       start: async () => {
         claudeCalls.push("start")
@@ -38,7 +29,7 @@ async function setup(config: BridgeConfig = testConfig()) {
       },
     } as never,
   })
-  return { ...built, reports, acceptCalls, claudeCalls }
+  return { ...built, reports, claudeCalls }
 }
 
 async function flush(): Promise<void> {
@@ -53,7 +44,7 @@ describe("POST /trigger with capability aibr.ping", () => {
     expect(response.statusCode).toBe(202)
     expect(response.json()).toMatchObject({ accepted: true, job_id: "ping-1", status: "accepted", target_agent_id: "test-vps" })
 
-    const job = await h.app.inject({ method: "GET", url: "/jobs/ping-1" })
+    const job = await h.app.inject({ method: "GET", url: "/jobs/ping-1", headers: { authorization: "Bearer secret" } })
     expect(job.statusCode).toBe(200)
     const body = job.json()
     expect(body.status).toBe("completed")
@@ -73,7 +64,6 @@ describe("POST /trigger with capability aibr.ping", () => {
     expect(h.reports[0]?.id).toBe("ping-1")
     expect(h.opencode.createdSessions).toBe(0)
     expect(h.opencode.sentPrompts).toBe(0)
-    expect(h.acceptCalls).toEqual([])
     expect(h.claudeCalls).toEqual([])
   })
 
@@ -82,7 +72,7 @@ describe("POST /trigger with capability aibr.ping", () => {
     const h = await setup(config)
     const response = await h.app.inject({ method: "POST", url: "/trigger", headers: AUTH, payload: pingTrigger() })
     expect(response.statusCode).toBe(202)
-    const body = (await h.app.inject({ method: "GET", url: "/jobs/ping-1" })).json()
+    const body = (await h.app.inject({ method: "GET", url: "/jobs/ping-1", headers: { authorization: "Bearer secret" } })).json()
     expect(body.status).toBe("completed")
     expect(body.pong.runtime).toBe("claude")
     await flush()

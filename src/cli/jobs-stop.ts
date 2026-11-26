@@ -35,6 +35,8 @@ export const STOP_HELP = [
   "profile's user service (aibr start) is unloaded and removed, and the tmux",
   "session aibridge-<name> (aibr start --foreground) is killed.",
   "",
+  "To end ONE job, use aibr cancel <job_id>.",
+  "",
 ].join("\n")
 
 export async function runStopCommand(argv: readonly string[], deps: StopCliDeps): Promise<number> {

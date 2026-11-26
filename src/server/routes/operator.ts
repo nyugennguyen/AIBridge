@@ -143,7 +143,11 @@ export function registerOperatorRoutes(app: FastifyInstance, dependencies: AppDe
     }
     try {
       const dispatched = await dispatchOpencodeJob(approved, dependencies, { recordInKernel: false })
-      if (!dispatched.ok) return await fail(dispatched.statusCode, dispatched.body)
+      if (!dispatched.ok) {
+        // A launch OpenCode refused is already failed and reported.
+        if (dispatched.reported === true) return reply.code(dispatched.statusCode).send(dispatched.body)
+        return await fail(dispatched.statusCode, dispatched.body)
+      }
       return reply.code(200).send({
         job_id: approved.id,
         status: dispatched.job.status,

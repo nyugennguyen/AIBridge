@@ -445,6 +445,21 @@ export interface ClaudeJobLaunch {
   readonly startedAtMs?: number
 }
 
+/**
+ * Thrown by `start` when the launch failed after `launchStartedAt` was
+ * written. The job is already `failed` (its stored error is this message) and
+ * reported: callers must not fail or report it again.
+ */
+export class ClaudeLaunchError extends Error {
+  readonly code = "claude_launch_failed"
+  constructor(
+    message: string,
+    readonly job: JobRecord | undefined,
+  ) {
+    super(message)
+  }
+}
+
 /** Thrown by `start` when `limits.max_concurrent_jobs` jobs are already running. */
 export class RunnerAtCapacityError extends Error {
   readonly code = "node_at_capacity"
@@ -550,9 +565,10 @@ export class ClaudeJobRunner {
    * job is `accepted` and was never launched), prepares the job's working directory (its own
    * worktree at the pinned sha when the job has a `checkout`) and, when the
    * profile's first step is Claude Code, launches it. Moves the job to
-   * `running`. Throws `RunnerAtCapacityError` when the node is full, or the
-   * launch error; on a throw the slot and any worktree are released and the
-   * job is left for the caller to fail.
+   * `running`. Throws `RunnerAtCapacityError` when the node is full and the
+   * marker's refusal as is (the job is left alone). A failure after the
+   * marker fails and reports the job, then throws `ClaudeLaunchError`. On any
+   * throw the slot and any worktree are released.
    */
   async start(job: JobRecord): Promise<ClaudeJobLaunch> {
     if (this.#active.has(job.id)) throw new Error(`Job ${job.id} is already running`)
@@ -565,10 +581,16 @@ export class ClaudeJobRunner {
     this.#active.set(job.id, active)
     const startedAt = this.#clock()
     const timeoutSeconds = claudeTimeoutSeconds(this.#config, job.trigger)
+    // Before any side effect (worktree, spawn, script): after a restart, a
+    // job without this marker provably never ran and may be launched again.
+    // A refusal (not `accepted`, or launched before) leaves the job alone.
     try {
-      // Before any side effect (worktree, spawn, script): after a restart, a
-      // job without this marker provably never ran and may be launched again.
       await this.#jobManager.markLaunchStarted(job.id)
+    } catch (error) {
+      await this.#releaseJob(job, active)
+      throw error
+    }
+    try {
       const cwd = await this.#prepareWorkingDirectory(job, active)
       const profile = capabilityProfile(this.#config, job.trigger.capability)
       if (profile === undefined) throw new Error(`Unknown capability profile: ${job.trigger.capability}`)
@@ -587,7 +609,15 @@ export class ClaudeJobRunner {
       }
     } catch (error) {
       await this.#releaseJob(job, active)
-      throw error
+      // Past the marker the job may have done something: fail it now with the
+      // launch error and report it, rather than leave it `accepted`.
+      const message = error instanceof Error ? error.message : "Claude Code launch failed"
+      const failed = await this.#jobManager.markFailed(job.id, truncate(message, MAX_ERROR_LENGTH)).catch(() => undefined)
+      if (failed !== undefined) {
+        await this.#taskGraphSyncer?.syncJobToTask(job.trigger.task_id ?? `#${job.id}`, "failed").catch(() => undefined)
+        await this.#reportTerminalJob(failed).catch(() => undefined)
+      }
+      throw new ClaudeLaunchError(failed?.error ?? "Claude Code launch failed", failed)
     }
   }
 

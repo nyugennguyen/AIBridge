@@ -112,6 +112,7 @@ export async function startIngressWorker(
       callbackReporter: runtime.callbackReporter,
       taskGraphSyncer: runtime.taskGraphSyncer,
       monitorSession: runtime.monitorSession,
+      reportTerminalJob: runtime.reportTerminalJob,
       observer: options.ingressObserver,
     })
   } catch (error) {
@@ -144,6 +145,9 @@ export async function startIngressWorker(
       taskGraphSyncer: runtime.taskGraphSyncer,
       monitorSession: runtime.monitorSession,
       reportTerminalJob: runtime.reportTerminalJob,
+      callbackReporter: runtime.callbackReporter,
+      config: runtime.config,
+      bearerToken: options.bearerToken,
     }),
   ).then(() => reconciled)
   const stopSweep = startPeriodicSweep({

@@ -92,6 +92,8 @@ export interface IngressDrainerDependencies {
   readonly callbackReporter?: CallbackReporter
   readonly taskGraphSyncer: TaskGraphSyncer
   readonly monitorSession: (job: JobRecord) => Promise<void>
+  /** Delivers the report of a job whose launch OpenCode refused. `aibr worker` always passes it. */
+  readonly reportTerminalJob?: (job: JobRecord) => Promise<void>
   /** Optional; see {@link IngressLifecycleObserver} for why it is not a return value. */
   readonly observer?: IngressLifecycleObserver
   readonly orchestration?: {
@@ -106,6 +108,7 @@ export class IngressDrainer {
   readonly #opencodeClient: OpencodeClient
   readonly #taskGraphSyncer: TaskGraphSyncer
   readonly #monitorSession: (job: JobRecord) => Promise<void>
+  readonly #reportTerminalJob?: (job: JobRecord) => Promise<void>
   readonly #orchestration?: { readonly translation: LegacyTranslation }
   readonly #observer?: IngressLifecycleObserver
   private running = false
@@ -118,6 +121,7 @@ export class IngressDrainer {
     this.#opencodeClient = dependencies.opencodeClient
     this.#taskGraphSyncer = dependencies.taskGraphSyncer
     this.#monitorSession = dependencies.monitorSession
+    this.#reportTerminalJob = dependencies.reportTerminalJob
     this.#observer = dependencies.observer
     this.#orchestration = dependencies.orchestration
   }
@@ -432,9 +436,12 @@ export class IngressDrainer {
       return
     }
 
+    // A launch OpenCode refuses fails and reports the job, then throws: the
+    // row is failed by `processRecord` with the (redacted) launch error.
     const { sessionId, running } = await startOpencodeSession(job, {
       jobManager: this.#jobManager,
       opencodeClient: this.#opencodeClient,
+      ...(this.#reportTerminalJob !== undefined ? { reportTerminalJob: this.#reportTerminalJob } : {}),
     })
 
     await this.#taskGraphSyncer.syncJobToTask(resolvedTaskId, "running", {
@@ -494,13 +501,12 @@ export class IngressDrainer {
         const { running } = await startOpencodeSession(unblockedJob, {
           jobManager: this.#jobManager,
           opencodeClient: this.#opencodeClient,
+          ...(this.#reportTerminalJob !== undefined ? { reportTerminalJob: this.#reportTerminalJob } : {}),
         })
         void this.#monitorSession(running)
-      } catch (err) {
-        await this.#jobManager.markFailed(
-          unblockedJob.id,
-          err instanceof Error ? err.message : "Execution failed",
-        )
+      } catch {
+        // OpenCode refused: the job is already failed and reported. The
+        // marker refused: another path owns this job; leave it alone.
       }
     }
 

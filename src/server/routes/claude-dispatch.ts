@@ -6,7 +6,7 @@ import { jobDeadlineMs } from "../../jobs/manager.js"
 import { waitUntil } from "../../jobs/reconcile.js"
 import { createTerminalJobReporter } from "../../jobs/report.js"
 import type { JobRecord } from "../../jobs/types.js"
-import { RunnerAtCapacityError, type ClaudeJobLaunch } from "../../runtime/claude-job-runner.js"
+import { ClaudeLaunchError, RunnerAtCapacityError, type ClaudeJobLaunch } from "../../runtime/claude-job-runner.js"
 import type { AppDependencies } from "../app.js"
 
 export type ClaudeLaunchOutcome =
@@ -17,7 +17,8 @@ export type ClaudeLaunchOutcome =
  * Starts the job on the Claude runner, syncs the task graph and hands it to
  * the runner's monitor. On failure the job is marked failed; `reportFailure`
  * also delivers its report (the approve path: the original caller is waiting
- * for a callback, not for this HTTP response).
+ * for a callback, not for this HTTP response). A failure after the launch
+ * marker is always reported, by the runner (`ClaudeLaunchError`).
  */
 export async function launchClaudeJob(
   job: JobRecord,
@@ -32,6 +33,10 @@ export async function launchClaudeJob(
   try {
     launch = await runner.start(job)
   } catch (error) {
+    // Past the marker the runner already failed and reported the job.
+    if (error instanceof ClaudeLaunchError) {
+      return { ok: false, statusCode: 500, body: { error: error.message, code: error.code } }
+    }
     const atCapacity = error instanceof RunnerAtCapacityError
     const message = error instanceof Error ? error.message : "Claude Code launch failed"
     const failed = await dependencies.jobManager.markFailed(job.id, message).catch(() => undefined)
@@ -80,7 +85,9 @@ export function atCapacityBody(dependencies: AppDependencies): { error: string; 
   }
 }
 
-export function terminalReporter(dependencies: AppDependencies): (job: JobRecord) => Promise<void> {
+export function terminalReporter(
+  dependencies: Pick<AppDependencies, "reportTerminalJob" | "jobManager" | "callbackReporter" | "config" | "bearerToken">,
+): (job: JobRecord) => Promise<void> {
   return (
     dependencies.reportTerminalJob ??
     createTerminalJobReporter({

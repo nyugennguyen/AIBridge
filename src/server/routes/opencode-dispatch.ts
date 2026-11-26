@@ -4,13 +4,22 @@
  */
 import type { JobRecord } from "../../jobs/types.js"
 import { waitUntil } from "../../jobs/reconcile.js"
-import { startOpencodeSession } from "../../opencode/launch.js"
+import { OpencodeLaunchError, startOpencodeSession } from "../../opencode/launch.js"
 import type { AppDependencies } from "../app.js"
+import { terminalReporter } from "./claude-dispatch.js"
 
 /** What dispatching needs; `aibr worker` (no HTTP app) supplies the same objects. */
 export type OpencodeDispatchDependencies = Pick<
   AppDependencies,
-  "jobManager" | "opencodeClient" | "taskGraphSyncer" | "monitorSession" | "orchestration"
+  | "jobManager"
+  | "opencodeClient"
+  | "taskGraphSyncer"
+  | "monitorSession"
+  | "orchestration"
+  | "reportTerminalJob"
+  | "callbackReporter"
+  | "config"
+  | "bearerToken"
 >
 
 export type OpencodeDispatchOutcome =
@@ -20,7 +29,13 @@ export type OpencodeDispatchOutcome =
       readonly status: "accepted" | "blocked"
       readonly sessionId?: string
     }
-  | { readonly ok: false; readonly statusCode: 400 | 500; readonly body: { readonly error: string; readonly code?: string } }
+  | {
+      readonly ok: false
+      readonly statusCode: 400 | 500
+      readonly body: { readonly error: string; readonly code?: string }
+      /** The job is already failed and its report delivered: do neither again. */
+      readonly reported?: true
+    }
 
 /**
  * Holds the job as `blocked` while its dependencies are unfinished, otherwise
@@ -87,7 +102,14 @@ export async function dispatchOpencodeJob(
     }
   }
 
-  const { sessionId, running } = await startOpencodeSession(job, dependencies)
+  let launched: Awaited<ReturnType<typeof startOpencodeSession>>
+  try {
+    launched = await startOpencodeSession(job, { ...dependencies, reportTerminalJob: terminalReporter(dependencies) })
+  } catch (error) {
+    if (!(error instanceof OpencodeLaunchError)) throw error
+    return { ok: false, statusCode: 500, body: { error: error.message, code: error.code }, reported: true }
+  }
+  const { sessionId, running } = launched
 
   await dependencies.taskGraphSyncer.syncJobToTask(taskId, "running", { Job: job.id, Session: sessionId })
 
@@ -107,13 +129,13 @@ export async function dispatchOpencodeJob(
  */
 export async function relaunchOpencodeJob(
   job: JobRecord,
-  dependencies: OpencodeDispatchDependencies & { readonly reportTerminalJob: (job: JobRecord) => Promise<void> },
+  dependencies: OpencodeDispatchDependencies,
   options: { readonly healthWaitMs?: number; readonly healthPollMs?: number } = {},
 ): Promise<void> {
   const fail = async (error: string): Promise<void> => {
     await dependencies.jobManager.markFailed(job.id, error).catch(() => undefined)
     const failed = await dependencies.jobManager.getJob(job.id).catch(() => undefined)
-    if (failed?.status === "failed") await dependencies.reportTerminalJob(failed)
+    if (failed?.status === "failed") await terminalReporter(dependencies)(failed)
   }
   const healthy = await waitUntil(() => dependencies.opencodeClient.health(), {
     timeoutMs: options.healthWaitMs ?? 60_000,
@@ -122,7 +144,7 @@ export async function relaunchOpencodeJob(
   if (!healthy) return await fail("OpenCode server unhealthy: the job could not be relaunched after a bridge restart")
   try {
     const dispatched = await dispatchOpencodeJob(job, dependencies, { recordInKernel: false })
-    if (!dispatched.ok) await fail(dispatched.body.error)
+    if (!dispatched.ok && dispatched.reported !== true) await fail(dispatched.body.error)
   } catch (error) {
     await fail(error instanceof Error ? error.message : "OpenCode launch failed")
   }

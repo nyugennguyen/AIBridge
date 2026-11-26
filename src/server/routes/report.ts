@@ -4,6 +4,7 @@ import { createAuthProvider } from "../../security/auth-provider.js"
 import { requireIdentityGuard } from "../../pairing/verifier.js"
 import { startOpencodeSession } from "../../opencode/launch.js"
 import type { AppDependencies } from "../app.js"
+import { terminalReporter } from "./claude-dispatch.js"
 
 export function registerReportRoute(app: FastifyInstance, dependencies: AppDependencies): void {
   const auth = createAuthProvider(
@@ -48,10 +49,11 @@ export function registerReportRoute(app: FastifyInstance, dependencies: AppDepen
         return reply.code(500).send({ error: recorded.error.message, code: recorded.error.code })
       }
       try {
-        const { running } = await startOpencodeSession(job, dependencies)
+        const { running } = await startOpencodeSession(job, { ...dependencies, reportTerminalJob: terminalReporter(dependencies) })
         void dependencies.monitorSession(running)
-      } catch (error) {
-        await dependencies.jobManager.markFailed(job.id, error instanceof Error ? error.message : "Execution failed")
+      } catch {
+        // OpenCode refused: the job is already failed and reported. The marker
+        // refused: another path owns this job; leave it alone.
       }
     }
     dependencies.shadowMirror?.mirrorReport(request.body, true)

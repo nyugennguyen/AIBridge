@@ -46,11 +46,28 @@ export interface SweepOptions {
   readonly isActive?: (jobId: string) => boolean
 }
 
+export interface JobManagerOptions {
+  /**
+   * Applied to every error string before it is stored on a job. A job's
+   * `error` is served by `GET /jobs/:id` and becomes the `/report` summary
+   * when no runtime result exists (OpenCode jobs), and it may carry text from
+   * a runtime or a library: `createRuntime` passes `redactSecretsFromText`
+   * over this node's secrets.
+   */
+  readonly redactError?: (text: string) => string
+}
+
 export class JobManager {
   /** Job ids whose `markLaunchStarted` is in progress. */
   private readonly launchClaims = new Set<string>()
+  private readonly redactError: (text: string) => string
 
-  constructor(private readonly store: JobStore) {}
+  constructor(
+    private readonly store: JobStore,
+    options: JobManagerOptions = {},
+  ) {
+    this.redactError = options.redactError ?? ((text) => text)
+  }
 
   /**
    * Creates a job. `init.awaitingApproval` creates it held (`awaiting_approval`
@@ -177,7 +194,7 @@ export class JobManager {
   }
 
   async markFailed(id: string, error: string, now = new Date().toISOString()): Promise<JobRecord> {
-    return this.transition(id, "failed", now, { error })
+    return this.transition(id, "failed", now, { error: this.redactError(error) })
   }
 
   async markTimedOut(id: string, now = new Date().toISOString()): Promise<JobRecord> {

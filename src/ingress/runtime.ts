@@ -36,6 +36,7 @@ import { createTerminalJobReporter } from "../jobs/report.js"
 import { createProfileRequestSigner } from "../pairing/signer.js"
 import { ClaudeJobRunner, type ClaudeJobRunnerOptions } from "../runtime/claude-job-runner.js"
 import { RepoWorkspaceManager } from "../runtime/repo-workspace.js"
+import { redactSecretsFromText } from "../runtime/sanitizer.js"
 
 /**
  * The OpenCode client of a node whose runtime is not OpenCode. Health is
@@ -136,7 +137,17 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
         })
       : new UnconfiguredOpencodeClient())
 
-  const jobManager = new JobManager(new JsonFileJobStore(join(options.stateDir, "jobs")))
+  // Every error stored on a job is served by `GET /jobs/:id` and, for jobs
+  // without a runtime result (OpenCode), is the `/report` summary. Text from
+  // OpenCode or its client library is scrubbed of this node's secrets first.
+  const knownSecrets = [
+    options.bearerToken,
+    options.operatorToken,
+    opencodeConfig !== undefined ? options.environment[opencodeConfig.password_env] : undefined,
+  ].filter((value): value is string => typeof value === "string" && value.length > 0)
+  const jobManager = new JobManager(new JsonFileJobStore(join(options.stateDir, "jobs")), {
+    redactError: (text) => redactSecretsFromText(text, knownSecrets),
+  })
   const taskGraphSyncer = new FileTaskGraphSyncer(join(options.stateDir, "tasks.md"))
   const egressOutboxStore =
     options.deps?.egressOutboxStore ??
@@ -215,18 +226,16 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
       const unblockedJobs = await jobManager.unblockDependents(job.id)
       for (const unblocked of unblockedJobs) {
         try {
-          const { running } = await startOpencodeSession(unblocked, { jobManager, opencodeClient })
+          const { running } = await startOpencodeSession(unblocked, { jobManager, opencodeClient, reportTerminalJob })
           void monitorSession(running).catch(async (err: unknown) => {
             await jobManager.markFailed(
               unblocked.id,
               err instanceof Error ? err.message : "Session monitor failed",
             )
           })
-        } catch (error) {
-          await jobManager.markFailed(
-            unblocked.id,
-            error instanceof Error ? error.message : "Execution failed",
-          )
+        } catch {
+          // OpenCode refused: the job is already failed and reported. The
+          // marker refused: another path owns this job; leave it alone.
         }
       }
       await reportTerminalJob(terminalJob)

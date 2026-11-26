@@ -11,13 +11,10 @@ import {
   assertSdkVersionCompatible,
   type AdapterRegistration,
   type AgentRuntimeAdapter,
-  type TerminalBackend,
-  type TerminalBackendRegistration,
 } from "./types.js"
 
 export class ExtensionRegistry {
   private readonly adapters = new Map<string, AdapterRegistration>()
-  private readonly terminalBackends = new Map<string, TerminalBackendRegistration>()
 
   registerAdapter(registration: AdapterRegistration): void {
     assertSdkVersionCompatible(registration.metadata.aibridgeSdkVersion)
@@ -36,25 +33,7 @@ export class ExtensionRegistry {
     return Array.from(this.adapters.values())
   }
 
-  registerTerminalBackend(registration: TerminalBackendRegistration): void {
-    assertSdkVersionCompatible(registration.metadata.aibridgeSdkVersion)
-    const kind = registration.backend.kind
-    if (this.terminalBackends.has(kind)) {
-      throw new Error(`Terminal backend '${kind}' is already registered`)
-    }
-    this.terminalBackends.set(kind, registration)
-  }
-
-  getTerminalBackend(kind: string): TerminalBackend | undefined {
-    return this.terminalBackends.get(kind)?.backend
-  }
-
-  listTerminalBackends(): readonly TerminalBackendRegistration[] {
-    return Array.from(this.terminalBackends.values())
-  }
-
   clear(): void {
     this.adapters.clear()
-    this.terminalBackends.clear()
   }
 }

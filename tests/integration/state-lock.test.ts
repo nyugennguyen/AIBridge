@@ -12,7 +12,7 @@ import { join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
 import { startBridge, type BridgeInstance } from "../../src/bridge.js"
 import type { BridgeConfig } from "../../src/config/types.js"
-import { acquireStateLock, processStartTime, STATE_LOCK_FILE, StateLockHeldError, type StateLock } from "../../src/host/state-lock.js"
+import { acquireStateLock, readProcessStartTime, STATE_LOCK_FILE, StateLockHeldError, type StateLock } from "../../src/host/state-lock.js"
 import { startIngressWorker, type IngressWorkerHandle } from "../../src/ingress/worker.js"
 import { INTERRUPTED_BY_RESTART } from "../../src/jobs/reconcile.js"
 import type { JobRecord } from "../../src/jobs/types.js"
@@ -94,7 +94,7 @@ describe("acquireStateLock", () => {
     const lock = acquireStateLock(stateDir)
     const content = JSON.parse(await readFile(lockPath(stateDir), "utf8")) as { pid: number; start: string }
     expect(content.pid).toBe(process.pid)
-    expect(content.start).toBe(processStartTime(process.pid))
+    expect(content.start).toBe(readProcessStartTime(process.pid))
     expect(content.start.length).toBeGreaterThan(0)
     lock.release()
   })
@@ -123,15 +123,34 @@ describe("acquireStateLock", () => {
     lock.release()
   })
 
-  it("old-format file, unreadable start time, or dead PID: stale", async () => {
-    for (const [content, starts] of [
-      ["999999 stale-token\n", { 5000: "now" }],
-      [{ pid: 4242, start: "Mon", token: "t" }, { 5000: "now" }],
-      [{ pid: 4242, start: "", token: "t" }, { 4242: "", 5000: "now" }],
-    ] as const) {
+  it("dead PID: stale, whatever the file holds", async () => {
+    for (const content of ["999999 stale-token\n", { pid: 4242, start: "ps:Mon", token: "t" }, { pid: 4242, start: "", token: "t" }]) {
       const stateDir = await mkdtemp(join(tmpdir(), "aibridge-lock-"))
       await writeLock(stateDir, content)
-      acquireStateLock(stateDir, { pid: 5000, ...world(starts as Record<number, string>) }).release()
+      acquireStateLock(stateDir, { pid: 5000, ...world({ 5000: "now" }) }).release()
+    }
+  })
+
+  it("live PID whose start time cannot be read now: held (safe side), naming the PID, the lock and the recovery doc", async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), "aibridge-lock-"))
+    await writeLock(stateDir, { pid: 4242, start: "ps:Mon", token: "t" })
+    let refusal: unknown
+    try {
+      acquireStateLock(stateDir, { pid: 5000, isAlive: () => true, startTimeOf: (pid) => (pid === 5000 ? "now" : undefined) })
+    } catch (error) {
+      refusal = error
+    }
+    expect(refusal).toBeInstanceOf(StateLockHeldError)
+    expect((refusal as Error).message).toContain("PID 4242")
+    expect((refusal as Error).message).toContain(lockPath(stateDir))
+    expect((refusal as Error).message).toContain("Docs/operations/troubleshooting.md")
+  })
+
+  it("live PID with no start time in the file (empty or pre-3.2 format): held", async () => {
+    for (const content of ["4242 old-token\n", { pid: 4242, start: "", token: "t" }, { pid: 4242, token: "t" }]) {
+      const stateDir = await mkdtemp(join(tmpdir(), "aibridge-lock-"))
+      await writeLock(stateDir, content)
+      expect(() => acquireStateLock(stateDir, { pid: 5000, ...world({ 4242: "ps:Thu", 5000: "now" }) })).toThrow(StateLockHeldError)
     }
   })
 
@@ -191,6 +210,55 @@ catch (error) { console.log(error?.code === "state_dir_locked" ? "held" : "error
     expect(outcomes.filter((outcome) => outcome === "won").length).toBeLessThanOrEqual(1)
     expect(outcomes.every((outcome) => outcome === "won" || outcome === "held")).toBe(true)
   }, 30_000)
+})
+
+describe("readProcessStartTime", () => {
+  it("does not depend on the caller's time zone or locale (ps path)", () => {
+    const utc = readProcessStartTime(process.pid, { platform: "darwin", env: { ...process.env, TZ: "UTC", LC_ALL: "C" } })
+    const hcm = readProcessStartTime(process.pid, { platform: "darwin", env: { ...process.env, TZ: "Asia/Ho_Chi_Minh", LC_ALL: "fr_FR.UTF-8" } })
+    expect(utc).toBeDefined()
+    expect(utc?.startsWith("ps:")).toBe(true)
+    expect(hcm).toBe(utc)
+  })
+
+  it("runs ps with TZ=UTC and LC_ALL=C whatever the environment says", () => {
+    const seen: Array<Record<string, string | undefined>> = []
+    const value = readProcessStartTime(42, {
+      platform: "darwin",
+      env: { TZ: "Asia/Ho_Chi_Minh", LC_ALL: "vi_VN.UTF-8", PATH: "/usr/bin" },
+      runPs: (_pid, env) => {
+        seen.push(env)
+        return "  Thu Nov 26 07:07:00 2026  \n"
+      },
+    })
+    expect(value).toBe("ps:Thu Nov 26 07:07:00 2026")
+    expect(seen[0]).toMatchObject({ TZ: "UTC", LC_ALL: "C", LANG: "C", PATH: "/usr/bin" })
+  })
+
+  it("on Linux reads /proc/<pid>/stat field 22 and the boot id, without ps", () => {
+    const files: Record<string, string> = {
+      // comm with spaces and a ")" must not shift the fields.
+      "/proc/4242/stat": "4242 (aibr (serve) x) S 1 4242 4242 0 -1 4194560 100 0 0 0 5 3 0 0 20 0 7 0 987654 123456789 2000",
+      "/proc/sys/kernel/random/boot_id": "6f1c2b9e-0000-4000-8000-000000000001\n",
+    }
+    const value = readProcessStartTime(4242, {
+      platform: "linux",
+      readFile: (path) => files[path],
+      runPs: () => {
+        throw new Error("ps must not run on Linux")
+      },
+    })
+    expect(value).toBe("linux:6f1c2b9e-0000-4000-8000-000000000001:987654")
+
+    // Same PID after a reboot: another boot id, so another value.
+    files["/proc/sys/kernel/random/boot_id"] = "aaaaaaaa-0000-4000-8000-000000000002\n"
+    expect(readProcessStartTime(4242, { platform: "linux", readFile: (path) => files[path], runPs: () => undefined })).not.toBe(value)
+  })
+
+  it("is undefined when nothing can be read", () => {
+    expect(readProcessStartTime(4242, { platform: "linux", readFile: () => undefined, runPs: () => undefined })).toBeUndefined()
+    expect(readProcessStartTime(4242, { platform: "darwin", runPs: () => "" })).toBeUndefined()
+  })
 })
 
 describe("a second bridge on the same profile", () => {

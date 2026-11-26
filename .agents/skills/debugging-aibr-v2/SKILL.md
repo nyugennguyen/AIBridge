@@ -128,10 +128,13 @@ state    ~/.local/state/aibridge/<profile>/{jobs/*.json,tasks.md,egress_outbox.d
 ```
 
 `aibridge.lock` (`src/host/state-lock.ts`) is held by the one `aibr serve` / `aibr worker` of the
-profile for its lifetime: JSON with `pid`, `start` (`ps -o lstart=`) and a token. It counts as held
-only while that PID is alive **with the same start time**; a crashed holder or a PID reused after a
-reboot is replaced automatically. A second process exits with "Another AIBridge process (PID n) is
-already running on this profile" and touches no job. Manual recovery, only if PID n is not AIBridge:
+profile for its lifetime: JSON with `pid`, `start` and a token. `start` is a raw string compared
+exactly, independent of TZ and locale (`readProcessStartTime`): `linux:<boot_id>:<stat field 22>` on
+Linux, `ps:<lstart>` under `TZ=UTC LC_ALL=C` elsewhere. **Stale only if the PID is dead, or both start
+times were read and differ** (reused PID); a PID that is alive but unverifiable (start unreadable, or
+missing from an older lock file) counts as **held**. A second process exits with "Another AIBridge
+process (PID n) is already running on this profile" and touches no job. Manual recovery, only if PID
+n is not AIBridge:
 
 ```bash
 aibr stop -p <profile>                                   # stops the service and the tmux session

@@ -138,6 +138,11 @@ export function readProcessStartTime(pid: number, sources: Partial<StartTimeSour
   return start !== undefined && start.length > 0 ? `ps:${start}` : undefined
 }
 
+/** The method prefix of a start time (`linux`, `ps`), or "" for an unprefixed value. */
+function startTimeForm(start: string): string {
+  return /^(linux|ps):/.exec(start)?.[1] ?? ""
+}
+
 /**
  * The lock's holder. A pre-3.2 file (`"<pid> <token>"`) or one without a
  * start time yields `start: ""` (unverifiable); a file with no PID at all
@@ -186,10 +191,16 @@ export function acquireStateLock(stateDir: string, options: StateLockOptions = {
     if (holder === undefined || !isAlive(holder.pid)) return false
     if (holder.start.length === 0) return true
     const current = startTimeOf(holder.pid)
-    return current === undefined || current === holder.start
+    if (current === undefined) return true
+    // Readings from different methods (`linux:` vs `ps:`, e.g. two PID
+    // namespaces sharing the state dir) are not comparable: unverifiable, held.
+    if (startTimeForm(current) !== startTimeForm(holder.start)) return true
+    return current === holder.start
   }
 
-  for (let attempt = 0; attempt < 5; attempt += 1) {
+  // Bounded, but generous: under contention a round can be lost to another
+  // process's rename and simply starts again.
+  for (let attempt = 0; attempt < 50; attempt += 1) {
     // Written in full first, then linked into place: a reader never sees a
     // half-written lock, and `link` fails if the lock exists (as O_EXCL would).
     const staged = `${path}.${randomUUID()}.tmp`
@@ -217,6 +228,8 @@ export function acquireStateLock(stateDir: string, options: StateLockOptions = {
     }
 
     const holder = parseLock(readText(path))
+    // Ours, put back by a process that moved it aside by mistake.
+    if (holder?.token === token) return lockHandle(path, token)
     if (isHeld(holder)) throw new StateLockHeldError(path, holder.pid)
 
     // Stale (dead or reused PID, unreadable, old format). Only the process
@@ -250,6 +263,8 @@ export function acquireStateLock(stateDir: string, options: StateLockOptions = {
       /* gone */
     }
   }
+  const last = parseLock(readText(path))
+  if (last !== undefined && last.token !== token) throw new StateLockHeldError(path, last.pid)
   throw new Error(`Could not take the state lock ${path}`)
 }
 

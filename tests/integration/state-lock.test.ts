@@ -146,6 +146,21 @@ describe("acquireStateLock", () => {
     expect((refusal as Error).message).toContain("Docs/operations/troubleshooting.md")
   })
 
+  it("live PID whose stored and current start times use different methods (linux: vs ps:): held", async () => {
+    for (const [stored, current] of [
+      ["linux:6f1c2b9e-0000-4000-8000-000000000001:987654", "ps:Thu Nov 26 07:07:00 2026"],
+      ["ps:Thu Nov 26 07:07:00 2026", "linux:6f1c2b9e-0000-4000-8000-000000000001:987654"],
+    ]) {
+      const stateDir = await mkdtemp(join(tmpdir(), "aibridge-lock-"))
+      await writeLock(stateDir, { pid: 4242, start: stored, token: "t" })
+      expect(() => acquireStateLock(stateDir, { pid: 5000, ...world({ 4242: current!, 5000: "ps:now" }) })).toThrow(StateLockHeldError)
+    }
+    // Same method, different value: still stale.
+    const stateDir = await mkdtemp(join(tmpdir(), "aibridge-lock-"))
+    await writeLock(stateDir, { pid: 4242, start: "linux:boot-a:1", token: "t" })
+    acquireStateLock(stateDir, { pid: 5000, ...world({ 4242: "linux:boot-b:1", 5000: "ps:now" }) }).release()
+  })
+
   it("live PID with no start time in the file (empty or pre-3.2 format): held", async () => {
     for (const content of ["4242 old-token\n", { pid: 4242, start: "", token: "t" }, { pid: 4242, token: "t" }]) {
       const stateDir = await mkdtemp(join(tmpdir(), "aibridge-lock-"))
@@ -204,11 +219,16 @@ catch (error) { console.log(error?.code === "state_dir_locked" ? "held" : "error
     )
     const runOne = () =>
       new Promise<string>((resolve) => {
-        execFile("bun", [script], { timeout: 20_000 }, (_error, stdout) => resolve(stdout.trim()))
+        execFile("bun", [script], { timeout: 20_000 }, (error, stdout, stderr) =>
+          resolve(stdout.trim() || `no output (${error?.message ?? "exit 0"}): ${stderr.trim().slice(0, 300)}`),
+        )
       })
     const outcomes = await Promise.all(Array.from({ length: 5 }, runOne))
-    expect(outcomes.filter((outcome) => outcome === "won").length).toBeLessThanOrEqual(1)
-    expect(outcomes.every((outcome) => outcome === "won" || outcome === "held")).toBe(true)
+    const winners = outcomes.filter((outcome) => outcome === "won").length
+    const unexpected = outcomes.filter((outcome) => outcome !== "won" && outcome !== "held")
+    // Named in the failure, so a rare failure is diagnosable from CI output.
+    if (winners > 1 || unexpected.length > 0) throw new Error(`race outcomes: ${JSON.stringify(outcomes)}`)
+    expect(winners).toBeLessThanOrEqual(1)
   }, 30_000)
 })
 

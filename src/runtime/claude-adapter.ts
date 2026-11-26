@@ -49,6 +49,8 @@ export type SpawnFunction = (
     cwd?: string
     env?: Record<string, string>
     stdio?: ("pipe" | "ignore" | "inherit")[]
+    /** Leader of a new process group (and session) on POSIX. */
+    detached?: boolean
   },
 ) => ProcessHandle
 
@@ -158,6 +160,20 @@ export interface ClaudeCodeRuntimeAdapterOptions {
   keepStdinOpen?: boolean
   /** How long to wait for buffered stdout after `exit` before finalising. */
   exitDrainGraceMs?: number
+  /**
+   * Spawn Claude Code as the leader of its own process group (`detached`), so
+   * `terminate` stops the tools and shells it started with it, and a bridge
+   * restart can stop the whole group. Default: on with the real `spawn` on
+   * POSIX; off on Windows and with an injected `spawn` (whose PIDs are not
+   * real processes), unless set explicitly.
+   */
+  processGroup?: boolean
+  /**
+   * Told synchronously right after each Claude Code process is spawned;
+   * returns the function called once the process has exited. The runner
+   * records the process durably here (`FileRuntimeProcessRegistry`).
+   */
+  trackProcess?: (spawned: { readonly dispatchId: string; readonly pid: number; readonly processGroup: boolean }) => (() => void) | undefined
 }
 
 interface MutableRunUsage {
@@ -181,6 +197,10 @@ interface ClaudeActiveSession {
   readonly reference: RuntimeSessionReference
   readonly directory: string
   readonly process: ProcessHandle
+  /** The process leads its own process group (pgid = pid). */
+  readonly processGroup: boolean
+  /** `terminate` was called while the process lived: its group is killed as soon as it exits. */
+  terminateRequested: boolean
   readonly splitter: LineStreamSplitter
   readonly bufferedEvents: AgentRuntimeEvent[]
   readonly usage: MutableRunUsage
@@ -265,6 +285,8 @@ export class ClaudeCodeRuntimeAdapter implements AgentRuntimeAdapter {
   readonly #launchProfile?: (request: LaunchAgentRequest) => ClaudeLaunchProfile | undefined
   readonly #keepStdinOpen: boolean
   readonly #exitDrainGraceMs: number
+  readonly #processGroup: boolean
+  readonly #trackProcess?: ClaudeCodeRuntimeAdapterOptions["trackProcess"]
 
   readonly #sessions = new Map<string, ClaudeActiveSession>()
   readonly #launches = new Map<string, RecordedLaunch>()
@@ -286,6 +308,32 @@ export class ClaudeCodeRuntimeAdapter implements AgentRuntimeAdapter {
     this.#launchProfile = options.launchProfile
     this.#keepStdinOpen = options.keepStdinOpen ?? false
     this.#exitDrainGraceMs = options.exitDrainGraceMs ?? DEFAULT_EXIT_DRAIN_GRACE_MS
+    this.#processGroup = options.processGroup ?? (options.spawn === undefined && process.platform !== "win32")
+    this.#trackProcess = options.trackProcess
+  }
+
+  /**
+   * Sends `signal` to the session's process group when it leads one (Claude
+   * Code and every tool or shell it started), else to the process. Never
+   * throws.
+   */
+  #signal(active: ClaudeActiveSession, signal: NodeJS.Signals): void {
+    const pid = active.process.pid
+    // Once the leader has exited, its group is signalled only by the `exit`
+    // handler, at once (see `terminate`): later, the id may be free or reused.
+    if (active.processGroup && pid !== undefined && pid > 1 && !active.exitRecorded) {
+      try {
+        process.kill(-pid, signal)
+        return
+      } catch {
+        // The group is gone (ESRCH), or this platform has none: the process alone.
+      }
+    }
+    try {
+      active.process.kill(signal)
+    } catch {
+      /* already gone */
+    }
   }
 
   sessionReference(sessionId: string): RuntimeSessionReference | undefined {
@@ -514,22 +562,16 @@ export class ClaudeCodeRuntimeAdapter implements AgentRuntimeAdapter {
     const active = this.#sessions.get(session.sessionId)
     if (!active) return success(undefined)
     this.#closeStdin(active)
-    try {
-      active.process.kill("SIGTERM")
-      const timer = setTimeout(() => {
-        if (!active.exitRecorded) {
-          try {
-            active.process.kill("SIGKILL")
-          } catch {
-            /* ignore */
-          }
-        }
-      }, DEFAULT_TERMINATION_GRACE_PERIOD_MS)
-      timer.unref?.()
-      return success(undefined)
-    } catch {
-      return success(undefined)
-    }
+    // When the leader exits, what is left of its group (a tool ignoring
+    // SIGTERM) is SIGKILLed at once by the `exit` handler, before the record
+    // is cleared: nothing waits on a timer a closing bridge may never run.
+    if (!active.exitRecorded) active.terminateRequested = true
+    this.#signal(active, "SIGTERM")
+    const timer = setTimeout(() => {
+      if (!active.exitRecorded) this.#signal(active, "SIGKILL")
+    }, DEFAULT_TERMINATION_GRACE_PERIOD_MS)
+    timer.unref?.()
+    return success(undefined)
   }
 
   async collectResult(session: RuntimeSession, _operation: RuntimeOperationContext): Promise<Result<AgentResult>> {
@@ -672,9 +714,25 @@ export class ClaudeCodeRuntimeAdapter implements AgentRuntimeAdapter {
         cwd: directory,
         env: sanitizedEnv,
         stdio: ["pipe", "pipe", "pipe"],
+        // Its own process group: `terminate` (and a restart after a crash)
+        // stops the tools and shells it started with it. Not `unref`ed: the
+        // bridge stays alive while it runs.
+        ...(this.#processGroup ? { detached: true } : {}),
       })
     } catch (err) {
       return failure("runtime_failure", "runtime.launch.spawn_failed", `Failed to spawn Claude process: ${this.#redact(String(err))}`, correlationId)
+    }
+
+    // Recorded in the same synchronous step as the spawn, before anything
+    // else of this process runs, so a bridge killed from here on leaves a
+    // record its successor can act on.
+    let untrack: (() => void) | undefined
+    if (child.pid !== undefined && this.#trackProcess !== undefined) {
+      try {
+        untrack = this.#trackProcess({ dispatchId: request.dispatchEnvelope.dispatchId, pid: child.pid, processGroup: this.#processGroup })
+      } catch {
+        untrack = undefined
+      }
     }
 
     const splitter = new LineStreamSplitter({ stripAnsi: true })
@@ -683,6 +741,8 @@ export class ClaudeCodeRuntimeAdapter implements AgentRuntimeAdapter {
       reference,
       directory,
       process: child,
+      processGroup: this.#processGroup,
+      terminateRequested: false,
       splitter,
       bufferedEvents: [],
       usage: { providerSessionId, initialized: false, errors: [], permissionDenials: [] },
@@ -715,6 +775,17 @@ export class ClaudeCodeRuntimeAdapter implements AgentRuntimeAdapter {
     })
 
     child.on("exit", (code, signal) => {
+      // Stopped on purpose: kill what is left of its group now, while the
+      // group id is still the group's (the leader was only just reaped), then
+      // clear the record. A normal exit leaves the group alone.
+      if (active.terminateRequested && active.processGroup && child.pid !== undefined && child.pid > 1) {
+        try {
+          process.kill(-child.pid, "SIGKILL")
+        } catch {
+          /* no member left */
+        }
+      }
+      untrack?.()
       if (active.exitRecorded) return
       active.exitRecorded = true
       active.exitCode = code

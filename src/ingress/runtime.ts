@@ -38,6 +38,8 @@ import { createTerminalJobReporter } from "../jobs/report.js"
 import { createProfileRequestSigner } from "../pairing/signer.js"
 import { ClaudeJobRunner, type ClaudeJobRunnerOptions } from "../runtime/claude-job-runner.js"
 import { RepoWorkspaceManager } from "../runtime/repo-workspace.js"
+import { FileRuntimeProcessRegistry, RUNTIME_PROCESSES_DIR } from "../runtime/process-registry.js"
+import { terminateOrphanedRuntimeProcesses, type OrphanOutcome } from "../runtime/orphan-processes.js"
 import { redactSecretsFromText } from "../runtime/sanitizer.js"
 
 /**
@@ -89,6 +91,8 @@ export interface RuntimeOptions {
    */
   readonly operatorToken?: string | null
   readonly environment: Record<string, string>
+  /** Where startup actions are logged (the orphaned-process pass). Default: stderr. */
+  readonly log?: (level: "info" | "warn" | "error", message: string) => void
   readonly deps?: {
     readonly opencodeClient?: OpencodeClient
     readonly monitorSession?: (job: JobRecord) => Promise<void>
@@ -121,6 +125,10 @@ export interface Runtime {
    * their monitor, which enforces the deadline and stops the process.
    */
   readonly isJobActive: (jobId: string) => boolean
+  /** Runtime processes (Claude Code, scripts) spawned for jobs, recorded until they exit. */
+  readonly processRegistry: FileRuntimeProcessRegistry
+  /** What startup did with the runtime processes a previous bridge left running. */
+  readonly orphanedProcesses: readonly OrphanOutcome[]
 }
 
 export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
@@ -175,6 +183,17 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     bearerToken: options.bearerToken,
   })
 
+  // Runtime processes a previous bridge spawned and could not stop (it was
+  // SIGKILLed or crashed): stopped first, before their worktrees are swept,
+  // jobs are reconciled or relaunched, or anything is served. Only a verified
+  // process is signalled (`terminateOrphanedRuntimeProcesses`). The caller
+  // holds the profile's state lock, so no live process owns these records.
+  const processRegistry = new FileRuntimeProcessRegistry(join(options.stateDir, RUNTIME_PROCESSES_DIR))
+  const orphanedProcesses = await terminateOrphanedRuntimeProcesses({
+    registry: processRegistry,
+    ...(options.log !== undefined ? { log: options.log } : {}),
+  })
+
   // Per-job worktrees under `<state>/repos` and `<state>/worktrees` (Phase 5).
   // Nothing runs yet, so every worktree on disk was left by a previous process.
   const repoWorkspaces =
@@ -191,6 +210,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
           taskGraphSyncer,
           reportTerminalJob,
           events: jobEvents,
+          processTracker: processRegistry,
           ...(repoWorkspaces !== undefined ? { workspaces: repoWorkspaces } : {}),
           // Redacted from script output tails, should a script echo them.
           knownSecrets: [options.bearerToken, options.operatorToken].filter(
@@ -282,5 +302,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     monitorSession,
     reportTerminalJob,
     isJobActive,
+    processRegistry,
+    orphanedProcesses,
   }
 }

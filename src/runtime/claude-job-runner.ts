@@ -34,6 +34,7 @@ import { appendJobEvent, type JobEventInput, type JobEventLog } from "../jobs/ev
 import type { RepoWorkspaceManager } from "./repo-workspace.js"
 import { CLAUDE_PROVIDER_ENV_KEYS } from "./sanitizer.js"
 import { ScriptRunner, type RunningScript } from "./script-runner.js"
+import type { RuntimeProcessTracker } from "./process-registry.js"
 import { digestDispatchEnvelope, digestJson } from "../orchestration/digest.js"
 import { contractErrorSchema, type Result } from "../orchestration/errors.js"
 import type { TaskGraphSyncer } from "../tasks/types.js"
@@ -431,6 +432,12 @@ export interface ClaudeJobRunnerOptions {
    * `tool`, `result` events). Status events come from the `JobManager`.
    */
   readonly events?: JobEventLog
+  /**
+   * Where every spawned runtime process (Claude Code, `pre` / `script` /
+   * `post`) is recorded until it exits, so the next bridge can stop the ones
+   * a killed bridge left behind (`terminateOrphanedRuntimeProcesses`).
+   */
+  readonly processTracker?: RuntimeProcessTracker
 }
 
 /** A started Claude Code process of one job. */
@@ -480,6 +487,14 @@ export class RunnerAtCapacityError extends Error {
 /** The reason `stopAll` records on every job it stops. */
 export const STOPPED_BY_OPERATOR = "stopped by operator"
 
+/**
+ * The reason recorded on every job still running when the bridge stops
+ * (SIGTERM, SIGINT, Ctrl-C in `aibr start --foreground`). Its processes lead
+ * their own process groups, so they no longer get the terminal's or the
+ * service manager's signal: the bridge stops them itself.
+ */
+export const STOPPED_BY_BRIDGE_SHUTDOWN = "interrupted: bridge stopped"
+
 type TerminalState = "completed" | "failed" | "unknown" | "timed_out"
 
 interface StepOutcome {
@@ -528,10 +543,14 @@ export class ClaudeJobRunner {
   readonly #worktrees = new Map<string, string>()
   readonly #active = new Map<string, ActiveJob>()
   readonly #events?: JobEventLog
+  readonly #processTracker?: RuntimeProcessTracker
+  /** dispatchId -> job id, for the Claude launches in progress (`trackProcess`). */
+  readonly #launchingDispatches = new Map<string, string>()
 
   constructor(options: ClaudeJobRunnerOptions) {
     this.#config = options.config
     this.#events = options.events
+    this.#processTracker = options.processTracker
     this.nodeId = toOpaqueId(options.config.agent_id, "node")
     this.#jobManager = options.jobManager
     this.#reportTerminalJob = options.reportTerminalJob
@@ -560,6 +579,14 @@ export class ClaudeJobRunner {
         projects: createConfigProjectResolver(options.config.projects, this.#worktrees),
         allowedProjectRoots: options.config.projects.map((project) => resolve(project.path)),
         launchProfile: (request) => this.launchProfileFor(request),
+        ...(this.#processTracker !== undefined
+          ? {
+              trackProcess: ({ dispatchId, pid, processGroup }: { dispatchId: string; pid: number; processGroup: boolean }) => {
+                const jobId = this.#launchingDispatches.get(dispatchId)
+                return jobId === undefined ? undefined : this.#processTracker?.track({ jobId, role: "claude", pid, processGroup })
+              },
+            }
+          : {}),
       })
   }
 
@@ -852,6 +879,12 @@ export class ClaudeJobRunner {
         AIBR_SCRIPT_PHASE: phase,
         ...(launch.job.checkout !== undefined ? { AIBR_SHA: launch.job.checkout.sha } : {}),
       },
+      ...(this.#processTracker !== undefined
+        ? {
+            trackProcess: (pid: number, processGroup: boolean) =>
+              this.#processTracker?.track({ jobId: launch.job.id, role: "script", pid, processGroup }),
+          }
+        : {}),
     })
     active.script = running
     let result: ScriptResult
@@ -929,7 +962,14 @@ export class ClaudeJobRunner {
       inWorktree: job.checkout !== undefined,
       timeoutSeconds,
     })
-    const launched = await this.#adapter.launch(request)
+    const dispatchId = request.dispatchEnvelope.dispatchId
+    this.#launchingDispatches.set(dispatchId, job.id)
+    let launched: Awaited<ReturnType<ClaudeRuntimeAdapterPort["launch"]>>
+    try {
+      launched = await this.#adapter.launch(request)
+    } finally {
+      this.#launchingDispatches.delete(dispatchId)
+    }
     if (!launched.ok) throw new Error(`Claude Code launch failed: ${launched.error.message}`)
     const session = launched.value
     active.claude = { session, operation: request.operation }

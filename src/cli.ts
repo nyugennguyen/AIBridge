@@ -120,7 +120,7 @@ export interface CliDeps {
   /**
    * Run the Tier 2 ingress drain loop for a profile until a signal arrives.
    *
-   * Resolves on `SIGINT`/`SIGTERM`. Binds no socket: ingress belongs to the
+   * Resolves on `SIGINT`/`SIGTERM`/`SIGHUP`. Binds no socket: ingress belongs to the
    * router once cut over, and a worker that could accept requests would be a
    * second authority (ADR 0008 §2.2).
    */
@@ -194,6 +194,9 @@ export interface SetupCommandOptions {
 // ── Constants ──────────────────────────────────────────────────────────
 
 const PROG = "aibr"
+
+/** The signals that stop `aibr serve` and `aibr worker` cleanly. */
+const STOP_SIGNALS: readonly NodeJS.Signals[] = ["SIGINT", "SIGTERM", "SIGHUP"]
 
 const COMMANDS = ["setup", "start", "serve", "worker", "status", "verify", "update", "bundle", "discover"] as const
 const ALL_COMMANDS = [...COMMANDS, "_opencode"] as const
@@ -1395,15 +1398,18 @@ async function createRealDeps(): Promise<CliDeps> {
         `listening on ${bridge.config.bridge.host}:${bridge.config.bridge.port} as ${bridge.config.agent_id} ` +
           `(${bridge.config.role}, ${bridge.config.runtime.kind} runtime, request_signing ${bridge.config.security.request_signing ?? "off"})`,
       )
+      // SIGHUP too: `aibr stop` ends a `--foreground` deployment with `tmux
+      // kill-session`, which hangs the bridge up. Closing stops the running
+      // jobs' process groups (they no longer get the terminal's signals).
       await new Promise<void>((resolve) => {
-        const onSignal = (): void => {
+        const onSignal = (signal: NodeJS.Signals): void => {
+          if (stopping) return
           stopping = true
-          logger.info("stopping (signal)")
+          logger.info(`stopping (${signal})`)
           opencodeChild?.kill("SIGTERM")
           void bridge.app.close().then(() => resolve(), () => resolve())
         }
-        process.once("SIGINT", onSignal)
-        process.once("SIGTERM", onSignal)
+        for (const signal of STOP_SIGNALS) process.on(signal, onSignal)
       })
       logger.info("stopped")
       logger.close()
@@ -1425,12 +1431,14 @@ async function createRealDeps(): Promise<CliDeps> {
       // mid-claim on every deploy, and the row would sit in 'sending' until
       // `recoverStale` noticed the lease had expired.
       await new Promise<void>((resolve) => {
+        let stopped = false
         const onSignal = (): void => {
+          if (stopped) return
+          stopped = true
           worker.stop()
           resolve()
         }
-        process.once("SIGINT", onSignal)
-        process.once("SIGTERM", onSignal)
+        for (const signal of STOP_SIGNALS) process.on(signal, onSignal)
       })
     },
 

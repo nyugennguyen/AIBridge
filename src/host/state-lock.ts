@@ -29,10 +29,14 @@
  * atomically (`link`, which fails if the file exists) and then read back to
  * confirm it holds this process's token.
  */
-import { execFileSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { linkSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
+import { compareProcessStart, isProcessAlive, readProcessStartTime } from "./process-identity.js"
+
+// The PID start-time reader lives in `process-identity.ts` (shared with the
+// runtime process registry); re-exported for existing importers.
+export { isProcessAlive, readProcessStartTime, type StartTimeSources } from "./process-identity.js"
 
 export const STATE_LOCK_FILE = "aibridge.lock"
 
@@ -70,77 +74,6 @@ interface LockContent {
   readonly pid: number
   readonly start: string
   readonly token: string
-}
-
-export function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch (error) {
-    // EPERM: it exists, owned by another user. Its start time decides.
-    return (error as NodeJS.ErrnoException).code === "EPERM"
-  }
-}
-
-/** What `readProcessStartTime` reads through. Injectable so both paths are testable anywhere. */
-export interface StartTimeSources {
-  readonly platform: NodeJS.Platform
-  /** A file's text, or `undefined` if it cannot be read. */
-  readonly readFile: (path: string) => string | undefined
-  /** `ps -o lstart= -p <pid>` under `env`; `undefined` on failure. */
-  readonly runPs: (pid: number, env: Record<string, string | undefined>) => string | undefined
-  /** The environment `ps` starts from (TZ and locale are overridden). */
-  readonly env: Record<string, string | undefined>
-}
-
-const defaultSources: StartTimeSources = {
-  platform: process.platform,
-  readFile: (path) => readText(path),
-  runPs: (pid, env) => {
-    try {
-      return execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], {
-        encoding: "utf8",
-        env,
-        stdio: ["ignore", "pipe", "ignore"],
-        timeout: 5_000,
-      })
-    } catch {
-      return undefined
-    }
-  },
-  env: process.env,
-}
-
-/**
- * A raw, time-zone- and locale-independent start time for `pid`, or
- * `undefined` if it cannot be read. Two readings of the same process compare
- * equal as strings; a different process (a reused PID, or any PID after a
- * reboot) reads differently.
- *
- * - Linux: `linux:<boot_id>:<starttime>`, from `/proc/sys/kernel/random/boot_id`
- *   and field 22 of `/proc/<pid>/stat` (clock ticks since boot). No `ps`.
- * - Elsewhere (macOS): `ps:<lstart>` with `TZ=UTC`, `LC_ALL=C`, `LANG=C`.
- */
-export function readProcessStartTime(pid: number, sources: Partial<StartTimeSources> = {}): string | undefined {
-  const source = { ...defaultSources, ...sources }
-  if (source.platform === "linux") {
-    const stat = source.readFile(`/proc/${pid}/stat`)
-    const bootId = source.readFile("/proc/sys/kernel/random/boot_id")?.trim()
-    if (stat !== undefined && bootId !== undefined && bootId.length > 0) {
-      // Field 2 (comm) is parenthesised and may hold spaces: count from the last ")".
-      const fields = stat.slice(stat.lastIndexOf(")") + 1).trim().split(/\s+/)
-      const startTicks = fields[22 - 3]
-      if (startTicks !== undefined && /^\d+$/.test(startTicks)) return `linux:${bootId}:${startTicks}`
-    }
-  }
-  const out = source.runPs(pid, { ...source.env, TZ: "UTC", LC_ALL: "C", LANG: "C" })
-  const start = out?.trim().replace(/\s+/g, " ")
-  return start !== undefined && start.length > 0 ? `ps:${start}` : undefined
-}
-
-/** The method prefix of a start time (`linux`, `ps`), or "" for an unprefixed value. */
-function startTimeForm(start: string): string {
-  return /^(linux|ps):/.exec(start)?.[1] ?? ""
 }
 
 /**
@@ -190,12 +123,10 @@ export function acquireStateLock(stateDir: string, options: StateLockOptions = {
   const isHeld = (holder: LockContent | undefined): holder is LockContent => {
     if (holder === undefined || !isAlive(holder.pid)) return false
     if (holder.start.length === 0) return true
-    const current = startTimeOf(holder.pid)
-    if (current === undefined) return true
-    // Readings from different methods (`linux:` vs `ps:`, e.g. two PID
-    // namespaces sharing the state dir) are not comparable: unverifiable, held.
-    if (startTimeForm(current) !== startTimeForm(holder.start)) return true
-    return current === holder.start
+    // Unverifiable (current start unreadable, or readings from different
+    // methods, `linux:` vs `ps:`, e.g. two PID namespaces sharing the state
+    // dir): held. Only a proven different start time makes it stale.
+    return compareProcessStart(holder.start, startTimeOf(holder.pid)) !== "different"
   }
 
   // Bounded, but generous: under contention a round can be lost to another

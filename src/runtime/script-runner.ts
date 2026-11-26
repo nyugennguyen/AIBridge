@@ -74,6 +74,12 @@ export interface ScriptRunRequest {
   readonly timeoutMs: number
   /** Non-secret facts for the script (`AIBR_JOB_ID`, `AIBR_SHA`). */
   readonly extraEnv?: Readonly<Record<string, string>>
+  /**
+   * Told synchronously right after the script is spawned (it leads its own
+   * process group); returns the function called once it has exited. The
+   * runner records the process durably here (`FileRuntimeProcessRegistry`).
+   */
+  readonly trackProcess?: (pid: number, processGroup: boolean) => (() => void) | undefined
 }
 
 export interface RunningScript {
@@ -124,6 +130,7 @@ export class ScriptRunner {
   start(request: ScriptRunRequest): RunningScript {
     let child: ScriptProcess | undefined
     let killed = false
+    let exited = false
     let timer: ReturnType<typeof setTimeout> | undefined
     let timedOut = false
     const started = this.#clock()
@@ -146,7 +153,11 @@ export class ScriptRunner {
       if (killed) return
       killed = true
       signalGroup("SIGTERM")
-      const escalate = setTimeout(() => signalGroup("SIGKILL"), KILL_GRACE_MS)
+      // Only while the leader lives: once it exits, the `exit` handler has
+      // already killed the rest of its group, and the id may be reused later.
+      const escalate = setTimeout(() => {
+        if (!exited) signalGroup("SIGKILL")
+      }, KILL_GRACE_MS)
       escalate.unref?.()
     }
 
@@ -190,6 +201,15 @@ export class ScriptRunner {
           finish(null, null, errorMessage(error))
           return
         }
+        // Recorded in the same synchronous step as the spawn (see `trackProcess`).
+        let untrack: (() => void) | undefined
+        if (child.pid !== undefined && request.trackProcess !== undefined) {
+          try {
+            untrack = request.trackProcess(child.pid, true)
+          } catch {
+            untrack = undefined
+          }
+        }
         let settled = false
         child.stdout?.on("data", (chunk: Buffer) => stdout.push(chunk))
         child.stderr?.on("data", (chunk: Buffer) => stderr.push(chunk))
@@ -199,6 +219,19 @@ export class ScriptRunner {
           finish(null, null, errorMessage(error))
         })
         child.on("exit", (code, signal) => {
+          // Stopped on purpose (timeout, kill switch, cancel): kill what is
+          // left of its group now, while the group id is still the group's,
+          // rather than on the escalation timer a closing bridge may never
+          // run; then clear the record. A normal exit leaves the group alone.
+          exited = true
+          if (killed && child?.pid !== undefined && child.pid > 1) {
+            try {
+              process.kill(-child.pid, "SIGKILL")
+            } catch {
+              /* no member left */
+            }
+          }
+          untrack?.()
           if (settled) return
           settled = true
           finish(code, signal)

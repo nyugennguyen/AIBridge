@@ -178,7 +178,11 @@ Check in this order:
 5. **Restart.** `interrupted: bridge restarted` = the job was running (or its launch had begun,
    `launchStartedAt` set) when the bridge restarted; never retried. `not relaunched after restart:
    <reason> (never started)` = an approved job that never started and may not launch now. Rules:
-   `src/jobs/reconcile.ts`.
+   `src/jobs/reconcile.ts`. A Claude Code or script process a killed bridge left running is
+   stopped at the next start (`src/runtime/orphan-processes.ts`, records in
+   `<state>/runtime-processes/`) only if its PID's start time still matches; otherwise the log
+   says `could not be verified … NOT stopped` (manual recovery: troubleshooting.md).
+   `interrupted: bridge stopped` = the bridge was stopped normally and stopped the job itself.
 
 ## The Rust router
 

@@ -1,7 +1,8 @@
-import { chmod, mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises"
+import { chmod, mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
+import { isProcessAlive } from "../../../src/host/process-identity.js"
 import { resolveScriptPath, SCRIPT_OUTPUT_TAIL_CHARS, ScriptPathError, ScriptRunner } from "../../../src/runtime/script-runner.js"
 
 async function workspace(): Promise<string> {
@@ -68,6 +69,32 @@ describe("ScriptRunner", () => {
     await new Promise((done) => setTimeout(done, 100))
     running.kill()
     expect(await running.result).toMatchObject({ timed_out: false, exit_code: null, signal: "SIGTERM" })
+  }, 15_000)
+
+  it("kills a group member that ignores SIGTERM as soon as the script itself exits, without waiting for the escalation", async () => {
+    const dir = await workspace()
+    const pids = join(dir, "pids")
+    // The script exits on SIGTERM; the sleep it started ignores SIGTERM.
+    await script(dir, "leader.sh", `(trap '' TERM; exec sleep 30) &\necho $! > ${JSON.stringify(pids)}\nwait`)
+    const running = new ScriptRunner({ env: { PATH: process.env.PATH } }).start({ phase: "main", script: "leader.sh", cwd: dir, timeoutMs: 30_000 })
+    let member = 0
+    for (let attempt = 0; attempt < 250 && member === 0; attempt += 1) {
+      member = Number((await readFile(pids, "utf8").catch(() => "")).trim()) || 0
+      if (member === 0) await new Promise((done) => setTimeout(done, 20))
+    }
+    try {
+      running.kill()
+      expect(await running.result).toMatchObject({ signal: "SIGTERM" })
+      const deadline = Date.now() + 1_500
+      while (isProcessAlive(member) && Date.now() < deadline) await new Promise((done) => setTimeout(done, 20))
+      expect(isProcessAlive(member)).toBe(false)
+    } finally {
+      try {
+        process.kill(member, "SIGKILL")
+      } catch {
+        /* gone */
+      }
+    }
   }, 15_000)
 
   it("reports a script that cannot be executed instead of throwing", async () => {

@@ -31,6 +31,12 @@
  *
  * Every job this pass ends is returned so the caller delivers its report
  * (`reportTerminalJob`) like any other terminal job.
+ *
+ * The runtime processes (Claude Code, script steps) a killed bridge left
+ * running for these jobs are stopped before this pass, when the runtime is
+ * built (`createRuntime` -> `terminateOrphanedRuntimeProcesses`), so that
+ * they are gone before their worktrees are swept and before any job is
+ * interrupted, relaunched or reported.
  */
 import type { BridgeConfig } from "../config/types.js"
 import { approvalRequired } from "../planning/approval.js"

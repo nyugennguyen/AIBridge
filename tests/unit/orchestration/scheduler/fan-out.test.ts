@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest"
-import { BudgetLedger } from "../../../../src/budgets/ledger.js"
+import type {
+  BudgetLedgerPort,
+  BudgetReservationResult,
+  BudgetReserveParams,
+} from "../../../../src/orchestration/scheduler/types.js"
 import { digestDispatchEnvelope } from "../../../../src/orchestration/digest.js"
 import {
   commandIdSchema,
@@ -48,6 +52,46 @@ import {
 import { DispatchCoordinator } from "../../../../src/orchestration/coordinator/coordinator.js"
 import type { CommandLog } from "../../../../src/orchestration/coordinator/types.js"
 import type { EventInput, OutboxRecordInput } from "../../../../src/orchestration/event-store/types.js"
+
+/**
+ * Minimal in-test stand-in for the budget ledger port. The real ledger (src/budgets)
+ * was removed in 3.2.0 (ADR 0016); the scheduler only depends on this port.
+ */
+class BudgetLedger implements BudgetLedgerPort {
+  private readonly held = new Map<string, number>()
+  constructor(private readonly options: { resolveLimits: () => { maximumFanOut?: number; maximumConcurrency?: number } }) {}
+
+  heldUnits(projectId: string, scope: "concurrency" | "fan_out"): number {
+    return this.held.get(`${projectId}:${scope}`) ?? 0
+  }
+
+  reserve(request: BudgetReserveParams): BudgetReservationResult {
+    return this.reserveSync(request)
+  }
+
+  reserveSync(request: BudgetReserveParams): BudgetReservationResult {
+    const limits = this.options.resolveLimits()
+    const limit = request.scope === "fan_out" ? limits.maximumFanOut : limits.maximumConcurrency
+    const key = `${request.projectId}:${request.scope}`
+    const held = this.held.get(key) ?? 0
+    if (limit !== undefined && held + request.units > limit) {
+      return {
+        ok: false,
+        refusal: {
+          code: "budget.scope_saturated",
+          message: `scope ${request.scope} saturated`,
+          scope: request.scope,
+          limit,
+          heldUnits: held,
+          requestedUnits: request.units,
+          reservationId: request.reservationId,
+        },
+      }
+    }
+    this.held.set(key, held + request.units)
+    return { ok: true, value: { reservationId: request.reservationId } }
+  }
+}
 
 const PROJECT = projectIdSchema.parse("proj-fan-out")
 const RUN = runIdSchema.parse("run-fan-out")

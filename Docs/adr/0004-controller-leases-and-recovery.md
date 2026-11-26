@@ -1,6 +1,6 @@
 # ADR 0004: Controller leases, fencing, and manual recovery
 
-Status: accepted for the Milestone 0 contract freeze (M0.5). To be superseded by [ADR 0016](0016-keep-selected-unwired-code-with-deadlines.md) (Proposed); status changes when block D1 merges. The lease code is never wired into `aibr serve` and is planned for removal in 3.2.0; the design stays in the `archive/kernel-mesh-3.1.1` tag.
+Status: Superseded by [ADR 0016](0016-keep-selected-unwired-code-with-deadlines.md) (accepted for the Milestone 0 contract freeze (M0.5) before that). The lease code is never wired into `aibr serve` and is planned for removal in 3.2.0; the design stays in the `archive/kernel-mesh-3.1.1` tag.
 
 Depends on [ADR 0001](0001-canonical-domain-and-module-boundaries.md), [ADR 0002](0002-versioned-contracts-and-adapter-boundaries.md), [ADR 0003](0003-event-store-and-idempotency.md), and the version-1 `controllerLeaseSchema` / `orchestrationCommandSchema` in [orchestration schemas](../../src/orchestration/schemas.ts).
 

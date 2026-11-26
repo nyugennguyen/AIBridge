@@ -1,6 +1,6 @@
 # ADR 0016: Keep Selected Unwired Code With Deadlines; Remove the Rest
 
-- **Status:** Proposed (becomes Accepted when block D1 of the 3.2.0 plan merges)
+- **Status:** Accepted (block D1 of the 3.2.0 plan)
 - **Date:** 2026-11-26
 - **Related:** [3.2.0 plan](../implementation-plans/v3.2.0-plan.md) (sections 2, 5.1 to 5.6); [ADR 0003](./0003-event-store-and-idempotency.md); [ADR 0004](./0004-controller-leases-and-recovery.md); [ADR 0007](./0007-rule-language-and-evaluation.md); [ADR 0013](./0013-operator-approval-ledger.md); [ADR 0014](./0014-claude-is-the-operator-interface.md); [ADR 0015](./0015-orchestrator-is-chosen-per-project.md). Supersedes ADR 0004 and ADR 0007. Resolves the question ADR 0014 left open.
 

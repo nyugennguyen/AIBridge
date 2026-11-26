@@ -351,9 +351,6 @@ describe("the restated identifier schemas have not drifted from the kernel's", (
 describe("no name is exported by two M6 barrels", () => {
   const siblingPaths = {
     rules: "../../../src/rules/index.js",
-    routing: "../../../src/routing/index.js",
-    budgets: "../../../src/budgets/index.js",
-    workflows: "../../../src/workflows/index.js",
   } as const
 
   for (const [sibling, path] of Object.entries(siblingPaths)) {

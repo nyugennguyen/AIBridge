@@ -38,8 +38,9 @@ export function jobResultFields(job: JobRecord): Record<string, unknown> {
  * - the operator credential (rules of `aibr approve`): any job;
  * - a bearer holder whose request carries a verified node signature: only
  *   the jobs it dispatched (`trigger.source_agent_id`), else 403
- *   `not_job_requester`. A signature, when present, always scopes the read,
- *   on every signing mode;
+ *   `not_job_requester`. This holds with `request_signing` "optional" and
+ *   "required"; with "off" signatures are not verified at all, so a signed
+ *   request is just a bearer request and reads any job (next point);
  * - a bearer holder with NO signature: any job, but only where this node does
  *   not ask for signatures (`request_signing` "off" or "optional"). There the
  *   shared bearer is the boundary already (it lets its holder trigger work

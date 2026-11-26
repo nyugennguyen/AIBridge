@@ -13,6 +13,14 @@ import { relaunchOpencodeJobs } from "./server/routes/opencode-dispatch.js"
 import { FilePeerStore } from "./pairing/peer-store.js"
 import { createRequestIdentityGuard } from "./pairing/verifier.js"
 import { createPairingAcceptor } from "./pairing/service.js"
+import { STOPPED_BY_BRIDGE_SHUTDOWN } from "./runtime/claude-job-runner.js"
+
+/**
+ * How long closing the bridge waits for its running jobs to stop and be
+ * reported. Above the adapter's SIGTERM-to-SIGKILL grace (3 s) and below
+ * launchd's default exit timeout (20 s).
+ */
+const SHUTDOWN_STOP_WAIT_MS = 10_000
 
 export interface BridgeOptions extends RuntimeOptions {
   /** Force shadow mirroring on regardless of `bridge.ingress_mode`. */
@@ -118,6 +126,17 @@ async function startBridgeHoldingLock(options: BridgeOptions): Promise<BridgeIns
     shadowMirror,
   }
   const app = createApp(appDependencies)
+
+  // Claude Code and script steps lead their own process groups, so a Ctrl-C
+  // in `aibr start --foreground` or the service manager's stop signal no
+  // longer reaches them: on close the bridge stops them (whole groups), and
+  // each job is failed and reported by its own monitor.
+  const claudeJobRunner = runtime.claudeJobRunner
+  if (claudeJobRunner !== undefined) {
+    app.addHook("preClose", async () => {
+      await claudeJobRunner.stopAll(STOPPED_BY_BRIDGE_SHUTDOWN, SHUTDOWN_STOP_WAIT_MS)
+    })
+  }
 
   // Taken before this pass ends any job, so a job it reports is not reported twice.
   const callbackRetries = await runtime.jobManager.listCallbackRetries()

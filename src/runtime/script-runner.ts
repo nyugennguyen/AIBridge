@@ -74,6 +74,12 @@ export interface ScriptRunRequest {
   readonly timeoutMs: number
   /** Non-secret facts for the script (`AIBR_JOB_ID`, `AIBR_SHA`). */
   readonly extraEnv?: Readonly<Record<string, string>>
+  /**
+   * Told synchronously right after the script is spawned (it leads its own
+   * process group); returns the function called once it has exited. The
+   * runner records the process durably here (`FileRuntimeProcessRegistry`).
+   */
+  readonly trackProcess?: (pid: number, processGroup: boolean) => (() => void) | undefined
 }
 
 export interface RunningScript {
@@ -190,6 +196,15 @@ export class ScriptRunner {
           finish(null, null, errorMessage(error))
           return
         }
+        // Recorded in the same synchronous step as the spawn (see `trackProcess`).
+        let untrack: (() => void) | undefined
+        if (child.pid !== undefined && request.trackProcess !== undefined) {
+          try {
+            untrack = request.trackProcess(child.pid, true)
+          } catch {
+            untrack = undefined
+          }
+        }
         let settled = false
         child.stdout?.on("data", (chunk: Buffer) => stdout.push(chunk))
         child.stderr?.on("data", (chunk: Buffer) => stderr.push(chunk))
@@ -199,6 +214,7 @@ export class ScriptRunner {
           finish(null, null, errorMessage(error))
         })
         child.on("exit", (code, signal) => {
+          untrack?.()
           if (settled) return
           settled = true
           finish(code, signal)

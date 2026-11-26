@@ -1,6 +1,6 @@
 # ADR 0007: Rule Language, Evaluation, Budgets, and Simulation
 
-Status: Accepted for Milestone 6 implementation
+Status: Accepted for Milestone 6 implementation. To be superseded by [ADR 0016](0016-keep-selected-unwired-code-with-deadlines.md) (Proposed); status changes when block D1 merges. The rule engine is never wired into `aibr serve` and is planned for removal in 3.2.0.
 Date: 2026-10-01
 Deciders: Core Architecture Team, Advisor & Reviewer
 Amended: 2026-10-02 — see "Amendment — 2026-10-02". Section 8's non-universality

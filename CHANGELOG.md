@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Added
+- **ADR 0015 and ADR 0016.** ADR 0015 records that the orchestrator is chosen per project (Claude, Codex or OpenCode, over MCP) and that every node will run `aibr serve`; it amends ADR 0014. ADR 0016 keeps the unwired memory, event store, Codex adapter, context and notifications code with wire and delete deadlines and removes the rest; it is to supersede ADR 0004 and ADR 0007 once block D1 merges, and ADR 0003 stays Accepted with a "not yet wired, deadline 3.3.0" note. No code behaviour changes.
+- **Reachability check** (`bun run docs:reachability`, also run by `docs:check`). It walks the imports from `src/cli.ts` and `src/index.ts`, reports unreachable lines per directory and warns when a directory has 500 or more unreachable lines without an entry in `scripts/docs/reachability-exemptions.json`, and fails when an entry is past its wire deadline while its code is still unreachable.
+
+### Documentation
+- `AGENTS.md` Architecture and the `README.md` architecture section describe what actually runs, and list the kept-but-unwired code and its deadlines under "Not yet wired".
+
 ### Security
 - **A caller could approve its own plan on the OpenCode runtime.** On every runtime other than `claude` (including the default, `opencode`), the plan-approval gate trusted the caller-written `metadata.plan_status: "approved"` in `/trigger`: on the engine ingress, in the router drainer (`aibr worker`), and in the OpenCode tool permission policy, where it answered `always` for the tools in `permissions.require_plan_approval_for_tools`. Any enrolled peer could therefore run an approval-gated capability, and unlock `bash`/`edit`/`write`, without an operator. Approval now comes only from this node's config and an operator's `aibr approve`, recorded in the approval ledger (ADR 0013), as on the Claude runtime. `metadata.plan_status` is still accepted by the schema but grants nothing; the bridge logs a warning when a caller sends `"approved"`.
 

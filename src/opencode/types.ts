@@ -1,4 +1,3 @@
-import type { PlanMetadata } from "../config/types.js"
 
 export type PermissionDecision = "reject" | "once" | "always"
 
@@ -34,7 +33,12 @@ export interface HeartbeatEvent {
 export type OpencodeEvent = SessionStatusEvent | PermissionAskedEvent | HeartbeatEvent | { type: string; properties?: Record<string, unknown> }
 
 export interface PermissionPolicy {
-  decide(tool: string, metadata: PlanMetadata): PermissionDecision
+  /**
+   * `operatorApproved` is true only when an operator approved this job on this
+   * node (`aibr approve`, ADR 0013). It is never derived from the trigger's
+   * caller-written `metadata.plan_status`.
+   */
+  decide(tool: string, operatorApproved: boolean): PermissionDecision
 }
 
 export interface OpencodeClient {

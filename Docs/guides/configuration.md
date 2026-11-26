@@ -84,7 +84,7 @@ Below are focused, schema-conforming partial examples illustrating each major se
 - **`allowed_sources`** *(array of objects)*: Declares which remote agents are authorized to trigger tasks on this node.
   - `source_agent_id` *(string)*: Identifier of the remote calling agent.
   - `capabilities` *(array of strings)*: Work kinds this caller may request (e.g. `["testing", "code"]`).
-  - `requires_plan_approval` *(array of strings, default: `[]`)*: Capabilities that require approved Plan Annotator metadata before execution proceeds.
+  - `requires_plan_approval` *(array of strings, default: `[]`)*: Capabilities from this source that wait for an operator's `aibr approve` on this node before they run (`202 {status: "awaiting_approval"}`). The caller's `metadata.plan_status` is never an approval.
 
 ### 2.3 `projects` (Workspace Boundaries)
 
@@ -126,7 +126,7 @@ Below are focused, schema-conforming partial examples illustrating each major se
 - **`opencode.server_port`** *(integer, default: `4096`)*: Loopback port for OpenCode.
 - **`permissions.default_response`** *(enum: `"reject"` | `"once"` | `"always"`)*: Fallback action when a tool request does not match explicit permission rules.
 - **`permissions.allow_tools`** *(array of strings)*: Runtime tools automatically permitted without interactive confirmation.
-- **`permissions.require_plan_approval_for_tools`** *(array of strings)*: Runtime tools requiring approved plan metadata before invocation.
+- **`permissions.require_plan_approval_for_tools`** *(array of strings)*: Runtime tools allowed only in a job an operator approved with `aibr approve`; in any other job they are rejected. To let every job use a tool, list it in `allow_tools` instead.
 
 ### 2.5 `planning`
 
@@ -140,7 +140,7 @@ Below are focused, schema-conforming partial examples illustrating each major se
 ```
 
 - **`plan_annotator_enabled`** *(boolean)*: Enables Plan Annotator verification on incoming trigger requests.
-- **`require_approval_for`** *(array of strings)*: List of sensitive capabilities that mandate human or coordinator plan approval before execution proceeds.
+- **`require_approval_for`** *(array of strings)*: Sensitive capabilities that wait for an operator's `aibr approve` on this node before they run, from any source. Decided from this node's config only; a caller's `metadata.plan_status` is ignored. With `bridge.ingress_mode: "router"` there is no approval path, so these capabilities are refused.
 
 ### 2.6 `agents` (Outbound Peer Registry)
 

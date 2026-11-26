@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Security
+- **A caller could approve its own plan on the OpenCode runtime.** On every runtime other than `claude` (including the default, `opencode`), the plan-approval gate trusted the caller-written `metadata.plan_status: "approved"` in `/trigger`: on the engine ingress, in the router drainer (`aibr worker`), and in the OpenCode tool permission policy, where it answered `always` for the tools in `permissions.require_plan_approval_for_tools`. Any enrolled peer could therefore run an approval-gated capability, and unlock `bash`/`edit`/`write`, without an operator. Approval now comes only from this node's config and an operator's `aibr approve`, recorded in the approval ledger (ADR 0013), as on the Claude runtime. `metadata.plan_status` is still accepted by the schema but grants nothing; the bridge logs a warning when a caller sends `"approved"`.
+
+### Changed
+- **OpenCode jobs that need approval wait for the operator** instead of being refused. A capability listed in `planning.require_approval_for`, or in the source's `allowed_sources[].requires_plan_approval` (which the OpenCode runtime previously ignored), answers `202 {status: "awaiting_approval"}` with an `approve_hint`; run `aibr jobs pending` then `aibr approve <job>` on the worker. `POST /jobs/:id/approve` now launches OpenCode jobs as well as Claude jobs.
+- **OpenCode tool permissions follow the operator's approval of the job.** Tools in `permissions.require_plan_approval_for_tools` are allowed only for a job an operator approved. To let ungated jobs use a tool, move it to `permissions.allow_tools`, or gate the capability and approve its jobs.
+- An approval-gated OpenCode trigger with `depends_on` is refused with `501 not_implemented` (as on the Claude runtime), because a dependency's report arriving while the job waits for the operator would be lost.
+- With `bridge.ingress_mode: "router"` there is no operator approval path, so approval-gated capabilities are refused (`PLAN_APPROVAL_REQUIRED`) whatever the caller sends.
+
 ## [3.1.1] - 2026-11-26
 
 Removes the unused TUI, Herdr, terminal and IPC layer (about 54k lines, two Rust crates and two dependencies). Nothing in production depended on it: `/trigger`, `/report`, `/jobs`, the Claude Code plugin and the worker are unchanged. Claude Code with the AIBridge plugin is the operator interface, and human-only actions (approve, reject, kill switch, logs) stay in the `aibr` CLI on the worker. See [ADR 0014](Docs/adr/0014-claude-is-the-operator-interface.md).

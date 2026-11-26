@@ -147,9 +147,13 @@ Check in this order:
 2. **Fake-success trap.** `getSessionStatus` returns `state?.type ?? "idle"` (`src/opencode/client.ts:57-58`).
    An unknown session reads as `idle`, so a job can be marked `completed` with zero messages.
    Always confirm with `curl -u opencode:$PW http://127.0.0.1:4096/session/<id>/message`.
-3. **Permission deadlock.** `bash`/`edit`/`write` are gated on `metadata.plan_status === "approved"`
-   (`src/opencode/permissions.ts:7-13`). Missing metadata ⇒ `reject` for all three, which looks
-   identical to an unapproved plan.
+3. **Permission deadlock.** Tools in `permissions.require_plan_approval_for_tools` (by default
+   `bash`/`edit`/`write`) are answered `reject` unless an operator approved **this job** with
+   `aibr approve` (`job.approval.status === "approved"`, `src/opencode/permissions.ts`). A job whose
+   capability is not approval-gated can never use them, which looks identical to a broken session.
+   Since 3.1.2 the caller's `metadata.plan_status` grants nothing, so setting it is not a workaround:
+   gate the capability (`planning.require_approval_for`) and approve the job, or move the tool to
+   `permissions.allow_tools`.
 4. **Terminal vs failed.** `Timed out waiting for OpenCode session …` always lands on status
    **`failed`**. Status `timed_out` with message `Job timed out` comes from `sweepExpiredJobs`
    at **bridge startup** (`src/bridge.ts:47`) — i.e. a job left `running` across a restart.

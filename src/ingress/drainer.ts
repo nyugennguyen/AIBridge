@@ -30,7 +30,7 @@ import {
 } from "../orchestration/event-store/sqlite-driver.js"
 import { assertSourceAuthorized } from "../security/source-authorization.js"
 import { assertProjectAllowed } from "../security/allowlist.js"
-import { ConfigPlanReviewProvider } from "../planning/provider.js"
+import { approvalRequired } from "../planning/approval.js"
 import {
   backoffDelayMs,
   exceedsMaxAttempts,
@@ -106,7 +106,6 @@ export class IngressDrainer {
   readonly #taskGraphSyncer: TaskGraphSyncer
   readonly #monitorSession: (job: JobRecord) => Promise<void>
   readonly #orchestration?: { readonly translation: LegacyTranslation }
-  readonly #planReview: ConfigPlanReviewProvider
   readonly #observer?: IngressLifecycleObserver
   private running = false
   private timer: NodeJS.Timeout | null = null
@@ -120,9 +119,6 @@ export class IngressDrainer {
     this.#monitorSession = dependencies.monitorSession
     this.#observer = dependencies.observer
     this.#orchestration = dependencies.orchestration
-    this.#planReview = new ConfigPlanReviewProvider(
-      dependencies.config.planning.require_approval_for,
-    )
   }
 
   /**
@@ -362,7 +358,11 @@ export class IngressDrainer {
     )
     assertProjectAllowed(trigger.project_dir, this.#config.projects)
 
-    if (!this.#planReview.isApproved(trigger.capability, trigger.metadata)) {
+    // Router ingress has no operator approval path: the operator endpoints are
+    // served by `aibr serve` in engine mode, and nothing here holds a job for
+    // `aibr approve`. So a capability this node gates on approval is refused,
+    // whatever the caller's `metadata.plan_status` says (ADR 0013).
+    if (approvalRequired(this.#config, trigger)) {
       this.fail(record.job_id, claimToken, "PLAN_APPROVAL_REQUIRED", Date.now())
       return
     }

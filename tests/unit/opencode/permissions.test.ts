@@ -9,16 +9,17 @@ const policy = new StaticPermissionPolicy({
 
 describe("StaticPermissionPolicy", () => {
   it("always allows configured safe tools", () => {
-    expect(policy.decide("read", undefined)).toBe("always")
+    expect(policy.decide("read", false)).toBe("always")
   })
 
-  it("allows plan-gated tools only with approved metadata", () => {
-    expect(policy.decide("bash", undefined)).toBe("reject")
-    expect(policy.decide("bash", { plan_status: "rejected" })).toBe("reject")
-    expect(policy.decide("bash", { plan_status: "approved", plan_reference: ".omo/plans/job.md" })).toBe("always")
+  it("allows gated tools only for a job an operator approved on this node", () => {
+    expect(policy.decide("bash", false)).toBe("reject")
+    expect(policy.decide("edit", false)).toBe("reject")
+    expect(policy.decide("bash", true)).toBe("always")
   })
 
   it("uses the default response for unknown tools", () => {
-    expect(policy.decide("unknown-tool", undefined)).toBe("reject")
+    expect(policy.decide("unknown-tool", false)).toBe("reject")
+    expect(policy.decide("unknown-tool", true)).toBe("reject")
   })
 })

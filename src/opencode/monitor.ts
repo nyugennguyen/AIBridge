@@ -1,4 +1,3 @@
-import type { PlanMetadata } from "../config/types.js"
 import type { OpencodeClient, OpencodeEvent, PermissionAskedEvent, PermissionPolicy, SessionStatusEvent } from "./types.js"
 
 export interface WaitForIdleOptions {
@@ -6,7 +5,8 @@ export interface WaitForIdleOptions {
   timeoutMs: number
   pollIntervalMs: number
   permissionPolicy: PermissionPolicy
-  planMetadata: PlanMetadata
+  /** Whether an operator approved this job on this node; see {@link PermissionPolicy.decide}. */
+  operatorApproved: boolean
 }
 
 export async function waitForIdle(client: OpencodeClient, sessionId: string, options: WaitForIdleOptions): Promise<void> {
@@ -54,7 +54,7 @@ export async function waitForIdle(client: OpencodeClient, sessionId: string, opt
           if (isPermissionAsked(event) && event.properties.sessionID === sessionId) {
             const permissionId = event.properties.permissionID ?? event.properties.id
             if (!permissionId) throw new Error("OpenCode permission event did not include an ID")
-            await client.replyPermission(sessionId, permissionId, options.permissionPolicy.decide(event.properties.permission, options.planMetadata))
+            await client.replyPermission(sessionId, permissionId, options.permissionPolicy.decide(event.properties.permission, options.operatorApproved))
           }
           if (isSessionStatus(event) && event.properties.sessionID === sessionId && event.properties.status.type === "idle") {
             finish()

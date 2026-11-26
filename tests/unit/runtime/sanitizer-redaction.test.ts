@@ -51,13 +51,14 @@ const SANITIZER_OUTCOME: Readonly<Record<string, "redacted" | "unchanged">> = {
   "fp-slack-prefix-in-prose": "redacted",
   // A lowercase word after "Bearer" is prose, not a token.
   "fp-bearer-word-in-prose": "unchanged",
-  // Bare `token` is not a job-result sensitive key.
-  "fp-key-name-in-prose": "unchanged",
+  // Still accepted: `token: was` is a key ending in TOKEN followed by `: `.
+  "fp-key-name-in-prose": "redacted",
   // No `sensitivePaths`.
   "fp-dotenv-example-suffix": "unchanged",
   // `XXXX…` is not random-looking, so the URL path tail survives.
   "fp-url-path-tail": "unchanged",
-  "nm-postgres-connection-string": "unchanged",
+  // Caught here by the connection-string password rule.
+  "nm-postgres-connection-string": "redacted",
   "nm-slack-webhook-short-path": "unchanged",
   "nm-short-opaque-token": "unchanged",
   "nm-already-masked-secret": "unchanged",
@@ -204,6 +205,80 @@ describe("redactSecretsFromText still catches secrets in a job result", () => {
       expect(caught / samples).toBeGreaterThanOrEqual(0.95)
     }
   })
+})
+
+describe("redactSecretsFromText env-style secret assignments", () => {
+  const redacted: ReadonlyArray<readonly [string, string]> = [
+    ["POSTGRES_PASSWORD=brisk-otter-93v", "POSTGRES_PASSWORD=[REDACTED]"],
+    ["export GITHUB_TOKEN=plainvalue123", "export GITHUB_TOKEN=[REDACTED]"],
+    ["api_key: plainvalue123", "api_key: [REDACTED]"],
+    ["DB_PASSWD = hunter2hunter2", "DB_PASSWD = [REDACTED]"],
+    ["APP_SECRET='single quoted value'", "APP_SECRET='[REDACTED]'"],
+    ['"client_secret": "json value here"', '"client_secret": "[REDACTED]"'],
+    ["STRIPE_APIKEY=abc123", "STRIPE_APIKEY=[REDACTED]"],
+    ["MINIO_ACCESS_KEY=minioadmin", "MINIO_ACCESS_KEY=[REDACTED]"],
+    ["SIGNING_PRIVATE_KEY=keymaterial", "SIGNING_PRIVATE_KEY=[REDACTED]"],
+    ["gpg passphrase: correct horse", "gpg passphrase: [REDACTED] horse"],
+    ["run with --password=hunter2 now", "run with --password=[REDACTED] now"],
+    ["PASSWORD=x\nNEXT=1", "PASSWORD=[REDACTED]\nNEXT=1"],
+  ]
+  for (const [input, expected] of redacted) {
+    it(`redacts only the value: ${input.split("\n")[0]}`, () => {
+      expect(redactSecretsFromText(input)).toBe(expected)
+    })
+  }
+
+  const untouched: ReadonlyArray<readonly [string, string]> = [
+    ["empty value", "POSTGRES_PASSWORD=\nNEXT=1"],
+    ["empty quoted value", 'GITHUB_TOKEN=""'],
+    ["$VAR reference", "POSTGRES_PASSWORD=$DB_PASS"],
+    ["${VAR} reference", "export GITHUB_TOKEN=${GH_TOKEN}"],
+    ["process.env member path", "const apiKey = process.env.API_KEY"],
+    ["indexed code expression", "password: options.environment[config.opencode.password_env],"],
+    ["call expression", "const password = getPassword()"],
+    ["type annotation", "readonly password: string"],
+    ["comparison", "if (password === undefined) return"],
+    ["arrow function", "const token => token.trim()"],
+    ["colon without space", "github_token:abc123"],
+    ["key not ending in a credential word", "TOKEN_TTL=3600 and PASSWORD_MIN_LENGTH=12"],
+    ["plural key", "max_tokens=4096"],
+    ["camelCase key", "bearerToken: plainvalue123, const hasExistingToken = await pathExists(p)"],
+    ["camelCase variable value", "OPENCODE_SERVER_PASSWORD: ocPassword"],
+    ["literal with a method call", 'secret: "A".repeat(24)'],
+  ]
+  for (const [name, text] of untouched) {
+    it(`leaves ${name} alone`, () => {
+      expect(redactSecretsFromText(text)).toBe(text)
+    })
+  }
+})
+
+describe("redactSecretsFromText connection-string passwords", () => {
+  const redacted: ReadonlyArray<readonly [string, string]> = [
+    ["postgres://aibridge:hunter2@db.internal:5432/app", "postgres://aibridge:[REDACTED]@db.internal:5432/app"],
+    ["mongodb+srv://admin:s3cr%40t@cluster0.example.net/db", "mongodb+srv://admin:[REDACTED]@cluster0.example.net/db"],
+    ["redis://:onlypassword@cache:6379/0", "redis://:[REDACTED]@cache:6379/0"],
+    ["git clone https://bot:ghtoken123@example.com/org/repo.git", "git clone https://bot:[REDACTED]@example.com/org/repo.git"],
+    ["amqp://guest:guest@rabbit//", "amqp://guest:[REDACTED]@rabbit//"],
+  ]
+  for (const [input, expected] of redacted) {
+    it(`redacts only the password: ${input}`, () => {
+      expect(redactSecretsFromText(input)).toBe(expected)
+    })
+  }
+
+  const untouched: ReadonlyArray<readonly [string, string]> = [
+    ["user without password", "postgres://aibridge@db.internal:5432/app"],
+    ["host and port", "http://dev-main.tailnet:8787/report"],
+    ["$VAR password", "postgres://app:${DB_PASS}@db:5432/app"],
+    ["scp-style git remote", "git@github.com:example/AIBridge.git"],
+    ["email address", "mailto:someone@example.com"],
+  ]
+  for (const [name, text] of untouched) {
+    it(`leaves ${name} alone`, () => {
+      expect(redactSecretsFromText(text)).toBe(text)
+    })
+  }
 })
 
 describe("redactSecretsFromText known-secret list", () => {

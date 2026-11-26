@@ -208,25 +208,114 @@ const truncatedPemPrivateKeyDetector: SecretDetector = {
 }
 
 /**
- * `key = value` / `key: value` names whose value is redacted. Narrower than the
- * memory default: bare `token` and `credential` fire on prose ("the dispatch
- * token: was not accepted") and bare `secret` on code a result quotes
- * (`secret: z.string()`, `readonly secret: string`), so all three are left out.
+ * A detector over one global, `d`-flagged regex whose first defined named group
+ * among `groups` is the redacted span. `accept` sees the value and the
+ * character right after the whole match (after a closing quote, if any).
  */
-const JOB_RESULT_SENSITIVE_KEYS: readonly string[] = Object.freeze([
-  "access_token",
-  "api_key",
-  "apikey",
-  "auth_token",
-  "aws_secret_access_key",
-  "client_secret",
-  "db_password",
-  "passphrase",
-  "passwd",
-  "password",
-  "private_key",
-  "refresh_token",
-])
+function valueDetector(
+  ruleId: string,
+  source: RegExp,
+  groups: readonly string[],
+  appliesTo: (text: string) => boolean,
+  accept: (value: string, after: string, found: RegExpMatchArray, group: string) => boolean,
+): SecretDetector {
+  const pattern = new RegExp(source.source, `${source.flags.replace(/[gd]/g, "")}gd`)
+  return {
+    ruleId,
+    appliesTo,
+    detect: (text) => {
+      const matches: RedactionMatch[] = []
+      for (const found of text.matchAll(pattern)) {
+        const group = groups.find((candidate) => found.indices?.groups?.[candidate] !== undefined)
+        const span = group === undefined ? undefined : found.indices?.groups?.[group]
+        if (group === undefined || span === undefined || span[1] <= span[0]) continue
+        const matchEnd = (found.index ?? 0) + found[0].length
+        if (!accept(text.slice(span[0], span[1]), text.slice(matchEnd, matchEnd + 1), found, group)) continue
+        matches.push({ ruleId, start: span[0], end: span[1] })
+      }
+      return matches
+    },
+  }
+}
+
+/** `$VAR` or `${VAR}`: a reference to a value, not the value. */
+const VARIABLE_REFERENCE = /^\$(?:\{[^}]*\}?|[A-Za-z_][A-Za-z0-9_]*)$/
+/** `process.env.X`, `options.environment`, `this.secret`: a member path in code. */
+const MEMBER_PATH = /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)+$/
+/** Type names, literals and keywords that follow `password:` in code, not a password. */
+const CODE_KEYWORD =
+  /^(?:string|number|boolean|symbol|undefined|null|true|false|None|nil|any|unknown|await|async|new|typeof|function|yield|void)$/
+/** `ocPassword`, `fromEnv`: a camelCase variable name. */
+const CAMEL_CASE_IDENTIFIER = /^[a-z][a-z0-9]*(?:[A-Z][a-z0-9]*)+$/
+
+/**
+ * Whether an assigned value is a reference or code rather than a secret:
+ * a variable reference, a literal followed by `.` (`"A".repeat(24)`), and,
+ * unquoted only, a member path, a call or index (`getPassword(`,
+ * `options.environment[`), a type or keyword, or a camelCase variable name. The cost: an unquoted password shaped like `word.word` or
+ * `camelCase` is not redacted by this rule.
+ */
+function isCodeOrReference(value: string, after: string, quoted: boolean): boolean {
+  if (VARIABLE_REFERENCE.test(value)) return true
+  // `"A".repeat(24)`: a literal with a method call on it is code.
+  if (after === ".") return true
+  if (quoted) return false
+  if (after === "(" || after === "[") return true
+  if (MEMBER_PATH.test(value)) return true
+  if (CAMEL_CASE_IDENTIFIER.test(value)) return true
+  return CODE_KEYWORD.test(value)
+}
+
+/** `bearerToken`, `hasExistingPassword`: a camelCase name is a code identifier, not a config key. */
+const CAMEL_CASE_KEY = /[a-z][A-Z]/
+
+const ENV_SECRET_ASSIGNMENT_RULE = "env_secret_assignment"
+const SECRET_KEY_SUFFIX = String.raw`(?:PASSWORD|PASSWD|PASSPHRASE|SECRET|TOKEN|API_KEY|APIKEY|ACCESS_KEY|PRIVATE_KEY)`
+const SECRET_KEY_SUFFIX_PROBE = /password|passwd|passphrase|secret|token|api_?key|access_key|private_key/i
+
+/**
+ * `NAME=value`, `NAME = value` or `name: value` where the name ends in a
+ * credential word, case-insensitively: `POSTGRES_PASSWORD=…`,
+ * `export GITHUB_TOKEN=…`, `api_key: …`, `"client_secret": "…"`. Only the
+ * value is redacted (inside its quotes when quoted). An empty value, a `$VAR`
+ * reference and a code expression (`isCodeOrReference`) are left alone, and so
+ * is a camelCase name (`bearerToken: x`), which is a code identifier rather
+ * than an env or config key.
+ *
+ * `: ` needs whitespace after the colon, so `token:abc` in a URL or a log key
+ * does not match; `=` must not start `==` or `=>`. The value stops at the end
+ * of the line, so `PASSWORD=` followed by a newline never swallows the next
+ * line. Known and accepted: prose such as "the dispatch token: was" redacts
+ * `was` (corpus `fp-key-name-in-prose`).
+ */
+const envSecretAssignmentDetector = valueDetector(
+  ENV_SECRET_ASSIGNMENT_RULE,
+  new RegExp(
+    String.raw`(?<![A-Za-z0-9_])(?<key>[A-Za-z0-9_]*${SECRET_KEY_SUFFIX})(?![A-Za-z0-9_])["']?(?:[ \t]*=(?![=>])|:[ \t]+)[ \t]*` +
+      String.raw`(?:"(?<double>[^"\n]+)"|'(?<single>[^'\n]+)'|(?<bare>\$\{[^}\n]*\}|[^\s,;()\[\]{}"'<>]+))`,
+    "i",
+  ),
+  ["double", "single", "bare"],
+  (text) => SECRET_KEY_SUFFIX_PROBE.test(text),
+  (value, after, found, group) =>
+    !CAMEL_CASE_KEY.test(found.groups?.key ?? "") && !isCodeOrReference(value, after, group !== "bare"),
+)
+
+const CONNECTION_STRING_PASSWORD_RULE = "connection_string_password"
+
+/**
+ * The password of `scheme://user:password@host`, for any scheme (`postgres`,
+ * `mysql`, `redis`, `amqp`, `mongodb+srv`, `https`, …). The user part may be
+ * empty (`redis://:password@host`). Only the password is redacted; a `$VAR`
+ * reference is left alone.
+ */
+const connectionStringPasswordDetector = valueDetector(
+  CONNECTION_STRING_PASSWORD_RULE,
+  /\b[A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s:/@]*:(?<password>[^\s/@]+)@/,
+  ["password"],
+  (text) => text.includes("://") && text.includes("@"),
+  (value) => !VARIABLE_REFERENCE.test(value),
+)
 
 /** The rule set `redactSecretsFromText` runs, exported for the corpus tests. */
 export const JOB_RESULT_DETECTORS: readonly SecretDetector[] = Object.freeze([
@@ -241,12 +330,13 @@ export const JOB_RESULT_DETECTORS: readonly SecretDetector[] = Object.freeze([
   tailscaleAuthKeyDetector(),
   filteredDetector(authorizationBearerDetector(), isPlausibleBearerValue),
   jwtDetector(),
+  envSecretAssignmentDetector,
+  connectionStringPasswordDetector,
   jobResultHighEntropyDetector(),
 ])
 
 const JOB_RESULT_POLICY: RedactionPolicy = Object.freeze({
   detectors: JOB_RESULT_DETECTORS,
-  sensitiveKeys: JOB_RESULT_SENSITIVE_KEYS,
   replacement: REDACTED,
 })
 
@@ -263,10 +353,11 @@ const JOB_RESULT_PIPELINE = new DeterministicRedactionPipeline({ diagnosticDetec
  *    verbatim. This is unchanged from before the pipeline was wired in.
  * 2. The `memory/redaction` pipeline runs with `JOB_RESULT_DETECTORS`: the
  *    vendor-prefixed rules (GitHub, AWS, Slack, Google, `sk-`, Tailscale, JWT,
- *    `Bearer` values, PEM private keys), a short `key = value` name list, and a
- *    narrowed high-entropy catch-all.
+ *    `Bearer` values, PEM private keys), env-style `*_PASSWORD=` / `*_TOKEN:`
+ *    assignments, connection-string passwords, and a narrowed high-entropy
+ *    catch-all.
  *
- * The job-result rule set differs from the memory default in three ways, all
+ * The job-result rule set differs from the memory default in four ways, all
  * because a job result is full of file paths, commit shas, UUIDs and code, and
  * a redactor that mangles those gets switched off:
  *
@@ -274,6 +365,9 @@ const JOB_RESULT_PIPELINE = new DeterministicRedactionPipeline({ diagnosticDetec
  *   hex (shas, digests, UUIDs), SRI digests, or ordinary paths and URLs.
  * - `sensitivePaths` is not used: redacting the mention of `.env` would turn
  *   `.env.example` into `[REDACTED].example`.
+ * - `sensitiveKeys` is replaced by `envSecretAssignmentDetector`, which
+ *   matches any name ending in a credential word and leaves `$VAR` references
+ *   and code (`password: options.environment[…]`) alone.
  * - A PEM private key is redacted in place instead of replacing the whole text
  *   with `[PROHIBITED]`, so the rest of the result stays readable. A key whose
  *   `END` line was cut off is redacted from `BEGIN` through its base64 body.

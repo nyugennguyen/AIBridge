@@ -88,11 +88,7 @@ The worker daemon drains admitted requests from `ingress_outbox.db` and delegate
 aibr worker --profile <profile>
 ```
 
-To expose the local Unix domain socket IPC bus for presentation tools:
-
-```bash
-aibr worker --profile <profile> --ipc-publish
-```
+The `--ipc-publish` flag is deprecated and ignored since 3.1.1 (the local IPC bus was removed); it is still accepted so existing service units keep starting.
 
 ---
 

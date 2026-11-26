@@ -26,19 +26,11 @@ export const INGRESS_OUTBOX_ENV = "AIBRIDGE_INGRESS_OUTBOX"
 
 export interface IngressWorkerHandle {
   readonly drainer: IngressDrainer
-  /**
-   * The engine this process is running.
-   *
-   * Exposed because the local IPC bus has to be built from the SAME authority --
-   * the same config and the same job manager -- rather than from a second load of
-   * the profile. Two loads would be two configurations, and a bus that disagrees
-   * with the drainer about which projects are allowed would be a way around the
-   * allowlist rather than a view of it (ADR 0008 §2.2).
-   */
+  /** The engine this process is running. */
   readonly runtime: Runtime
   /** The validated profile configuration. */
   readonly config: Runtime["config"]
-  /** The engine's job manager, for the same reason as `runtime`. */
+  /** The engine's job manager. */
   readonly jobManager: Runtime["jobManager"]
   /**
    * Rows in `ingress_outbox` that are still claimable.
@@ -61,10 +53,7 @@ export interface IngressWorkerOptions extends RuntimeOptions {
   /**
    * Told about each durable write, after it commits.
    *
-   * Optional because a worker with no UI must not pay for it. It is threaded in
-   * from the caller rather than constructed here so that this module keeps no
-   * dependency on the IPC surface: the drain loop is the same program whether or
-   * not a socket is ever bound.
+   * Optional because a worker with no observer must not pay for it.
    */
   readonly ingressObserver?: IngressLifecycleObserver
 }

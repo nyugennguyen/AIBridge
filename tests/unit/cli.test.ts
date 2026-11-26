@@ -558,6 +558,25 @@ describe("cli worker", () => {
     expect(exitCode).toBe(0)
   })
 
+  it("accepts --ipc-publish, warns that it is ignored, and still runs the worker", async () => {
+    let receivedProfile: string | undefined
+    const { exitCode, output } = await captureRun(["worker", "--profile", "dev-main", "--ipc-publish"], {
+      workerRunner: async (profile) => {
+        receivedProfile = profile
+      },
+    })
+
+    expect(exitCode).toBe(0)
+    expect(receivedProfile).toBe("dev-main")
+    expect(output).toContain("warning: --ipc-publish is deprecated and ignored since 3.1.1")
+  })
+
+  it("does not warn about --ipc-publish when the flag is absent", async () => {
+    const { output } = await captureRun(["worker", "--profile", "dev-main"])
+
+    expect(output).not.toContain("--ipc-publish")
+  })
+
   it("returns nonzero and explains when the store cannot be opened", async () => {
     const { exitCode, output } = await captureRun(["worker", "--profile", "dev-main"], {
       workerRunner: async () => {

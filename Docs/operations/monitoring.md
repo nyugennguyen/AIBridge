@@ -1,7 +1,7 @@
 # Monitoring & Diagnostics Guide
 
 > **Status:** Current  
-> **Applies to:** AIBridge 3.1.1  
+> **Applies to:** AIBridge 3.2.0  
 > **Owner:** Maintainers  
 
 This guide covers operational monitoring, health probe endpoints, diagnostic support bundle generation, and queue telemetry.

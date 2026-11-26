@@ -1,7 +1,7 @@
 # Security Model & Architecture
 
 > **Status:** Current  
-> **Applies to:** AIBridge 3.1.1  
+> **Applies to:** AIBridge 3.2.0  
 > **Owner:** Maintainers  
 
 AIBridge implements a layered, fail-closed security architecture designed for coordinating untrusted and semi-autonomous AI agents across private Tailscale networks.

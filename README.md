@@ -20,6 +20,8 @@
 
 A typical setup: **Claude Code on your laptop is the orchestrator**. Through the AIBridge plugin it hands work (integration tests, bug reproduction, log reading, a fix on a branch) to worker nodes such as a staging VPS, then reads the findings and continues locally. Each worker runs the job with Claude Code or OpenCode, inside a capability profile it controls, pinned to an exact commit.
 
+**New in 3.2.0:** a job API and CLI (`aibr jobs`, `aibr job`, `aibr cancel`, `aibr attach`), job reconcile and orphan-process cleanup after a restart, security hardening (plan self-approval, `GET /jobs/:id`, job ids, wider secret redaction), and about 45k lines of unwired code removed. Read **Removed** and **Upgrade notes** in the [CHANGELOG](CHANGELOG.md#320---2026-11-26) before upgrading.
+
 **New in 3.1.1:** the unused TUI, Herdr, terminal and IPC layer is removed (about 54k lines, two Rust crates); `aibr tui`, `--ipc-publish` and `terminal.backend: "herdr"` were deprecated and are removed in 3.2.0 ([ADR 0014](Docs/adr/0014-claude-is-the-operator-interface.md), [CHANGELOG](CHANGELOG.md#311---2026-11-26)).
 
 **New in 3.1.0:** Claude Code as a worker runtime and as the orchestrator (plugin + MCP server), signed requests and one-code pairing (`aibr enroll`), operator approval with an audit ledger, jobs pinned to `repo@sha`, and a quickstart (`aibr init`, `aibr doctor`, `aibr ping`, `aibr send`). See the [CHANGELOG](CHANGELOG.md#310---2026-11-26), and its **Behaviour changes** before upgrading a running node.

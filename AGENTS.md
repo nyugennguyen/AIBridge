@@ -35,7 +35,7 @@ bun run release:check        # full pre-release gate (frozen install, build, tes
 
 ## Architecture
 
-The system dispatches jobs between machines. **Claude Code (or another MCP-capable agent) dispatches and follows work; humans approve in the `aibr` CLI on the worker.** What actually runs is the Fastify bridge (`aibr serve`), the job manager and runner, the approval ledger, signed requests and the MCP server. Roughly 11,000 of the 50,000 lines in `src/` are not reachable from `src/cli.ts` or `src/index.ts`, all of it kept on purpose with deadlines (see "Not yet wired" below); `bun run docs:reachability` measures this.
+The system dispatches jobs between machines. **Claude Code (or another MCP-capable agent) dispatches and follows work; humans approve in the `aibr` CLI on the worker.** What actually runs is the Fastify bridge (`aibr serve`), the job manager and runner, the approval ledger, signed requests and the MCP server. Roughly 11,000 of the 50,000 lines in `src/` are not reachable from `src/cli.ts` or `src/index.ts`, almost all of it kept on purpose with deadlines (see "Not yet wired" below; the rest is under 100 lines, `src/mesh/identity/memory-key-store.ts` and the `src/diagnostics/index.ts` barrel); `bun run docs:reachability` measures this.
 
 ```
 src/

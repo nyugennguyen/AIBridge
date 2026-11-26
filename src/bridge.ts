@@ -36,6 +36,8 @@ export interface BridgeOptions extends RuntimeOptions {
   readonly profileName?: string
   /** Period of the deadline sweep while the bridge runs. Default 60 s; tests shorten it. */
   readonly sweepIntervalMs?: number
+  /** The bridge log (`aibr serve` passes its file logger): job cancels are recorded here with the caller. */
+  readonly log?: AppDependencies["log"]
 }
 
 export interface BridgeInstance {
@@ -168,6 +170,7 @@ async function startBridgeHoldingLock(options: BridgeOptions): Promise<BridgeIns
     approvalLedger: new FileApprovalLedger(join(options.stateDir, "approvals.jsonl")),
     reportTerminalJob: runtime.reportTerminalJob,
     ...(options.profileName !== undefined ? { profileName: options.profileName } : {}),
+    ...(options.log !== undefined ? { log: options.log } : {}),
     shadowMirror,
     orchestration: options.orchestration,
     notificationStore,

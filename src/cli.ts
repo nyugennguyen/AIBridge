@@ -1351,6 +1351,7 @@ async function createRealDeps(): Promise<CliDeps> {
           bearerToken,
           operatorToken,
           profileName: profile,
+          log: (level, message) => logger.log(level, message),
           environment: {
             ...process.env as Record<string, string>,
             ...(ocPassword ? { OPENCODE_SERVER_PASSWORD: ocPassword } : {}),

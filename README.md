@@ -225,7 +225,7 @@ aibr plugin status claude
 
 This registers the plugin bundled in the npm package through the official `claude plugin` CLI; it never edits `~/.claude` files. In Claude Code you then get:
 
-- MCP tools `bridge_peers`, `bridge_dispatch`, `bridge_status`, `bridge_await`, `bridge_result` and `bridge_cancel`. There is deliberately no approve tool: approval stays with the operator.
+- MCP tools `bridge_peers`, `bridge_dispatch`, `bridge_status`, `bridge_await`, `bridge_result`, `bridge_events` and `bridge_cancel` (cancels only jobs this node dispatched; needs signed requests). There is deliberately no approve tool: approval stays with the operator.
 - The `aibridge-dispatch` skill, which pushes the branch, dispatches with the commit sha, waits and reads the findings.
 - `/aibridge:bridge-send <peer> <capability> <task>` and `/aibridge:bridge-status`.
 - A short summary of peers and running jobs at session start.

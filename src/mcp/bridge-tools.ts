@@ -1,14 +1,16 @@
 /**
- * The AIBridge MCP tool set: how a Claude Code orchestrator talks to remote
- * AIBridge worker nodes over the existing HTTP contract (`POST /trigger`,
- * `GET /jobs/:id`, `GET /health`).
+ * The AIBridge MCP tool set: how an orchestrator agent (Claude Code, Codex,
+ * OpenCode or any MCP client) talks to remote AIBridge worker nodes over the
+ * HTTP contract (`POST /trigger`, `GET /jobs/:id`, `GET /jobs/:id/events`,
+ * `POST /jobs/:id/cancel`, `GET /health`).
  *
  * Boundaries worth knowing:
- *  - There is deliberately NO approve tool. Plan approval is operator-only.
+ *  - There is deliberately NO approve, reject or stop-all tool. Approval and
+ *    the node-wide kill switch are operator-only (ADR 0013, 0014, 0015).
+ *    `bridge_cancel` only ends a job this node dispatched; it is not an
+ *    approval action.
  *  - The bearer token is read from the profile secret file at call time and is
  *    never returned: every string leaving this module goes through `redact`.
- *  - The bridge exposes no cancel route, so `bridge_cancel` reports that
- *    honestly instead of pretending.
  */
 import { randomUUID } from "node:crypto"
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises"
@@ -85,6 +87,9 @@ const HEALTH_TIMEOUT_MS = 3000
 const HTTP_TIMEOUT_MS = 15000
 const DEFAULT_JOB_TIMEOUT_SECONDS = 900
 const LEDGER_LIMIT = 20
+const MAX_EVENTS_PAGE = 200
+/** The worker waits up to 15 s for a running job to stop before answering. */
+const CANCEL_TIMEOUT_MS = 30_000
 
 class ToolError extends Error {
   constructor(
@@ -159,8 +164,25 @@ export const TOOL_DEFINITIONS: readonly ToolDefinition[] = [
     },
   },
   {
+    name: "bridge_events",
+    description:
+      "Read what a dispatched job has done so far, in order: status changes, messages, tool use and the final result (secrets are redacted on the worker). Returns one page of events and `next`; pass `next` back as `after` to read on. `final: true` means the job has ended and this page reaches its last event, so there is nothing more to read; `final: false` with an ended `status` means read on. Use it to follow a long job between bridge_await calls or to see why a job failed.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        job_id: { type: "string" },
+        target: { type: "string", description: "Peer id the job was dispatched to." },
+        after: { type: "integer", minimum: 0, description: "Return events after this sequence number (the `next` of the previous page). Default 0." },
+        limit: { type: "integer", minimum: 1, maximum: MAX_EVENTS_PAGE, description: `Events per page. Default 100, at most ${MAX_EVENTS_PAGE}.` },
+      },
+      required: ["job_id", "target"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "bridge_cancel",
-    description: "Cancel a running job. Only works if the bridge exposes a cancel route; current bridges do not and will say so.",
+    description:
+      "Cancel a job you dispatched: the worker stops it and it ends `failed` with error \"cancelled by requester\"; its report is delivered as for any finished job. Only the node that dispatched a job can cancel it. A job that has already ended, or that is still waiting for the operator's approval, cannot be cancelled (the operator rejects those). Cancelling cannot be undone: dispatch again if the work is still wanted.",
     inputSchema: jobSchema(),
   },
 ]
@@ -221,16 +243,10 @@ export class BridgeTools {
         return this.result(str(args, "job_id"), str(args, "target"))
       case "bridge_await":
         return this.awaitJob(str(args, "job_id"), str(args, "target"), args.timeout_s)
-      case "bridge_cancel": {
-        // Validate the target even though nothing is sent, so typos surface.
-        const profile = await this.loadProfile()
-        this.findPeer(profile, str(args, "target"))
-        throw new ToolError(
-          "bridge_cancel is not supported by this bridge version: the bridge exposes no cancel route.",
-          "not_supported",
-          "The job will stop at its own timeout. Ask the operator to stop it on the worker if it must end now.",
-        )
-      }
+      case "bridge_events":
+        return this.events(str(args, "job_id"), str(args, "target"), args.after, args.limit)
+      case "bridge_cancel":
+        return this.cancel(str(args, "job_id"), str(args, "target"))
       default:
         throw new ToolError(`Unknown tool: ${name}`)
     }
@@ -494,6 +510,70 @@ export class BridgeTools {
       }
       await this.deps.sleep(Math.min(POLL_INTERVAL_MS, remaining))
     }
+  }
+
+  private async events(jobId: string, target: string, afterArg: unknown, limitArg: unknown): Promise<unknown> {
+    const after = afterArg === undefined ? 0 : afterArg
+    if (typeof after !== "number" || !Number.isInteger(after) || after < 0) {
+      throw new ToolError("after must be a non-negative integer.", "invalid_argument")
+    }
+    const limit = limitArg === undefined ? 100 : limitArg
+    if (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1) {
+      throw new ToolError("limit must be a positive integer.", "invalid_argument")
+    }
+    const profile = await this.loadProfile()
+    const peer = this.findPeer(profile, target)
+    const query = `after=${after}&limit=${Math.min(limit, MAX_EVENTS_PAGE)}`
+    const response = await this.http(
+      `${trimSlash(peer.url)}/jobs/${encodeURIComponent(jobId)}/events?${query}`,
+      { method: "GET", headers: { accept: "application/json", ...(await this.authHeaders(profile)) } },
+      HTTP_TIMEOUT_MS,
+      profile,
+    )
+    const payload = await readJson(response)
+    if (!response.ok) throw jobApiError(response.status, payload, jobId, target, "events")
+    const status = typeof payload.status === "string" ? payload.status : "unknown"
+    return {
+      job_id: jobId,
+      target,
+      status,
+      // The worker decides: an ended job whose page misses its last events is not final yet.
+      final: typeof payload.final === "boolean" ? payload.final && TERMINAL_STATUSES.has(status) : false,
+      events: Array.isArray(payload.events) ? payload.events : [],
+      next: typeof payload.next === "number" ? payload.next : after,
+    }
+  }
+
+  private async cancel(jobId: string, target: string): Promise<unknown> {
+    const profile = await this.loadProfile()
+    const peer = this.findPeer(profile, target)
+    const response = await this.http(
+      `${trimSlash(peer.url)}/jobs/${encodeURIComponent(jobId)}/cancel`,
+      { method: "POST", headers: await this.authHeaders(profile) },
+      CANCEL_TIMEOUT_MS,
+      profile,
+    )
+    const payload = await readJson(response)
+    if (response.status === 200) {
+      return {
+        job_id: jobId,
+        target,
+        cancelled: true,
+        status: typeof payload.status === "string" ? payload.status : "failed",
+        ...(typeof payload.error === "string" ? { error: payload.error } : {}),
+      }
+    }
+    if (response.status === 202) {
+      return {
+        job_id: jobId,
+        target,
+        cancelled: false,
+        cancelling: true,
+        status: typeof payload.status === "string" ? payload.status : "unknown",
+        message: "The worker is stopping the job. Call bridge_await to see it end.",
+      }
+    }
+    throw jobApiError(response.status, payload, jobId, target, "cancel")
   }
 
   // ── ping (aibr ping / aibr doctor) ─────────────────────────────────
@@ -765,6 +845,61 @@ function dispatchError(status: number, payload: Record<string, unknown>): ToolEr
     return new ToolError(`Dispatch denied (403): ${message}`, "project_not_allowlisted", "Use a project directory the worker allowlists (`aibr ping <peer>` lists them).")
   }
   return new ToolError(`Dispatch failed (HTTP ${status}): ${message}`, status === 403 ? "forbidden" : "dispatch_failed")
+}
+
+/** A non-2xx answer from the job API (`/jobs/:id/events`, `/jobs/:id/cancel`) as a ToolError that names the fix. */
+function jobApiError(status: number, payload: Record<string, unknown>, jobId: string, target: string, action: "events" | "cancel"): ToolError {
+  const message = typeof payload.error === "string" ? payload.error : `HTTP ${status}`
+  const code = typeof payload.code === "string" ? payload.code : ""
+  if (status === 404) {
+    // Fastify's own 404 for a route it does not have names the route, not the job.
+    if (typeof payload.message === "string" && /route/i.test(payload.message)) {
+      return new ToolError(
+        `Peer "${target}" runs an aibr version without the job ${action} route.`,
+        "not_supported",
+        action === "cancel" ? "The job will stop at its own timeout. Ask the user to update aibr on the worker." : "Use bridge_status and bridge_result instead.",
+      )
+    }
+    return new ToolError(`Job ${jobId} not found on ${target}.`, "job_not_found")
+  }
+  if (status === 409) {
+    const jobStatus = typeof payload.status === "string" ? payload.status : undefined
+    if (code === "awaiting_approval") {
+      return new ToolError(
+        message,
+        "awaiting_approval",
+        "Nothing has run yet. Tell the user the job is waiting for the operator on the worker, who can reject it there.",
+      )
+    }
+    if (code === "cancel_in_progress") return new ToolError(message, "cancel_in_progress", "Call bridge_await to see the job end.")
+    return new ToolError(
+      `${message}${typeof payload.job_error === "string" ? `: ${payload.job_error}` : ""}`,
+      "job_finished",
+      `Nothing to cancel${jobStatus !== undefined ? ` (status ${jobStatus})` : ""}; call bridge_result for its outcome.`,
+    )
+  }
+  if (status === 403) {
+    if (code === "requester_identity_required") {
+      return new ToolError(
+        message,
+        "signature_required",
+        "This node's requests must be signed for the worker to know which jobs are its own: pair it with the worker (`aibr enroll issue` there, `aibr enroll join <code>` here) and have the worker's operator enable security.request_signing.",
+      )
+    }
+    if (code === "not_job_requester") return new ToolError(message, "forbidden", "Only the node that dispatched a job can follow or cancel it.")
+    return new ToolError(`Denied (403): ${message}`, "forbidden")
+  }
+  if (status === 401) {
+    if (code === "signature_required" || /sign|pair|enrol/i.test(message)) {
+      return new ToolError(
+        `Peer requires a signed request from a paired node (401): ${message}`,
+        "signature_required",
+        "Ask the user to pair this machine with the worker: `aibr enroll issue` on the worker, then `aibr enroll join <code>` here.",
+      )
+    }
+    return new ToolError("Peer rejected the bearer token (401). The shared token may be out of date.", "unauthorized")
+  }
+  return new ToolError(`Job ${action} failed (HTTP ${status}): ${message}`, `${action}_failed`)
 }
 
 function str(args: Record<string, unknown>, key: string): string {

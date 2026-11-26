@@ -11,6 +11,8 @@ import type { OrchestrationCommand } from "../orchestration/types.js"
 import type { CoordinatorResult } from "../orchestration/coordinator/types.js"
 import { registerHealthRoute } from "./routes/health.js"
 import { registerJobsRoute } from "./routes/jobs.js"
+import { registerJobApiRoutes, type JobEventStreamLimits } from "./routes/job-api.js"
+import type { JobEventLog } from "../jobs/events.js"
 import { registerReportRoute } from "./routes/report.js"
 import { registerTriggerRoute } from "./routes/trigger.js"
 import { registerOrchestrationRoutes } from "./routes/orchestration.js"
@@ -61,7 +63,21 @@ export interface AppDependencies {
    * an OpenCode node; a Claude node without one answers 503 rather than
    * falling back to OpenCode.
    */
-  claudeJobRunner?: Pick<ClaudeJobRunner, "start" | "monitor"> & Partial<Pick<ClaudeJobRunner, "hasCapacity" | "stopAll">>
+  claudeJobRunner?: Pick<ClaudeJobRunner, "start" | "monitor"> &
+    Partial<Pick<ClaudeJobRunner, "hasCapacity" | "stopAll" | "stop" | "isActive">>
+  /**
+   * What `GET /jobs/:id/events` reads. Absent: the job manager's own log
+   * (`JobManager.eventLog`), else an empty in-memory one.
+   */
+  jobEvents?: JobEventLog
+  /** How often an SSE stream re-reads the log when no event was pushed. Default 1 s; tests shorten it. */
+  jobEventPollMs?: number
+  /** Caps on open `GET /jobs/:id/events` SSE streams (global 64, per caller 8, per job 16 by default). */
+  jobEventStreamLimits?: Partial<JobEventStreamLimits>
+  /** How long `POST /jobs/:id/cancel` waits for the runner to end the job before answering 202. Default 15 s. */
+  cancelStopWaitMs?: number
+  /** The bridge log (`aibr logs`). Cancels are recorded here with the caller. Absent: not logged. */
+  log?: (level: "info" | "warn" | "error", message: string) => void
   /**
    * Resolves a trigger's `repo` + `ref` to a pinned sha (Phase 5). Absent: a
    * trigger naming a `repo` is answered 503.
@@ -122,6 +138,7 @@ export function createApp(dependencies: AppDependencies): FastifyInstance {
   registerHealthRoute(app, dependencies)
   registerTriggerRoute(app, dependencies)
   registerJobsRoute(app, dependencies)
+  registerJobApiRoutes(app, dependencies)
   registerReportRoute(app, dependencies)
   registerOrchestrationRoutes(app, dependencies)
   registerEnrollRoute(app, dependencies)

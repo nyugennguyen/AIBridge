@@ -103,8 +103,11 @@ describe("MCP protocol", () => {
   it("lists exactly the expected tools and no approve tool", async () => {
     const out = JSON.parse((await server().handleLine(JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" }))) as string)
     const names = out.result.tools.map((t: { name: string }) => t.name)
-    expect(names).toEqual(["bridge_peers", "bridge_dispatch", "bridge_status", "bridge_result", "bridge_await", "bridge_cancel"])
-    expect(names.some((n: string) => /approve/i.test(n))).toBe(false)
+    expect(names).toEqual(["bridge_peers", "bridge_dispatch", "bridge_status", "bridge_result", "bridge_await", "bridge_events", "bridge_cancel"])
+    // Operator-only actions are never MCP tools (ADR 0014, 0015).
+    expect(names.some((n: string) => /approve|reject|stop|pending/i.test(n))).toBe(false)
+    // Tool descriptions do not assume which agent orchestrates (ADR 0015).
+    for (const tool of TOOL_DEFINITIONS) expect(tool.description).not.toMatch(/claude/i)
     expect(TOOL_DEFINITIONS.every((t) => (t.inputSchema as { type: string }).type === "object")).toBe(true)
   })
 
@@ -309,12 +312,106 @@ describe("bridge_status / bridge_result / bridge_cancel", () => {
     expect(JSON.parse(textOf(result)).code).toBe("job_not_found")
   })
 
-  it("bridge_cancel says it is unsupported and sends nothing", async () => {
-    const { deps, calls } = makeDeps(() => json({}))
+  it("bridge_cancel posts to the cancel route with the bearer and reports the cancelled job", async () => {
+    const { deps, calls } = makeDeps(() => json({ job_id: "j1", status: "failed", error: "cancelled by requester", cancelled: true }))
+    const result = await toolsFor(deps).call("bridge_cancel", { job_id: "j1", target: "staging" })
+    expect(result.isError).toBeUndefined()
+    expect(JSON.parse(textOf(result))).toMatchObject({ job_id: "j1", target: "staging", cancelled: true, status: "failed", error: "cancelled by requester" })
+    expect(calls).toHaveLength(1)
+    expect(calls[0]).toMatchObject({ url: "http://staging.ts.net:8787/jobs/j1/cancel", method: "POST" })
+    expect(new Headers(calls[0]!.headers).get("authorization")).toBe(`Bearer ${TOKEN}`)
+    expect(textOf(result)).not.toContain(TOKEN)
+  })
+
+  it("bridge_cancel reports a stop still in progress (202) without an error", async () => {
+    const { deps } = makeDeps(() => json({ job_id: "j1", status: "running", cancelling: true }, 202))
+    const result = await toolsFor(deps).call("bridge_cancel", { job_id: "j1", target: "staging" })
+    expect(result.isError).toBeUndefined()
+    expect(JSON.parse(textOf(result))).toMatchObject({ cancelled: false, cancelling: true, status: "running" })
+  })
+
+  it("bridge_cancel maps 403 (not the requester) to forbidden", async () => {
+    const { deps } = makeDeps(() => json({ error: "This job was not dispatched by the caller", code: "not_job_requester" }, 403))
     const result = await toolsFor(deps).call("bridge_cancel", { job_id: "j1", target: "staging" })
     expect(result.isError).toBe(true)
-    expect(JSON.parse(textOf(result)).code).toBe("not_supported")
+    expect(JSON.parse(textOf(result))).toMatchObject({ code: "forbidden" })
+  })
+
+  it("bridge_cancel maps 403 (unsigned request) to signature_required with the pairing hint", async () => {
+    const { deps } = makeDeps(() => json({ error: "needs a verified node signature", code: "requester_identity_required" }, 403))
+    const body = JSON.parse(textOf(await toolsFor(deps).call("bridge_cancel", { job_id: "j1", target: "staging" })))
+    expect(body.code).toBe("signature_required")
+    expect(body.hint).toMatch(/aibr enroll/)
+  })
+
+  it("bridge_cancel maps 409 for a finished job to job_finished with the status", async () => {
+    const { deps } = makeDeps(() =>
+      json({ error: "Job has already ended (status completed)", code: "job_finished", status: "completed" }, 409),
+    )
+    const body = JSON.parse(textOf(await toolsFor(deps).call("bridge_cancel", { job_id: "j1", target: "staging" })))
+    expect(body.code).toBe("job_finished")
+    expect(body.hint).toMatch(/status completed/)
+  })
+
+  it("bridge_cancel maps 409 for a job awaiting approval to awaiting_approval", async () => {
+    const { deps } = makeDeps(() => json({ error: "awaiting operator approval", code: "awaiting_approval", status: "awaiting_approval" }, 409))
+    const body = JSON.parse(textOf(await toolsFor(deps).call("bridge_cancel", { job_id: "j1", target: "staging" })))
+    expect(body.code).toBe("awaiting_approval")
+  })
+
+  it("bridge_cancel says not_supported when the worker has no cancel route (older aibr)", async () => {
+    const { deps } = makeDeps(() => json({ message: "Route POST:/jobs/j1/cancel not found", error: "Not Found", statusCode: 404 }, 404))
+    const body = JSON.parse(textOf(await toolsFor(deps).call("bridge_cancel", { job_id: "j1", target: "staging" })))
+    expect(body.code).toBe("not_supported")
+  })
+
+  it("bridge_cancel rejects an unknown peer before sending anything", async () => {
+    const { deps, calls } = makeDeps(() => json({}))
+    const body = JSON.parse(textOf(await toolsFor(deps).call("bridge_cancel", { job_id: "j1", target: "nope" })))
+    expect(body.code).toBe("unknown_peer")
     expect(calls).toHaveLength(0)
+  })
+})
+
+describe("bridge_events", () => {
+  it("reads one page of events and returns the cursor for the next", async () => {
+    const events = [
+      { seq: 1, at: "t1", type: "status", data: { status: "accepted" } },
+      { seq: 2, at: "t2", type: "status", data: { status: "running", from: "accepted" } },
+    ]
+    const { deps, calls } = makeDeps(() => json({ job_id: "j1", status: "running", final: false, events, next: 2 }))
+    const body = JSON.parse(textOf(await toolsFor(deps).call("bridge_events", { job_id: "j1", target: "staging", after: 0, limit: 50 })))
+    expect(body).toMatchObject({ job_id: "j1", target: "staging", status: "running", final: false, next: 2 })
+    expect(body.events).toHaveLength(2)
+    expect(calls[0]?.url).toBe("http://staging.ts.net:8787/jobs/j1/events?after=0&limit=50")
+    expect(new Headers(calls[0]!.headers).get("accept")).toBe("application/json")
+  })
+
+  it("caps the page size and takes `final` from the worker", async () => {
+    const { deps, calls } = makeDeps(() => json({ status: "completed", final: true, events: [], next: 7 }))
+    const body = JSON.parse(textOf(await toolsFor(deps).call("bridge_events", { job_id: "j1", target: "staging", after: 7, limit: 10_000 })))
+    expect(body).toMatchObject({ final: true, next: 7, events: [] })
+    expect(calls[0]?.url).toContain("limit=200")
+  })
+
+  it("is not final for an ended job whose page misses its last events", async () => {
+    const { deps } = makeDeps(() => json({ status: "completed", final: false, events: [], next: 2 }))
+    const body = JSON.parse(textOf(await toolsFor(deps).call("bridge_events", { job_id: "j1", target: "staging" })))
+    expect(body).toMatchObject({ status: "completed", final: false })
+  })
+
+  it("rejects a negative cursor without calling the worker", async () => {
+    const { deps, calls } = makeDeps(() => json({}))
+    const body = JSON.parse(textOf(await toolsFor(deps).call("bridge_events", { job_id: "j1", target: "staging", after: -1 })))
+    expect(body.code).toBe("invalid_argument")
+    expect(calls).toHaveLength(0)
+  })
+
+  it("maps 403 and 404 like bridge_cancel", async () => {
+    const forbidden = makeDeps(() => json({ error: "not yours", code: "not_job_requester" }, 403))
+    expect(JSON.parse(textOf(await toolsFor(forbidden.deps).call("bridge_events", { job_id: "j1", target: "staging" }))).code).toBe("forbidden")
+    const missing = makeDeps(() => json({ error: "Job not found" }, 404))
+    expect(JSON.parse(textOf(await toolsFor(missing.deps).call("bridge_events", { job_id: "j1", target: "staging" }))).code).toBe("job_not_found")
   })
 })
 

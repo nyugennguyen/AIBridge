@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto"
 import type { RemoteDependency, TriggerRequest } from "../config/types.js"
 import type { JobCheckout, JobRecord, JobStatus, PongInfo, RemoteDependencyReport, RuntimeJobResult } from "./types.js"
 import type { JobStore } from "./store.js"
+import { appendJobEvent, type JobEventLog } from "./events.js"
 
 const TERMINAL_STATUSES: JobStatus[] = ["completed", "failed", "timed_out", "callback_failed"]
 
@@ -64,9 +65,39 @@ export interface JobManagerOptions {
    * over this node's secrets.
    */
   readonly redactError?: (text: string) => string
+  /**
+   * Receives a `status` event for every status a job enters (creation
+   * included), so every runtime's jobs have at least their status history in
+   * `GET /jobs/:id/events`. Appended under the job's lock, after the record is
+   * saved; a failed append never fails the transition.
+   */
+  readonly events?: JobEventLog
 }
 
 type TransitionGuard = (current: JobRecord) => boolean
+
+const stillBlocked: TransitionGuard = (current) => current.status === "blocked"
+
+/** What settling a job's dependents did: the jobs unblocked (launch them) and failed (report them). */
+export interface DependentsOutcome {
+  readonly unblocked: readonly JobRecord[]
+  readonly failed: readonly JobRecord[]
+}
+
+/**
+ * Thrown by `applyRemoteReport` when the store failed for at least one
+ * dependent. `outcome` is what was settled anyway: launch and report it,
+ * then answer with an error so the sender retries.
+ */
+export class RemoteReportApplyError extends Error {
+  readonly code = "remote_report_apply_failed"
+  constructor(
+    readonly reason: unknown,
+    readonly outcome: DependentsOutcome,
+  ) {
+    super(reason instanceof Error ? reason.message : String(reason))
+  }
+}
 
 export class JobManager {
   /**
@@ -76,12 +107,19 @@ export class JobManager {
    */
   private readonly jobLocks = new Map<string, Promise<unknown>>()
   private readonly redactError: (text: string) => string
+  private readonly events: JobEventLog | undefined
 
   constructor(
     private readonly store: JobStore,
     options: JobManagerOptions = {},
   ) {
     this.redactError = options.redactError ?? ((text) => text)
+    this.events = options.events
+  }
+
+  /** The event log this manager writes status events to, if any (`GET /jobs/:id/events` reads it). */
+  get eventLog(): JobEventLog | undefined {
+    return this.events
   }
 
   /**
@@ -106,6 +144,7 @@ export class JobManager {
       updatedAt: now,
     }
     await this.store.save(job)
+    await appendJobEvent(this.events, id, { type: "status", data: { status: job.status } })
     return job
   }
 
@@ -231,6 +270,21 @@ export class JobManager {
     return this.transition(id, "failed", now, { error: stored })
   }
 
+  /**
+   * Fails the job only if `guard` accepts its fresh record (read under the
+   * job's lock) and it is not terminal; `undefined` otherwise. The caller that
+   * gets a record back is the one that ended the job, and so the one that
+   * reports it.
+   */
+  async markFailedIf(
+    id: string,
+    error: string,
+    guard: (current: JobRecord) => boolean,
+    now = new Date().toISOString(),
+  ): Promise<JobRecord | undefined> {
+    return this.transitionIf(id, "failed", now, { error: this.redactError(error) }, guard)
+  }
+
   async markTimedOut(id: string, now = new Date().toISOString()): Promise<JobRecord> {
     return this.transition(id, "timed_out", now, { error: "Job timed out" })
   }
@@ -258,8 +312,28 @@ export class JobManager {
     return this.transition(id, "blocked", now, { depends_on, remoteDependencies, blockedAt: now })
   }
 
+  /** `applyRemoteReport`, returning only the jobs it unblocked (callers that report nothing). */
   async recordRemoteReport(report: RemoteDependencyReport, now = new Date().toISOString()): Promise<JobRecord[]> {
-    const unblocked: JobRecord[] = []
+    return [...(await this.applyRemoteReport(report, now)).unblocked]
+  }
+
+  /**
+   * Records a remote dependency's report on every `blocked` job waiting for
+   * it, then unblocks or fails each one whose dependencies are now settled.
+   * Every write is guarded under the job's lock (the job must still be
+   * `blocked`): a job another path ended meanwhile is skipped, which is not
+   * an error and throws nothing. Returns the jobs THIS call unblocked (launch
+   * them) and failed (report them).
+   *
+   * A real error (the store failing to read or write) is NOT swallowed: the
+   * other dependents are still settled, then `RemoteReportApplyError` is
+   * thrown carrying what was done, so the caller can launch and report that
+   * much and still answer with an error (`/report` answers 500 and the sender
+   * retries; a retry skips what is already settled).
+   */
+  async applyRemoteReport(report: RemoteDependencyReport, now = new Date().toISOString()): Promise<DependentsOutcome> {
+    const outcome: { unblocked: JobRecord[]; failed: JobRecord[] } = { unblocked: [], failed: [] }
+    let failure: unknown
     for (const job of await this.store.list()) {
       if (job.status !== "blocked") continue
       const remoteDependencies = job.remoteDependencies ?? []
@@ -268,33 +342,74 @@ export class JobManager {
       )
       if (!matches) continue
 
-      const updatedDependencies = remoteDependencies.map((dependency) => {
-        if (dependency.agent_id !== report.source_agent_id || dependency.job_id !== report.job_id || dependency.status) return dependency
-        return { ...dependency, status: report.status, reportedAt: now }
-      })
-      const updated = await this.transition(job.id, "blocked", now, { remoteDependencies: updatedDependencies })
-      const outcome = await this.dependencyOutcome(updated, now)
-      if (outcome.kind === "failed") await this.markFailed(updated.id, outcome.error, now)
-      if (outcome.kind === "ready") unblocked.push(await this.transition(updated.id, "accepted", now))
+      try {
+        const updatedDependencies = remoteDependencies.map((dependency) => {
+          if (dependency.agent_id !== report.source_agent_id || dependency.job_id !== report.job_id || dependency.status) return dependency
+          return { ...dependency, status: report.status, reportedAt: now }
+        })
+        const updated = await this.transitionIf(job.id, "blocked", now, { remoteDependencies: updatedDependencies }, stillBlocked)
+        if (updated === undefined) continue
+        await this.settleDependent(updated, now, outcome)
+      } catch (error) {
+        // Not a skip (a skip throws nothing): remember it, settle the others, then raise it.
+        failure ??= error
+      }
     }
-    return unblocked
+    if (failure !== undefined) throw new RemoteReportApplyError(failure, outcome)
+    return outcome
   }
 
+  /** `resolveDependents`, returning only the jobs it unblocked (callers that report nothing). */
   async unblockDependents(completedJobId: string, now = new Date().toISOString()): Promise<JobRecord[]> {
-    const allJobs = await this.store.list()
-    const unblocked: JobRecord[] = []
+    return [...(await this.resolveDependents(completedJobId, now)).unblocked]
+  }
 
-    const dependents = allJobs.filter(
-      (j) => j.status === "blocked" && j.depends_on?.includes(completedJobId),
-    )
-
-    for (const job of dependents) {
-      const outcome = await this.dependencyOutcome(job, now)
-      if (outcome.kind === "failed") await this.markFailed(job.id, outcome.error, now)
-      if (outcome.kind === "ready") unblocked.push(await this.transition(job.id, "accepted", now))
+  /**
+   * Settles the local dependents of a job that just ended: each `blocked`
+   * job waiting on it is moved to `accepted` when all its dependencies
+   * completed, or failed when one of them failed (and its own dependents in
+   * turn). Every write is guarded under the job's lock (the job must still be
+   * `blocked`), so a dependent another path ended meanwhile (a cancel, the
+   * sweep, another dependency's resolution) is skipped, not an error, and one
+   * dependent never stops the others. Returns the jobs THIS call unblocked
+   * (launch them) and failed (report them): whoever writes a job's end
+   * reports it.
+   */
+  async resolveDependents(endedJobId: string, now = new Date().toISOString()): Promise<DependentsOutcome> {
+    const outcome: { unblocked: JobRecord[]; failed: JobRecord[] } = { unblocked: [], failed: [] }
+    let jobs: JobRecord[]
+    try {
+      jobs = await this.store.list()
+    } catch {
+      return outcome
     }
+    for (const job of jobs) {
+      if (job.status !== "blocked" || !(job.depends_on ?? []).includes(endedJobId)) continue
+      try {
+        await this.settleDependent(job, now, outcome)
+      } catch {
+        /* one dependent's failure never stops the others */
+      }
+    }
+    return outcome
+  }
 
-    return unblocked
+  /** Unblocks or fails one dependent if its dependencies are settled; guarded, see `resolveDependents`. */
+  private async settleDependent(job: JobRecord, now: string, outcome: { unblocked: JobRecord[]; failed: JobRecord[] }): Promise<void> {
+    const decision = await this.dependencyOutcome(job, now)
+    if (decision.kind === "ready") {
+      const accepted = await this.transitionIf(job.id, "accepted", now, {}, stillBlocked)
+      if (accepted !== undefined) outcome.unblocked.push(accepted)
+      return
+    }
+    if (decision.kind !== "failed") return
+    const failed = await this.transitionIf(job.id, "failed", now, { error: this.redactError(decision.error) }, stillBlocked)
+    if (failed === undefined) return
+    outcome.failed.push(failed)
+    // A failed dependent fails its own dependents in turn.
+    const next = await this.resolveDependents(failed.id, now)
+    outcome.failed.push(...next.failed)
+    outcome.unblocked.push(...next.unblocked)
   }
 
   async getJob(id: string): Promise<JobRecord> {
@@ -405,6 +520,13 @@ export class JobManager {
     }
     const next: JobRecord = { ...current, ...patch, status, updatedAt: now }
     await this.store.save(next)
+    if (status !== current.status) {
+      const terminal = TERMINAL_STATUSES.includes(status)
+      await appendJobEvent(this.events, next.id, {
+        type: "status",
+        data: { status, from: current.status, ...(terminal && next.error !== undefined ? { error: next.error } : {}) },
+      })
+    }
     return next
   }
 

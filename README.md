@@ -22,10 +22,6 @@ A typical setup: **Claude Code on your laptop is the orchestrator**. Through the
 
 **New in 3.2.0:** a job API and CLI (`aibr jobs`, `aibr job`, `aibr cancel`, `aibr attach`), job reconcile and orphan-process cleanup after a restart, security hardening (plan self-approval, `GET /jobs/:id`, job ids, wider secret redaction), and about 45k lines of unwired code removed. Read **Removed** and **Upgrade notes** in the [CHANGELOG](CHANGELOG.md#320---2026-11-26) before upgrading.
 
-**New in 3.1.1:** the unused TUI, Herdr, terminal and IPC layer is removed (about 54k lines, two Rust crates); `aibr tui`, `--ipc-publish` and `terminal.backend: "herdr"` were deprecated and are removed in 3.2.0 ([ADR 0014](Docs/adr/0014-claude-is-the-operator-interface.md), [CHANGELOG](CHANGELOG.md#311---2026-11-26)).
-
-**New in 3.1.0:** Claude Code as a worker runtime and as the orchestrator (plugin + MCP server), signed requests and one-code pairing (`aibr enroll`), operator approval with an audit ledger, jobs pinned to `repo@sha`, and a quickstart (`aibr init`, `aibr doctor`, `aibr ping`, `aibr send`). See the [CHANGELOG](CHANGELOG.md#310---2026-11-26), and its **Behaviour changes** before upgrading a running node.
-
 ---
 
 ## Architecture Overview
@@ -91,18 +87,6 @@ For OpenCode workers that need a hardened, durable admission tier, `bridge.ingre
              │            Local OpenCode Instance              │
              └─────────────────────────────────────────────────┘
 ```
-
-### Not yet wired
-
-Roughly 11,000 of the 50,000 lines in `src/` cannot be reached from the `aibr` and bridge entry points; `bun run docs:reachability` measures it. Almost all of it is code kept for the roadmap with deadlines (the rest is under 100 lines: `src/mesh/identity/memory-key-store.ts` and the `src/diagnostics/index.ts` barrel) ([ADR 0016](Docs/adr/0016-keep-selected-unwired-code-with-deadlines.md)). The rest of the unwired code was removed in 3.2.0: rules, budgets, workflows, simulation, routing, registry, sdk, upgrade, the dead part of the mesh (leases, gateway, inbox, outbox transport) and the orchestration kernel (coordinator, scheduler, projections, charter and roundtable runtime, the `/orchestration/*` routes). What remains of `src/mesh` is node identity and request signing, the wire ids and replay window, and the delivery backoff policy; what remains of `src/orchestration` outside the event store is the schemas, identifiers and digests the runtime, pairing and request signing use.
-
-| Path | Serves | Wire by | Delete by |
-|---|---|---|---|
-| `src/memory` | Handoff summaries, project memory | 3.3.0 | 3.4.0 |
-| `src/orchestration/event-store` | Durable job event log | 3.3.0 | 3.4.0 |
-| `src/runtime/codex-adapter.ts`, `src/runtime/discovery.ts` | Codex runtime | 3.3.0 | 3.4.0 |
-| `src/context` | Context snapshot attached to a job | 3.4.0 | 3.5.0 |
-| `src/notifications` | Discord and Telegram notifications | 3.5.0 | 3.6.0 |
 
 ### Core Design Invariants
 

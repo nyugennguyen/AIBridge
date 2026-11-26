@@ -1,17 +1,17 @@
 import { existsSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { runMigrations } from "../../../../src/orchestration/event-store/migrations.js"
-import { createSqliteDriver, type SqliteDriver } from "../../../../src/orchestration/event-store/sqlite-driver.js"
+import { runMigrations } from "../../../src/orchestration/event-store/migrations.js"
+import { createSqliteDriver, type SqliteDriver } from "../../../src/orchestration/event-store/sqlite-driver.js"
 
 /**
- * Durable-database helpers for the outbox tests.
+ * Durable-database helpers (moved here from the mesh outbox tests when the mesh
+ * outbox was removed in 3.2.0, D4; the roundtable write-back test still uses them).
  *
- * Every database here is a real SQLite file, never `:memory:`. The outbox's
- * durability IS the claim under test — "a record entered the outbox before
- * transmission", "a stranded claim is reclaimed after a restart" — and an
- * in-memory database cannot survive the process that made the claim, so it would
- * silently agree with any assertion.
+ * Every database here is a real SQLite file, never `:memory:`. Durability IS the
+ * claim under test — "a record survives a restart" — and an in-memory database
+ * cannot survive the process that made the claim, so it would silently agree
+ * with any assertion.
  *
  * `:memory:` is used only where the test genuinely does not need the file to
  * outlive a restart, and those tests say so.
@@ -28,14 +28,8 @@ export interface Database {
 let counter = 0
 
 /**
- * A migrated kernel database at a FRESH path.
- *
- * The kernel's own migrations, not a mesh-specific schema: the outbox rows live
- * in the kernel's `outbox_records` table, because the dispatch coordinator's
- * effect records and a worker's `mesh.event` records are the same kind of thing
- * — a payload that must be transmitted and stays until it is acknowledged — and
- * a second table would be a second answer to "what is an unacknowledged
- * delivery".
+ * A migrated kernel database at a FRESH path, built with the kernel's own
+ * migrations.
  */
 export function durable(label: string): Database {
   const path = join(tmpdir(), `aibridge-${label}-${process.pid}-${(counter += 1)}.db`)

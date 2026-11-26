@@ -11,6 +11,7 @@ import {
   UnavailableNodeTrustStore,
   parseTrustedNode,
   revokeNode,
+  verifyKeyNotRevoked,
   verifyNodeTrust,
   type NodeRevocation,
   type NodeTrustStore,
@@ -18,12 +19,10 @@ import {
   type TrustedNode,
 } from "../../../../src/mesh/identity/node-trust.js"
 import { InMemoryPeerKeyPinStore, resolvePinnedKey } from "../../../../src/mesh/identity/peer-key-pins.js"
-import { InMemoryEnrollmentCodeStore, issueEnrollmentCode } from "../../../../src/mesh/identity/enrollment-code.js"
-import { decideEnrollment } from "../../../../src/mesh/identity/enrollment.js"
 import { InMemoryNonceGuard } from "../../../../src/mesh/identity/replay-guard.js"
 import { MeshIdentityProvider } from "../../../../src/mesh/identity/identity-provider.js"
 import { NodeKeyPair, publicNodeKeyOf } from "../../../../src/mesh/identity/node-key.js"
-import { MESH_ID, OTHER_MESH_ID, PROVISIONAL_ID, WORKER_ID, at, iso } from "./fixtures.js"
+import { MESH_ID, OTHER_MESH_ID, WORKER_ID, at } from "./fixtures.js"
 
 async function anEnrolledNode(now = at(0)) {
   const trust = new InMemoryNodeTrustStore()
@@ -211,81 +210,21 @@ describe("revocation at the authentication seam", () => {
     }
   })
 
-  it("blocks re-enrollment with the REVOKED KEY, not merely with the revoked node id", async () => {
+  it("refuses the REVOKED KEY under any node id, and clears a FRESH key", async () => {
     const { trust, pins, keyPair, nodeId } = await anEnrolledNode()
     await revokeNode({ nodeId, meshId: MESH_ID, reason: "stolen", by: "user-1", at: at(600) }, { trust, pins })
 
-    // The attack this closes, and the reason revocation is indexed by key as well as
-    // by node. A `nodeId` is DERIVED from an enrollment code, so a revoked machine
-    // that presents a FRESH code is given a DIFFERENT node id — and would otherwise be
-    // re-pinned while holding the very key the operator revoked in order to remove it.
-    // Revoking the node id alone reduces "revoke this machine" to "revoke one of its
-    // names", which a compromised machine re-acquires with a single new code.
-    const codes = new InMemoryEnrollmentCodeStore()
-    const fresh = await issueEnrollmentCode({ meshId: MESH_ID, issuedBy: "user-1", now: at(700) }, codes)
-    if (!fresh.ok) throw new Error(fresh.error.message)
+    // Revocation is indexed by key as well as by node. A node id is derived from
+    // an enrollment code, so a revoked machine presenting a fresh code would get a
+    // different node id; the key index is what keeps the revoked key out. (The
+    // mesh enrollment flow that called this was removed in 3.2.0, D4.)
+    const revoked = await verifyKeyNotRevoked(trust, keyPair.keyId)
+    expect(revoked.ok).toBe(false)
+    if (!revoked.ok) expect(revoked.error.code).toBe("identity.key_revoked")
 
-    const decided = await decideEnrollment(
-      {
-        request: {
-          meshId: MESH_ID,
-          enrollmentId: fresh.value.enrollmentId,
-          enrollmentCodeHash: fresh.value.codeHash,
-          nodePublicKey: keyPair.publicKey,
-          nodeDisplayName: "worker",
-          provisionalNodeId: PROVISIONAL_ID,
-          requestedAt: iso(at(700)),
-          codeExpiresAt: iso(fresh.value.expiresAt),
-        },
-        now: at(700),
-      },
-      { codes, pins, trust },
-    )
-
-    expect(decided.outcome).toBe("rejected")
-    // The key is not trusted anywhere, under any id.
-    const anyPin = await pins.current(nodeIdSchema.parse(decided.nodeId))
-    expect(anyPin).toEqual({ ok: true, value: null })
-
-    // And the code was NOT burned: the check runs before the redemption, because the
-    // code is the operator's to re-issue for a node that brings a FRESH key. A check
-    // placed after the redemption would cost the operator their code to learn that
-    // the submission was never going to be accepted.
-    expect(codes.find(fresh.value.codeHash)?.redeemedNodeId).toBeUndefined()
-  })
-
-  it("lets a node return with a FRESH key after a revocation, because revocation is of the credential", async () => {
-    const { trust, pins, nodeId } = await anEnrolledNode()
-    await revokeNode({ nodeId, meshId: MESH_ID, reason: "decommissioned", by: "user-1", at: at(600) }, { trust, pins })
-
-    // The other half of the guarantee. If revocation also refused every future
-    // enrollment, the remedy for a decommissioned machine would be to rename it, which
-    // is exactly what "individually revocable" is meant to avoid — and an operator
-    // restoring a host from backup would be permanently locked out.
-    const codes = new InMemoryEnrollmentCodeStore()
-    const issued = await issueEnrollmentCode({ meshId: MESH_ID, issuedBy: "user-1", now: at(700) }, codes)
-    if (!issued.ok) throw new Error(issued.error.message)
+    // The other half: revocation is of the credential, so a fresh key is clear.
     const replacement = NodeKeyPair.generate()
-
-    const decided = await decideEnrollment(
-      {
-        request: {
-          meshId: MESH_ID,
-          enrollmentId: issued.value.enrollmentId,
-          enrollmentCodeHash: issued.value.codeHash,
-          nodePublicKey: replacement.publicKey,
-          nodeDisplayName: "worker",
-          provisionalNodeId: PROVISIONAL_ID,
-          requestedAt: iso(at(700)),
-          codeExpiresAt: iso(issued.value.expiresAt),
-        },
-        now: at(700),
-      },
-      { codes, pins, trust },
-    )
-
-    expect(decided.outcome).toBe("accepted")
-    expect(decided.nodeId).not.toBe(nodeId)
+    expect(await verifyKeyNotRevoked(trust, replacement.keyId)).toEqual({ ok: true, value: true })
   })
 
   it("refuses a second trust record for a revoked node id", async () => {

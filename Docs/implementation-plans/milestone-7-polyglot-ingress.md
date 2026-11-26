@@ -136,7 +136,7 @@ Two **do not** move and stay on the Bun process:
 | `GET` | `/v1/mesh/events` | Long-lived SSE with snapshot re-base and cursor resume. The resume cursor is per-connection state with no durable analogue here. |
 
 Neither is currently registered by `createApp()` — both are exercised only by test
-harnesses ([`tests/integration/mesh-fixtures.ts:360`](../../tests/integration/mesh-fixtures.ts)),
+harnesses (`tests/integration/mesh-fixtures.ts:360`, removed in 3.2.0),
 so this costs nothing today. M7.13 asserts the router answers `404` for both.
 
 ## Durability Requirements

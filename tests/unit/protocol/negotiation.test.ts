@@ -8,8 +8,6 @@ import {
   supportedProtocolVersions,
   validateOfferedVersions,
 } from "../../../src/mesh/protocol/negotiation.js"
-import { safeParseMeshEnvelope } from "../../../src/mesh/protocol/registry.js"
-import { heartbeatPayload, rawEnvelope, sampleEnvelope, WORKER_ID } from "./fixtures.js"
 
 /**
  * §5 of the spec, and scenario 5 of the diagrams.
@@ -25,6 +23,10 @@ import { heartbeatPayload, rawEnvelope, sampleEnvelope, WORKER_ID } from "./fixt
  * So the assertions below are mostly NEGATIVE: the interesting behaviour is the
  * refusal, and its `retryable: false`, because a node that keeps retrying a
  * version it will never understand is a resource-exhaustion vector on the peer.
+ *
+ * Since 3.2.0 (D4) the record families and their registry are gone; the only
+ * consumer of `negotiation.ts` left is the unwired kernel coordinator, and both
+ * are removed in D5. The cases that parsed a heartbeat envelope went with D4.
  */
 
 describe("selectProtocolVersion", () => {
@@ -96,8 +98,6 @@ describe("this build's protocol version", () => {
     // (the database version). Collapsing any two of them turns a routine change
     // into a mesh-wide incompatibility.
     expect(CURRENT_MESH_PROTOCOL_VERSION).toBe(1)
-    const envelope = sampleEnvelope("mesh.heartbeat", { protocolVersion: CURRENT_MESH_PROTOCOL_VERSION })
-    expect(safeParseMeshEnvelope(envelope).ok).toBe(true)
   })
 })
 
@@ -126,32 +126,5 @@ describe("validateOfferedVersions", () => {
     for (const bad of [[1.5], [-1], ["1"], [null], [Number.MAX_SAFE_INTEGER + 2]]) {
       expect(validateOfferedVersions(bad as readonly unknown[]).ok, JSON.stringify(bad)).toBe(false)
     }
-  })
-})
-
-describe("a version-skewed peer cannot reach the wire", () => {
-  it("refuses a heartbeat whose advertised versions have nothing in common with this build", () => {
-    // The scenario-5 transcript: node X offers v3, node Y speaks v2, and Y does
-    // NOT read the payload with the v2 shape just because the envelope parsed.
-    const alien = sampleEnvelope("mesh.heartbeat", heartbeatPayload({ protocolVersions: [3] }))
-    const negotiated = negotiationMismatch([3], supportedProtocolVersions())
-    expect(negotiated.ok).toBe(false)
-    expect(negotiated.ok === false && negotiated.error.retryable).toBe(false)
-    // The record itself is still WELL FORMED — a v3-shaped heartbeat that happens
-    // to declare v3 versions would parse — which is exactly why negotiation is a
-    // separate step and not a schema refinement: refusing it here would make the
-    // refusal say "malformed" and send an operator to the wrong side.
-    expect(safeParseMeshEnvelope(alien).ok).toBe(true)
-  })
-
-  it("accepts the same heartbeat once the versions overlap", () => {
-    // The payload is what carries the version offer; the envelope override above
-    // is the wire's own `protocolVersion`, which is a different axis.
-    const compatible = rawEnvelope("mesh.heartbeat", heartbeatPayload({ protocolVersions: [1, 2] }), {
-      senderNodeId: WORKER_ID,
-      recipientNodeId: null,
-    })
-    expect(negotiationMismatch([1, 2], supportedProtocolVersions()).ok).toBe(true)
-    expect(safeParseMeshEnvelope(compatible).ok).toBe(true)
   })
 })

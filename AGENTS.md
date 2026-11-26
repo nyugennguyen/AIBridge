@@ -51,7 +51,11 @@ src/
                        result sanitizer
   opencode/          - OpenCode SDK client, session monitor, tool permission policy
   security/          - Bearer auth, source authorization, project allowlists, operator token
-  mesh/identity/     - ed25519 node keys, peer key pins, request signing, replay guard
+  mesh/              - What is left of the mesh after 3.2.0 D4: `identity/` (ed25519 node keys,
+                       peer key pins, request signing, replay guard), `protocol/{envelope,
+                       bounds,identifiers}` (wire ids, replay window), `outbox/policy.ts`
+                       (delivery backoff shared by the egress outbox, the ingress drainer and
+                       the Rust router)
   pairing/           - `aibr enroll` pairing codes and peer store
   mcp/               - `aibr mcp` MCP server (`bridge_*` tools); the Claude Code plugin in
                        `plugins/aibridge` uses it
@@ -83,13 +87,13 @@ Code that is built and tested but not reachable from the entry points. Decisions
 | `src/context` | V3 context snapshot | 3.4.0 | 3.5.0 |
 | `src/notifications` | V5 Discord and Telegram | 3.5.0 | 3.6.0 |
 
-Scheduled for removal in 3.2.0 (blocks D1 to D5, ADR 0016): the orchestration kernel (coordinator, scheduler, charter and roundtable runtime, `routes/orchestration.ts`), and the dead part of `src/mesh` (leases, gateway, outbox transport, fault harness). (`src/rules` was removed in D2; `src/budgets`, `src/workflows`, `src/simulation`, `src/routing`, `src/registry`, `src/sdk` and `src/upgrade` were removed in D1.) Until those PRs merge they are still in the tree, and the "Key Patterns" below about kernel authority, the immutable core, and roundtables describe that unwired code, not the running system.
+Scheduled for removal in 3.2.0 (block D5, ADR 0016): the orchestration kernel (coordinator, scheduler, charter and roundtable runtime, `routes/orchestration.ts`), together with `src/mesh/protocol/negotiation.ts`, which only the kernel coordinator still imports. (The dead part of `src/mesh` (leases, inbox, registry, gateway, outbox transport, record families, fault harness) was removed in D4; `src/rules` in D2; `src/budgets`, `src/workflows`, `src/simulation`, `src/routing`, `src/registry`, `src/sdk` and `src/upgrade` in D1. The design stays in the `archive/kernel-mesh-3.1.1` tag.) Until D5 merges the kernel is still in the tree, and the "Key Patterns" below about kernel authority, the immutable core, and roundtables describe that unwired code, not the running system.
 
 ## Key Patterns
 
 - **ESM only**: `"type": "module"`. All local imports MUST use `.js` extension: `import { foo } from "./bar.js"`.
 - **Zod-first config**: Types are inferred from Zod schemas in `config/schemas.ts`, not hand-written. `config/types.ts` re-exports `z.infer<>` types.
-- **Kernel as Single Source of Truth**: All orchestration lifecycle changes are committed to the append-only event store (`SqliteEventStore`). External tools consume read-only projections from the total-order SSE gateway.
+- **Kernel as Single Source of Truth**: All orchestration lifecycle changes are committed to the append-only event store (`SqliteEventStore`).
 - **The Immutable Core**: `assertCharterDoesNotRelaxCore` strictly refuses any charter proposal attempting to modify the safety floor, input fencing, security perimeter, advisory roundtable invariant, budget limits, or kernel authority.
 - **Advisory-Only Deliberation & Notifications**: Roundtable deliberations and notifications are strictly advisory. `roundtable.closed` appears in zero `COMMAND_EVENT_ALLOWLIST` entries; deliberation produces recommendations, never direct state transitions. Notifications never throw into or branch orchestration logic.
 - **Deterministic Prompt & Capability Compilation**: Prompts are deterministically compiled and digest-stamped: $\text{Charter} + \text{primaryRole} + \sum\text{secondaryRole.addenda} + \text{policy} + \text{taskPrompt}$. Capability envelopes enforce strict intersection ($\text{allowed} \cap \text{roleAllowed} \cap \neg\text{denied}$).
@@ -108,7 +112,7 @@ where the docs and the source disagree — commands the runbook documents that d
 ## Testing
 
 - **Unit tests**: `tests/unit/{module}/` — test individual modules, aggregators, policies, and algorithms in isolation.
-- **Integration tests**: `tests/integration/` — test end-to-end flows through Fastify routes via `app.inject()`, including roundtable loops and mesh relays.
+- **Integration tests**: `tests/integration/` — test end-to-end flows through Fastify routes via `app.inject()`.
 - **Contract parity tests**: `tests/contracts/` — verify schema parity between TypeScript schemas (`src/config/schemas.ts`, `src/orchestration/schemas.ts`), generated JSON Schemas (`contracts/v1/`), and Rust contracts (`router/src/contracts.rs`).
 - **Security tests**: `tests/security/` — verify token redaction pipelines, secret filtering (`canary-token-audit.test.ts`), and permission boundaries.
 - **Test helpers**: `tests/integration/fixtures.ts` has `buildTestApp()`, `testConfig()`, `validTrigger()`.

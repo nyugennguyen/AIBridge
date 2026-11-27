@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+- **`aibr start` / `aibr init` on Linux after `su` or `sudo su`.** Those logins leave `XDG_RUNTIME_DIR` unset, so `systemctl --user` failed with "Failed to connect to user scope bus" even when the user manager was running. `aibr` now points `systemctl --user` at `/run/user/<uid>` when its bus exists. When the user manager is not running at all, the error now names the cause and the fix (`sudo loginctl enable-linger <user>`) instead of passing on systemd's D-Bus message. `aibr status` also recognises the newer "user scope bus" wording as "no user bus".
+- **`aibr: command not found` right after `curl … | bash`.** The installer runs in a child shell, so the PATH it sets (and the one bun's installer writes to the shell rc) does not reach the terminal that ran it. When the caller's shell cannot find `aibr`, the installer now ends by saying so, with `source <rc>`, the `export PATH=…` line and the full path of `aibr`.
+
 ## [3.2.0] - 2026-11-26
 
 Adds a job API and job CLI (`aibr jobs`, `aibr job`, `aibr cancel`, `aibr attach`), reconciles jobs and cleans up orphaned runtime processes after a bridge restart, and hardens security: the plan self-approval fix, `GET /jobs/:id` and job id hardening, and wider secret redaction of job results. It also removes about 45k lines of unwired code (the TUI leftovers, the rules engine, the dead part of the mesh and the orchestration kernel). The wire format of `/trigger` and `/report` does not change, apart from the new job id validation. Read **Removed** and **Upgrade notes** before upgrading a running node.

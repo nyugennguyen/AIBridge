@@ -13,6 +13,9 @@ WITH_PLUGIN=-1 # -1 = decide by role, 0 = off, 1 = on
 OS=""
 ARCH="$(uname -m)"
 MISSING_SUMMARY=()
+# The caller's PATH. `curl | bash` runs this script in a child shell, so every
+# PATH change made here dies with it; this is what the caller's shell still has.
+ORIGINAL_PATH="$PATH"
 
 usage() {
   cat <<'USAGE'
@@ -290,6 +293,25 @@ ensure_aibr_on_path() {
   export PATH="$dir:$PATH"
 }
 
+# Can the shell that ran the installer find aibr once the installer exits?
+aibr_on_original_path() {
+  (PATH="$ORIGINAL_PATH"; hash -r; command -v aibr >/dev/null 2>&1)
+}
+
+# Printed last: the installer cannot change the PATH of the shell that ran it.
+print_path_reminder() {
+  if ! has_cmd aibr || aibr_on_original_path; then return 0; fi
+  local bin rc
+  bin="$(command -v aibr)"
+  rc="$(shell_rc_file)"
+  echo ""
+  echo "⚠ This terminal cannot run 'aibr' yet: the installer ran in a child shell, so its PATH change"
+  echo "  only reaches new shells. Before running any aibr command here, run one of:"
+  echo "    source $rc          # or open a new terminal"
+  echo "    export PATH=\"$(dirname "$bin"):\$PATH\""
+  echo "  or call it by its full path: $bin"
+}
+
 install_aibridge() {
   # bun install -g @nyugennguyen/aibridge
   VER="${AIBRIDGE_VERSION:-latest}"
@@ -532,6 +554,7 @@ main() {
   print_summary
   print_next_steps
   offer_setup
+  print_path_reminder
 }
 
 if [ "${AIBRIDGE_INSTALL_NO_MAIN:-}" != "1" ]; then

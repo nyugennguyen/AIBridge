@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Changed
+- **Argument errors say what to type.** A missing flag value or profile now prints the command with a placeholder for the value, e.g. `--profile needs a value: aibr status --profile <name>` instead of `--profile is required` (which `aibr status -p` printed too, as if the flag were missing). When the profile is missing, the error also lists the profiles on this machine, suggests `aibr <command> --profile <name>` when there is exactly one, and points at `aibr init` when there is none. Unknown flags and stray arguments point at `aibr <command> --help`, and an unknown command points at `aibr --help`. This covers `start`, `serve`, `worker`, `status`, `bundle`, `setup`, `verify`, `stop`, `doctor`, `logs`, `ping`, `send`, `init`, `enroll`, `approve`, `reject`, `jobs`, `job`, `cancel` and `attach`.
+
 ## [3.2.1] - 2026-11-27
 
 Fixes `aibr init` on a fresh Linux node and the pairing that follows it. No config, wire format or contract changes.

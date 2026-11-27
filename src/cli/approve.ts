@@ -13,6 +13,7 @@
  */
 import { resolveProfilePaths, validateProfileName } from "../host/paths.js"
 import { readConfig, readSecret } from "../host/profile-store.js"
+import { needsValue, unknownFlag } from "./arg-errors.js"
 
 export interface OperatorEndpoint {
   /** e.g. `http://127.0.0.1:8787` */
@@ -41,7 +42,7 @@ export interface ParsedOperatorArgs {
 }
 
 /** Parses the flags these commands share. Returns an error string for anything unknown. */
-export function parseOperatorArgs(argv: readonly string[], allowed: ReadonlySet<string>): ParsedOperatorArgs | string {
+export function parseOperatorArgs(argv: readonly string[], allowed: ReadonlySet<string>, command?: string): ParsedOperatorArgs | string {
   const positional: string[] = []
   let profile = "default"
   let yes = false
@@ -52,11 +53,11 @@ export function parseOperatorArgs(argv: readonly string[], allowed: ReadonlySet<
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index]!
     const flag = arg === "-p" ? "--profile" : arg === "-y" ? "--yes" : arg === "-h" ? "--help" : arg
-    if (flag.startsWith("-") && flag !== "--help" && !allowed.has(flag)) return `unknown flag ${arg}`
+    if (flag.startsWith("-") && flag !== "--help" && !allowed.has(flag)) return unknownFlag(arg, command)
     switch (flag) {
       case "--profile": {
         const value = argv[++index]
-        if (value === undefined || value.length === 0) return "--profile requires a name"
+        if (value === undefined || value.length === 0) return needsValue("--profile", command)
         try {
           validateProfileName(value)
         } catch {
@@ -67,7 +68,7 @@ export function parseOperatorArgs(argv: readonly string[], allowed: ReadonlySet<
       }
       case "--reason": {
         const value = argv[++index]
-        if (value === undefined || value.trim().length === 0) return "--reason requires text"
+        if (value === undefined || value.trim().length === 0) return needsValue("--reason", command)
         if (value.length > 500) return "--reason must be at most 500 characters"
         reason = value
         break
@@ -210,7 +211,7 @@ export const APPROVE_HELP = [
 
 /** `aibr approve` / `aibr reject`. */
 export async function runDecisionCommand(decision: "approve" | "reject", argv: readonly string[], deps: OperatorCliDeps): Promise<number> {
-  const parsed = parseOperatorArgs(argv, decision === "approve" ? APPROVE_FLAGS : REJECT_FLAGS)
+  const parsed = parseOperatorArgs(argv, decision === "approve" ? APPROVE_FLAGS : REJECT_FLAGS, decision)
   if (typeof parsed === "string") {
     deps.writer(`Error: ${parsed}\n`)
     return 64
@@ -281,7 +282,7 @@ export async function runJobsCommand(argv: readonly string[], deps: OperatorCliD
     deps.writer(`Error: unknown jobs subcommand "${sanitizeForTerminal(sub)}" (expected pending)\n`)
     return 64
   }
-  const parsed = parseOperatorArgs(rest, PENDING_FLAGS)
+  const parsed = parseOperatorArgs(rest, PENDING_FLAGS, "jobs pending")
   if (typeof parsed === "string") {
     deps.writer(`Error: ${parsed}\n`)
     return 64

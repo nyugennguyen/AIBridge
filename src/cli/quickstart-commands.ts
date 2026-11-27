@@ -3,8 +3,6 @@
  * `logs`, and `start`/`status` on the user service). `src/cli.ts` only routes
  * to these; tests replace them through `CliDeps`.
  */
-import { existsSync, readdirSync } from "node:fs"
-import { dirname } from "node:path"
 import type { HttpProbe, ProcessRunner, Prompter } from "../host/types.js"
 import { resolveProfilePaths, validateProfileName } from "../host/paths.js"
 import { readConfig } from "../host/profile-store.js"
@@ -19,6 +17,7 @@ import {
   type ProfileStatus,
   type ServiceCommandDeps,
 } from "./service.js"
+import { listProfileNames, needsValue, unexpectedArgument, unknownFlag } from "./arg-errors.js"
 
 export interface QuickstartHost {
   readonly writer: (text: string) => void
@@ -75,23 +74,8 @@ export async function defaultStatus(profile: string, host: QuickstartHost): Prom
 export function resolveDefaultProfile(explicit: string | undefined, env: Readonly<Record<string, string | undefined>> = process.env): string {
   if (explicit !== undefined && explicit !== "") return validateProfileName(explicit)
   if (env.AIBR_PROFILE !== undefined && env.AIBR_PROFILE !== "") return validateProfileName(env.AIBR_PROFILE)
-  try {
-    const root = dirname(resolveProfilePaths("default", { ...env }).configDir)
-    const names = readdirSync(root, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => entry.name)
-      .filter((name) => {
-        try {
-          validateProfileName(name)
-        } catch {
-          return false
-        }
-        return existsSync(`${root}/${name}/config.json`)
-      })
-    if (names.length === 1) return names[0]!
-  } catch {
-    // no config root yet
-  }
+  const names = listProfileNames(env)
+  if (names.length === 1) return names[0]!
   return "default"
 }
 
@@ -182,7 +166,7 @@ export async function defaultDoctor(argv: readonly string[], host: QuickstartHos
     if (arg === "--profile" || arg === "-p") {
       profileArg = argv[++i]
       if (profileArg === undefined || profileArg === "") {
-        host.writer("Error: --profile needs a value\n")
+        host.writer(`Error: ${needsValue("--profile", "doctor")}\n`)
         return 64
       }
     } else if (arg === "--no-ping") ping = false
@@ -191,7 +175,7 @@ export async function defaultDoctor(argv: readonly string[], host: QuickstartHos
       host.writer(DOCTOR_HELP)
       return 0
     } else {
-      host.writer(`Error: unexpected argument ${arg}\n`)
+      host.writer(`Error: ${arg.startsWith("-") ? unknownFlag(arg, "doctor") : unexpectedArgument(arg, "doctor")}\n`)
       return 64
     }
   }

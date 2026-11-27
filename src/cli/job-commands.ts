@@ -24,6 +24,7 @@ import { join } from "node:path"
 import { BridgeTools, defaultBridgeToolDeps, type BridgeToolDeps, type LoadedProfile } from "../mcp/bridge-tools.js"
 import { prepareSignedRequest } from "../mcp/signed-http.js"
 import { confirmOnTerminal, describeJob, loadOperatorEndpoint, operatorRequest, realOperatorDeps, sanitizeForTerminal } from "./approve.js"
+import { needsValue, unknownFlag } from "./arg-errors.js"
 
 export type JobCommandName = "jobs" | "job" | "cancel" | "attach"
 
@@ -213,12 +214,12 @@ function parseJobArgs(command: JobCommandName, argv: readonly string[]): JobArgs
       bools.add("--help")
     } else if (VALUE_FLAGS[command].has(name)) {
       const value = eq > 0 ? raw.slice(eq + 1) : argv[++index]
-      if (value === undefined || value === "") return `${name} needs a value`
+      if (value === undefined || value === "") return needsValue(name, command)
       values.set(name, value)
     } else if (BOOL_FLAGS[command].has(name) && eq < 0) {
       bools.add(name)
     } else if (raw.startsWith("-") && raw !== "-") {
-      return `unknown flag ${sanitizeForTerminal(raw)}`
+      return unknownFlag(sanitizeForTerminal(raw), command)
     } else {
       positional.push(raw)
     }
@@ -227,7 +228,7 @@ function parseJobArgs(command: JobCommandName, argv: readonly string[]): JobArgs
   const rawLimit = values.get("--limit")
   if (rawLimit !== undefined) {
     limit = Number(rawLimit)
-    if (!/^\d+$/.test(rawLimit) || limit < 1 || limit > MAX_LIST_LIMIT) return `--limit needs a whole number from 1 to ${MAX_LIST_LIMIT}`
+    if (!/^\d+$/.test(rawLimit) || limit < 1 || limit > MAX_LIST_LIMIT) return `--limit needs a whole number from 1 to ${MAX_LIST_LIMIT}: aibr ${command} --limit <count>`
   }
   const profile = values.get("--profile")
   if (profile !== undefined && !/^[A-Za-z0-9][A-Za-z0-9-]{0,63}$/.test(profile)) {

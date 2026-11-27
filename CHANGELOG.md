@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+## [3.2.1] - 2026-11-27
+
+Fixes `aibr init` on a fresh Linux node and the pairing that follows it. No config, wire format or contract changes.
+
 ### Fixed
 - **`aibr start` / `aibr init` on Linux after `su` or `sudo su`.** Those logins leave `XDG_RUNTIME_DIR` unset, so `systemctl --user` failed with "Failed to connect to user scope bus" even when the user manager was running. `aibr` now points `systemctl --user` at `/run/user/<uid>` when its bus exists. When the user manager is not running at all, the error now names the cause and the fix (`sudo loginctl enable-linger <user>`) instead of passing on systemd's D-Bus message. `aibr status` also recognises the newer "user scope bus" wording as "no user bus".
 - **Another bridge on the same address passed as this profile's.** When a second profile, or another user on the same machine, already listened on the profile's `bridge.host:bridge.port`, this profile's bridge could not start, but `aibr start` and `aibr status` took the other bridge's `/health` answer as their own. Pairing codes printed by `aibr init` then reached the wrong worker, which refused them as "Unknown pairing code". `aibr start`, `aibr status` and `aibr doctor` now compare the `agent_id` in `/health` with the profile's own and name the bridge holding the address. A refused `/enroll` now returns the worker's key id, so `aibr enroll join` reports "not the one that printed this code" instead of "Unknown pairing code".

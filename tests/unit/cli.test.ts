@@ -34,6 +34,7 @@ function fakeDeps(overrides?: {
   opencodeRunner?: CliDeps["runOpencode"]
   processRunner?: CliDeps["processRunner"]
   version?: string
+  profiles?: readonly string[]
 }): {
   deps: CliDeps
   writer: FakeWriter
@@ -42,6 +43,8 @@ function fakeDeps(overrides?: {
   return {
     deps: {
       writer: (s: string) => writer.write(s),
+      // Never the real config root: the hint lists whatever this machine has.
+      listProfiles: () => overrides?.profiles ?? [],
       isTTY: overrides?.isTTY ?? true,
       isInputTTY: overrides?.isInputTTY ?? true,
       runSetup: overrides?.setupRunner ?? (async () => ({
@@ -333,7 +336,7 @@ describe("cli setup", () => {
   })
 
   it("rejects --config without a path, and --config/--advanced on other commands", async () => {
-    expect((await captureRun(["setup", "--config"])).output).toContain("--config requires a path")
+    expect((await captureRun(["setup", "--config"])).output).toContain("--config needs a value: aibr setup --config <path>")
     const start = await captureRun(["start", "--profile", "p", "--advanced"])
     expect(start.exitCode).toBe(1)
     expect(start.output).toContain("--advanced is only supported by setup")
@@ -880,5 +883,38 @@ describe("cli --profile without value", () => {
 
     expect(exitCode).not.toBe(0)
     expect(output).not.toContain("undefined")
+  })
+})
+
+// ── Argument errors name what to type ───────────────────────────────────
+
+describe("cli argument errors", () => {
+  it("status with no profile shows the usage and the profiles on this machine", async () => {
+    const { exitCode, output } = await captureRun(["status"], { profiles: ["default"] })
+    expect(exitCode).toBe(1)
+    expect(output).toContain("Error: aibr status needs a profile: aibr status --profile <name>")
+    expect(output).toContain("Profiles on this machine: default")
+    expect(output).toContain("Try: aibr status --profile default")
+  })
+
+  it("-p and --profile with no value say the value is missing, not the flag", async () => {
+    for (const flag of ["-p", "--profile"]) {
+      const { exitCode, output } = await captureRun(["status", flag], { profiles: ["default", "staging"] })
+      expect(exitCode).toBe(1)
+      expect(output).toContain(`Error: --profile needs a value: aibr status --profile <name>`)
+      expect(output).toContain("Profiles on this machine: default, staging")
+      expect(output).not.toContain("Try:")
+    }
+  })
+
+  it("points at aibr init when there is no profile yet", async () => {
+    const { output } = await captureRun(["start"], { profiles: [] })
+    expect(output).toContain("aibr start needs a profile: aibr start --profile <name>")
+    expect(output).toContain("No profile on this machine yet. Create one with: aibr init")
+  })
+
+  it("an unknown flag points at the command's help, an unknown command at the command list", async () => {
+    expect((await captureRun(["status", "--bogus"])).output).toContain("unknown flag --bogus (see: aibr status --help)")
+    expect((await captureRun(["statsu"])).output).toContain('unknown command "statsu" (see: aibr --help for the list of commands)')
   })
 })

@@ -94,9 +94,11 @@ describe("parseFlags", () => {
   })
 
   it("rejects unknown flags and missing values", () => {
-    expect(parseFlags(["--bogus"])).toBe("unknown flag --bogus")
-    expect(parseFlags(["--capability"])).toBe("--capability needs a value")
-    expect(parseFlags(["--project="])).toBe("--project needs a value")
+    expect(parseFlags(["--bogus"])).toBe("unknown flag --bogus (see: aibr --help)")
+    expect(parseFlags(["--bogus"], "send")).toBe("unknown flag --bogus (see: aibr send --help)")
+    expect(parseFlags(["--capability"], "send")).toBe("--capability needs a value: aibr send --capability <capability>")
+    expect(parseFlags(["--project="], "send")).toBe("--project needs a value: aibr send --project <project>")
+    expect(parseFlags(["-p"], "ping")).toBe("-p needs a value: aibr ping -p <name>")
   })
 
   it("maps -h to --help", () => {

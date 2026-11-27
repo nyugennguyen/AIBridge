@@ -236,7 +236,8 @@ describe("aibr stop", () => {
 
 describe("helpers", () => {
   it("parses flags and refuses unknown ones", () => {
-    expect(parseOperatorArgs(["job", "--bogus"], new Set(["--profile"]))).toBe("unknown flag --bogus")
+    expect(parseOperatorArgs(["job", "--bogus"], new Set(["--profile"]), "approve")).toBe("unknown flag --bogus (see: aibr approve --help)")
+    expect(parseOperatorArgs(["--profile"], new Set(["--profile"]), "approve")).toBe("--profile needs a value: aibr approve --profile <name>")
     expect(parseOperatorArgs(["--profile", "../x"], new Set(["--profile"]))).toMatch(/Invalid profile/)
     expect(parseOperatorArgs(["j", "-p", "dev"], new Set(["--profile"]))).toMatchObject({ positional: ["j"], profile: "dev" })
   })

@@ -29,6 +29,7 @@ import {
   scrubCredentialShapedAgentId,
 } from "./cli/discovery-safety.js"
 import { CLI_VERSION } from "./version.js"
+import { listProfileNames, needsValue, profileMissing, unknownFlag } from "./cli/arg-errors.js"
 import { findInPath } from "./host/binaries.js"
 
 export { CLI_VERSION }
@@ -73,6 +74,8 @@ export interface CliDeps {
   readonly runPing?: (args: readonly string[]) => Promise<number>
   readonly runSend?: (args: readonly string[]) => Promise<number>
   readonly runLogs?: (args: readonly string[]) => Promise<number>
+  /** The profiles on this machine, named in "needs a profile" errors. Default: read the config root. */
+  readonly listProfiles?: () => readonly string[]
   /** `aibr start` without --foreground: install and load the user service. Returns the exit code. */
   readonly startService?: (profile: string) => Promise<number>
   /** Write a string to stdout (or a fake writer in tests). */
@@ -516,9 +519,9 @@ export function printCliBanner(writer?: (s: string) => void, hasColor = true): v
  * Returns `null` on success, or a user-facing error string on failure.
  * Error strings NEVER echo the raw input (prevents leaking traversal chars).
  */
-function validateProfileArg(value: string | null): string | null {
+function validateProfileArg(value: string | null, command: string, deps: Pick<CliDeps, "listProfiles">): string | null {
   if (value === null || value.length === 0) {
-    return "--profile is required"
+    return profileMissing(command, value !== null, (deps.listProfiles ?? listProfileNames)())
   }
 
   try {
@@ -816,7 +819,7 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<Cl
 
   // ── Unknown flags ──────────────────────────────────────────────────
   if (args.unknownFlags.length > 0) {
-    deps.writer(`Error: unknown flag ${args.unknownFlags[0]}\n`)
+    deps.writer(`Error: ${unknownFlag(args.unknownFlags[0]!, args.command !== null && (ALL_COMMANDS as readonly string[]).includes(args.command) ? args.command : undefined)}\n`)
     return 1
   }
 
@@ -828,7 +831,7 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<Cl
 
   // ── Unknown command ────────────────────────────────────────────────
   if (!(ALL_COMMANDS as readonly string[]).includes(args.command)) {
-    deps.writer(`Error: unknown command "${args.command}"\n`)
+    deps.writer(`Error: unknown command "${args.command}" (see: ${PROG} --help for the list of commands)\n`)
     return 1
   }
 
@@ -856,14 +859,14 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<Cl
       return 1
     }
     if (args.profile !== null) {
-      const profileErr = validateProfileArg(args.profile)
+      const profileErr = validateProfileArg(args.profile, command, deps)
       if (profileErr !== null) {
         deps.writer(`Error: ${profileErr}\n`)
         return 1
       }
     }
     if (args.configPath === "") {
-      deps.writer("Error: --config requires a path\n")
+      deps.writer(`Error: ${needsValue("--config", "setup")}\n`)
       return 1
     }
     printCliBanner(deps.writer)
@@ -921,7 +924,7 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<Cl
   if (command === "verify") {
     let profile = "default"
     if (args.profile !== null) {
-      const err = validateProfileArg(args.profile)
+      const err = validateProfileArg(args.profile, command, deps)
       if (err !== null) {
         deps.writer(`Error: ${err}\n`)
         return 1
@@ -981,7 +984,7 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<Cl
     // silent downgrade to "no profile".
     let profile: string | undefined
     if (args.profile !== null) {
-      const profileErr = validateProfileArg(args.profile)
+      const profileErr = validateProfileArg(args.profile, command, deps)
       if (profileErr !== null) {
         if (json) {
           deps.writer(JSON.stringify(discoveryErrorDocument(profileErr)) + "\n")
@@ -1023,7 +1026,7 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<Cl
   }
 
   // ── Commands that require --profile ────────────────────────────────
-  const profileErr = validateProfileArg(args.profile)
+  const profileErr = validateProfileArg(args.profile, command, deps)
   if (profileErr !== null) {
     deps.writer(`Error: ${profileErr}\n`)
     return 1

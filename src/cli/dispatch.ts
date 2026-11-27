@@ -16,6 +16,7 @@ import {
   type PingOutcome,
 } from "../mcp/bridge-tools.js"
 import type { PongInfo } from "../jobs/types.js"
+import { flagWithPlaceholder, needsValue, unknownFlag } from "./arg-errors.js"
 
 export const PING_HELP = [
   "aibr ping — send a signed no-op job to a peer and wait for its result",
@@ -67,7 +68,7 @@ interface ParsedFlags {
 const VALUE_FLAGS = new Set(["--profile", "-p", "--timeout", "--capability", "--project", "--timeout-seconds"])
 const BOOL_FLAGS = new Set(["--json", "--no-wait", "--help", "-h"])
 
-export function parseFlags(argv: readonly string[]): ParsedFlags | string {
+export function parseFlags(argv: readonly string[], command?: string): ParsedFlags | string {
   const positional: string[] = []
   const flags = new Map<string, string>()
   const bools = new Set<string>()
@@ -77,12 +78,12 @@ export function parseFlags(argv: readonly string[]): ParsedFlags | string {
     const name = arg.startsWith("--") && eq > 0 ? arg.slice(0, eq) : arg
     if (VALUE_FLAGS.has(name)) {
       const value = arg.startsWith("--") && eq > 0 ? arg.slice(eq + 1) : argv[++i]
-      if (value === undefined || value === "") return `${name} needs a value`
+      if (value === undefined || value === "") return needsValue(name, command)
       flags.set(name === "-p" ? "--profile" : name, value)
     } else if (BOOL_FLAGS.has(arg)) {
       bools.add(arg === "-h" ? "--help" : arg)
     } else if (arg.startsWith("-") && arg !== "-") {
-      return `unknown flag ${arg}`
+      return unknownFlag(arg, command)
     } else {
       positional.push(arg)
     }
@@ -97,7 +98,7 @@ function makeTools(deps: DispatchCliDeps, profile: string | undefined): BridgeTo
 function positiveInt(raw: string | undefined, name: string): number | string | undefined {
   if (raw === undefined) return undefined
   const value = Number(raw)
-  return Number.isInteger(value) && value > 0 ? value : `${name} needs a positive whole number`
+  return Number.isInteger(value) && value > 0 ? value : `${name} needs a positive whole number: ${flagWithPlaceholder(name)}`
 }
 
 /** The peer to use when none was named: the profile's only agent. */
@@ -145,7 +146,7 @@ function pongLines(pong: PongInfo): string[] {
 }
 
 export async function runPingCommand(argv: readonly string[], deps: DispatchCliDeps): Promise<number> {
-  const parsed = parseFlags(argv)
+  const parsed = parseFlags(argv, "ping")
   if (typeof parsed === "string") {
     deps.write(`Error: ${parsed}\n`)
     return 64
@@ -155,7 +156,7 @@ export async function runPingCommand(argv: readonly string[], deps: DispatchCliD
     return 0
   }
   if (parsed.positional.length > 1) {
-    deps.write(`Error: unexpected argument ${parsed.positional[1]}\n`)
+    deps.write(`Error: unexpected argument ${parsed.positional[1]}: aibr ping [<peer>] [--profile <name>]\n`)
     return 64
   }
   const timeout = positiveInt(parsed.flags.get("--timeout"), "--timeout")
@@ -254,7 +255,7 @@ function renderResult(data: Record<string, unknown>): string {
 }
 
 export async function runSendCommand(argv: readonly string[], deps: DispatchCliDeps): Promise<number> {
-  const parsed = parseFlags(argv)
+  const parsed = parseFlags(argv, "send")
   if (typeof parsed === "string") {
     deps.write(`Error: ${parsed}\n`)
     return 64
@@ -264,7 +265,7 @@ export async function runSendCommand(argv: readonly string[], deps: DispatchCliD
     return 0
   }
   if (parsed.positional.length !== 2) {
-    deps.write(`Error: expected a peer and a prompt\n\n${SEND_HELP}`)
+    deps.write(`Error: expected a peer and a prompt: aibr send <peer> "<prompt>" [--profile <name>]\n\n${SEND_HELP}`)
     return 64
   }
   const [target, prompt] = parsed.positional as [string, string]

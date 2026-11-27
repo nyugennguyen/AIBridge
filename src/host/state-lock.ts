@@ -23,15 +23,31 @@
  * live PID counts as HELD: a rare manual recovery is safer than two bridges
  * reconciling the same jobs.
  *
- * Taking a stale lock over: the stale file is first renamed to a unique name;
- * only the process whose rename succeeds goes on, and it re-checks what it
- * moved (a live lock moved by mistake is put back). The new lock is created
- * atomically (`link`, which fails if the file exists) and then read back to
- * confirm it holds this process's token.
+ * Taking a stale lock over never leaves the lock path empty, so a newcomer
+ * always finds either the stale lock or its successor, never a free slot:
+ * - The taker claims that exact stale content: it creates
+ *   `aibridge.lock.claim-<sha256 of the content>-<n>` with `link` (fails if
+ *   it exists, as O_EXCL would). Only one process wins a given claim.
+ * - A claim whose claimant is live (same rule as the lock) makes the lock
+ *   HELD. One whose claimant is dead (a takeover left half done) is skipped:
+ *   the next claim is `<n + 1>`. Claims are never removed while contended.
+ * - The winner re-reads the lock; if it still holds the claimed content, the
+ *   new lock replaces it in one `rename`. Otherwise someone else got there
+ *   first and the round starts again.
+ * - The winner then removes the claims of the content it replaced. A late
+ *   taker that claims that content afterwards re-reads the lock, sees it
+ *   changed and backs off.
+ *
+ * Up to 3.2.1 a stale lock was renamed aside and a live lock moved by
+ * mistake was put back. Between the two the path was empty, and a third
+ * process could take it while the first holder still believed it held it.
+ *
+ * A new lock on an empty path is created atomically (`link`) and then read
+ * back to confirm it holds this process's token.
  */
-import { randomUUID } from "node:crypto"
-import { linkSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs"
-import { join } from "node:path"
+import { createHash, randomUUID } from "node:crypto"
+import { linkSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs"
+import { dirname, join } from "node:path"
 import { compareProcessStart, isProcessAlive, readProcessStartTime } from "./process-identity.js"
 
 // The PID start-time reader lives in `process-identity.ts` (shared with the
@@ -66,8 +82,10 @@ export interface StateLockOptions {
   readonly isAlive?: (pid: number) => boolean
   /** A PID's start time, or `undefined` when it cannot be read. Injectable for tests. */
   readonly startTimeOf?: (pid: number) => string | undefined
-  /** Test seam: called after a lock was judged stale, before it is moved aside. */
+  /** Test seam: called after a lock was judged stale, before it is claimed. */
   readonly beforeTakeover?: () => void
+  /** Test seam: called once this process holds the claim on a stale lock, before replacing it. */
+  readonly afterClaim?: () => void
 }
 
 interface LockContent {
@@ -129,17 +147,107 @@ export function acquireStateLock(stateDir: string, options: StateLockOptions = {
     return compareProcessStart(holder.start, startTimeOf(holder.pid)) !== "different"
   }
 
-  // Bounded, but generous: under contention a round can be lost to another
-  // process's rename and simply starts again.
-  for (let attempt = 0; attempt < 50; attempt += 1) {
-    // Written in full first, then linked into place: a reader never sees a
-    // half-written lock, and `link` fails if the lock exists (as O_EXCL would).
+  /** Written in full first, so whoever links or renames it into place never exposes a half-written file. */
+  const stage = (content: LockContent): string => {
     const staged = `${path}.${randomUUID()}.tmp`
-    writeFileSync(staged, `${JSON.stringify(mine)}\n`, { mode: 0o600 })
+    writeFileSync(staged, `${JSON.stringify(content)}\n`, { mode: 0o600 })
+    return staged
+  }
+  const remove = (target: string): void => {
+    try {
+      unlinkSync(target)
+    } catch {
+      /* already gone */
+    }
+  }
+
+  // Bounded, but generous: under contention a round can be lost to another
+  // process's takeover and simply starts again.
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    // `link` fails if the lock exists (as O_EXCL would).
+    const staged = stage(mine)
     let created = false
     try {
       linkSync(staged, path)
       created = true
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error
+    } finally {
+      remove(staged)
+    }
+
+    if (created) {
+      const written = parseLock(readText(path))
+      if (written?.token === token) return lockHandle(path, token)
+      if (isHeld(written)) throw new StateLockHeldError(path, written.pid)
+      continue
+    }
+
+    const text = readText(path)
+    // Released between our `link` and our read: try again.
+    if (text === undefined) continue
+    const holder = parseLock(text)
+    if (holder?.token === token) return lockHandle(path, token)
+    if (isHeld(holder)) throw new StateLockHeldError(path, holder.pid)
+
+    // Stale (dead or reused PID, or no PID at all). Claim this exact content.
+    options.beforeTakeover?.()
+    const claimPrefix = `${STATE_LOCK_FILE}.claim-${createHash("sha256").update(text).digest("hex")}-`
+    const claimed = claim(path, claimPrefix, mine, stage, isHeld)
+    if (claimed.held !== undefined) {
+      // A live claimant is taking this content over, unless the content is
+      // already gone (a late claimant about to back off): then look again.
+      if (readText(path) !== text) continue
+      throw new StateLockHeldError(path, claimed.held)
+    }
+    if (claimed.path === undefined) continue
+
+    options.afterClaim?.()
+    if (readText(path) !== text) {
+      // Replaced or released since we read it: our claim is moot.
+      remove(claimed.path)
+      continue
+    }
+    // Nobody else can act on this content while we hold its claim, and the
+    // path is never empty: `rename` replaces the stale lock in one step.
+    const replacement = stage(mine)
+    try {
+      renameSync(replacement, path)
+    } catch (error) {
+      remove(replacement)
+      remove(claimed.path)
+      throw error
+    }
+    removeClaims(stateDir, claimPrefix)
+    const written = parseLock(readText(path))
+    if (written?.token === token) return lockHandle(path, token)
+    if (isHeld(written)) throw new StateLockHeldError(path, written.pid)
+  }
+  const last = parseLock(readText(path))
+  if (last !== undefined && last.token !== token) throw new StateLockHeldError(path, last.pid)
+  throw new Error(`Could not take the state lock ${path}`)
+}
+
+/**
+ * Claims the stale content whose claims are named `<prefix><n>`: creates the
+ * first `n` not taken yet. A taken claim whose claimant is live makes the lock
+ * held (`held`: that PID); one whose claimant is dead is passed over. Returns
+ * neither when the claim could not be made in a bounded number of steps.
+ */
+function claim(
+  lockPath: string,
+  prefix: string,
+  mine: LockContent,
+  stage: (content: LockContent) => string,
+  isHeld: (holder: LockContent | undefined) => holder is LockContent,
+): { path?: string; held?: number } {
+  const directory = dirname(lockPath)
+  for (let n = 0; n < 64; n += 1) {
+    const claimPath = join(directory, `${prefix}${n}`)
+    const staged = stage(mine)
+    try {
+      linkSync(staged, claimPath)
+      return { path: claimPath }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error
     } finally {
@@ -149,54 +257,29 @@ export function acquireStateLock(stateDir: string, options: StateLockOptions = {
         /* nothing to clean */
       }
     }
+    const claimant = parseLock(readText(claimPath))
+    if (isHeld(claimant)) return { held: claimant.pid }
+    // A dead claimant (or a claim removed since our link): the next one.
+  }
+  return {}
+}
 
-    if (created) {
-      const written = parseLock(readText(path))
-      if (written?.token === token) return lockHandle(path, token)
-      // Someone moved ours aside and took over: theirs decides.
-      if (isHeld(written)) throw new StateLockHeldError(path, written.pid)
-      continue
-    }
-
-    const holder = parseLock(readText(path))
-    // Ours, put back by a process that moved it aside by mistake.
-    if (holder?.token === token) return lockHandle(path, token)
-    if (isHeld(holder)) throw new StateLockHeldError(path, holder.pid)
-
-    // Stale (dead or reused PID, unreadable, old format). Only the process
-    // whose rename succeeds takes it over; the others start again.
-    options.beforeTakeover?.()
-    const aside = `${path}.stale-${randomUUID()}`
+/** Removes the claims named `<prefix><n>` (the content they claimed is gone). */
+function removeClaims(stateDir: string, prefix: string): void {
+  let names: string[]
+  try {
+    names = readdirSync(stateDir)
+  } catch {
+    return
+  }
+  for (const name of names) {
+    if (!name.startsWith(prefix)) continue
     try {
-      renameSync(path, aside)
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue
-      throw error
-    }
-    const moved = parseLock(readText(aside))
-    if (isHeld(moved)) {
-      // A live lock was created between our read and our rename: put it back.
-      try {
-        linkSync(aside, path)
-      } catch {
-        /* someone else is already there */
-      }
-      try {
-        unlinkSync(aside)
-      } catch {
-        /* gone */
-      }
-      throw new StateLockHeldError(path, moved.pid)
-    }
-    try {
-      unlinkSync(aside)
+      unlinkSync(join(stateDir, name))
     } catch {
-      /* gone */
+      /* already gone */
     }
   }
-  const last = parseLock(readText(path))
-  if (last !== undefined && last.token !== token) throw new StateLockHeldError(path, last.pid)
-  throw new Error(`Could not take the state lock ${path}`)
 }
 
 function lockHandle(path: string, token: string): StateLock {

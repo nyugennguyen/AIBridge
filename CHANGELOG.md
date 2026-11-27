@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- **Two `aibr serve`/`aibr worker` processes could both take a stale profile lock.** Taking over a stale `aibridge.lock` renamed it aside first; a process that judged the lock stale just before another took it over then moved the new, live lock aside, and while it put it back the lock path was empty, so a third process took the lock too. A takeover now claims that exact stale content with an exclusive claim file and replaces it in one `rename`, so the lock path is never empty. A claim left by a process that died mid-takeover does not block the next one.
+
 ## [3.2.1] - 2026-11-27
 
 Fixes `aibr init` on a fresh Linux node and the pairing that follows it. No config, wire format or contract changes.

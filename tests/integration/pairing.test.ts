@@ -5,7 +5,7 @@
  * The worker is a real Fastify app (app.inject) with the /enroll endpoint and
  * `request_signing: "required"`; the orchestrator has NO bridge running.
  */
-import { mkdtemp, readFile, stat } from "node:fs/promises"
+import { mkdtemp, readFile, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { FastifyInstance } from "fastify"
@@ -204,6 +204,27 @@ describe("aibr enroll: issue -> join -> dispatch -> revoke", () => {
     const out: string[] = []
     expect(await runEnrollCommand(["join", wrongKey, "--profile", "o"], cliDeps(s.orchEnv, viaApp(s.app), out))).toBe(1)
     expect(out.join("")).toContain("not the worker that printed this code")
+  })
+
+  it("says the wrong bridge answered when another worker holds the code's address", async () => {
+    const issuer = await setup()
+    const squatter = await setup()
+    await issueCode(squatter.workerEnv) // gives the squatting worker its own node key
+    const code = await issueCode(issuer.workerEnv)
+    const out: string[] = []
+    expect(await runEnrollCommand(["join", code, "--profile", "o"], cliDeps(issuer.orchEnv, viaApp(squatter.app), out))).toBe(1)
+    expect(out.join("")).toContain("is not the one that printed this code")
+    expect(out.join("")).not.toContain("Unknown pairing code")
+  })
+
+  it("reports an unreadable code store instead of an unknown code", async () => {
+    const s = await setup()
+    const code = await issueCode(s.workerEnv)
+    await writeFile(join(s.workerPaths.stateDir, "identity", "enrollment-codes.json"), "{not json")
+    const out: string[] = []
+    expect(await runEnrollCommand(["join", code, "--profile", "o"], cliDeps(s.orchEnv, viaApp(s.app), out))).toBe(1)
+    expect(out.join("")).toContain("could not read its pairing code store")
+    expect(out.join("")).not.toContain("Unknown pairing code")
   })
 
   it("issue refuses on an orchestrator profile", async () => {

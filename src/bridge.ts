@@ -96,6 +96,7 @@ async function startBridgeHoldingLock(options: BridgeOptions): Promise<BridgeIns
           configPath: options.configPath,
           stateDir: options.stateDir,
           bearerToken: options.bearerToken,
+          ...(options.log !== undefined ? { log: options.log } : {}),
         })
       : undefined
 

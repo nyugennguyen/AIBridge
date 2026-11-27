@@ -572,6 +572,48 @@ function trimDetail(text: string): string {
   return text.trim().split("\n").slice(-3).join(" ").slice(0, 300)
 }
 
+/**
+ * The environment `systemctl --user` needs to reach the user manager, or
+ * `undefined` when the session already provides it (or nothing can be found).
+ *
+ * `su <user>`, `sudo -iu <user>` and other non-PAM logins leave
+ * `XDG_RUNTIME_DIR` unset even when the user manager is running and its bus is
+ * at `/run/user/<uid>/bus`; `systemctl --user` then fails with "Failed to
+ * connect to user scope bus". Pointing it at that socket is what a real login
+ * would have done.
+ */
+export function systemdUserEnv(
+  deps: Pick<UserServiceDeps, "env" | "uid" | "fileExists">,
+): Record<string, string> | undefined {
+  const runtimeDir = deps.env.XDG_RUNTIME_DIR
+  if (runtimeDir !== undefined && runtimeDir !== "") return undefined
+  const dir = `/run/user/${deps.uid}`
+  if (!deps.fileExists(`${dir}/bus`)) return undefined
+  const busAddress = deps.env.DBUS_SESSION_BUS_ADDRESS
+  return {
+    XDG_RUNTIME_DIR: dir,
+    ...(busAddress === undefined || busAddress === "" ? { DBUS_SESSION_BUS_ADDRESS: `unix:path=${dir}/bus` } : {}),
+  }
+}
+
+function systemctl(deps: UserServiceDeps, args: readonly string[]) {
+  const env = systemdUserEnv(deps)
+  return deps.runner.exec(["systemctl", "--user", ...args], env === undefined ? undefined : { env })
+}
+
+const NO_USER_BUS = /Failed to connect to (?:user scope )?bus|No medium found|\$DBUS_SESSION_BUS_ADDRESS/i
+
+/** A systemctl failure, with the fix spelled out when the cause is a missing user bus. */
+function systemdFailure(deps: UserServiceDeps, stderr: string, fallback: string): string {
+  if (!NO_USER_BUS.test(stderr)) return trimDetail(stderr || fallback)
+  const user = deps.env.USER ?? deps.env.LOGNAME ?? "$USER"
+  return (
+    `systemd --user is not reachable from this session (no user bus at /run/user/${deps.uid}/bus). ` +
+    `Its user manager is not running, which is usual after "su"/"sudo su" or on a host without a login session. ` +
+    `Fix: sudo loginctl enable-linger ${user} (starts it now and at boot), then re-run the command`
+  )
+}
+
 /** Is the profile's unit installed and running? Never throws. */
 export async function userServiceState(deps: UserServiceDeps, profile: string): Promise<UserServiceState> {
   const manager = managerFor(deps.platform)
@@ -608,12 +650,12 @@ export async function userServiceState(deps: UserServiceDeps, profile: string): 
 
   const units = legacy !== null ? [systemdUnitName(profile), LEGACY_SYSTEMD_UNIT] : [systemdUnitName(profile)]
   for (const unit of units) {
-    const result = await deps.runner.exec(["systemctl", "--user", "is-active", unit])
+    const result = await systemctl(deps, ["is-active", unit])
     const state = result.stdout.trim()
     if (state === "active" || state === "activating" || state === "reloading") {
       return { supported: true, manager, unitPath: unit === LEGACY_SYSTEMD_UNIT ? legacy : unitPath, installed: true, running: true, ...legacyField }
     }
-    if (/Failed to connect to bus|No medium found/i.test(result.stderr)) {
+    if (NO_USER_BUS.test(result.stderr)) {
       return {
         supported: false,
         manager,
@@ -678,23 +720,23 @@ export async function startUserService(deps: UserServiceDeps, spec: UserServiceS
 
   const unit = systemdUnitName(spec.profile)
   if (legacy !== null) {
-    await deps.runner.exec(["systemctl", "--user", "disable", "--now", LEGACY_SYSTEMD_UNIT])
+    await systemctl(deps, ["disable", "--now", LEGACY_SYSTEMD_UNIT])
     await deps.removeFile(legacy)
     notes.push(`Replaced the shared unit ${legacy} with ${unit}.`)
   }
   await deps.writeFile(unitPath, generateSystemdUnit(unitOptions))
-  const reload = await deps.runner.exec(["systemctl", "--user", "daemon-reload"])
+  const reload = await systemctl(deps, ["daemon-reload"])
   if (reload.exitCode !== 0) {
-    return { kind: "failed", manager, unitPath, message: trimDetail(reload.stderr || "systemctl --user daemon-reload failed") }
+    return { kind: "failed", manager, unitPath, message: systemdFailure(deps, reload.stderr, "systemctl --user daemon-reload failed") }
   }
-  const enable = await deps.runner.exec(["systemctl", "--user", "enable", unit])
+  const enable = await systemctl(deps, ["enable", unit])
   if (enable.exitCode !== 0) {
-    return { kind: "failed", manager, unitPath, message: trimDetail(enable.stderr || `systemctl --user enable ${unit} failed`) }
+    return { kind: "failed", manager, unitPath, message: systemdFailure(deps, enable.stderr, `systemctl --user enable ${unit} failed`) }
   }
   // `restart`, not `start`: a re-run after a config change must pick it up.
-  const restart = await deps.runner.exec(["systemctl", "--user", "restart", unit])
+  const restart = await systemctl(deps, ["restart", unit])
   if (restart.exitCode !== 0) {
-    return { kind: "failed", manager, unitPath, message: trimDetail(restart.stderr || `systemctl --user restart ${unit} failed`) }
+    return { kind: "failed", manager, unitPath, message: systemdFailure(deps, restart.stderr, `systemctl --user restart ${unit} failed`) }
   }
   const linger = await lingerEnabled(deps)
   if (linger === false) {
@@ -752,7 +794,7 @@ export async function stopUserService(deps: UserServiceDeps, profile: string): P
   } else {
     const units = [...(installed ? [systemdUnitName(profile)] : []), ...(legacy !== null ? [LEGACY_SYSTEMD_UNIT] : [])]
     for (const unit of units) {
-      const result = await deps.runner.exec(["systemctl", "--user", "disable", "--now", unit])
+      const result = await systemctl(deps, ["disable", "--now", unit])
       if (result.exitCode !== 0 && !/not loaded|does not exist|No such file/i.test(result.stderr)) {
         return { kind: "failed", message: trimDetail(result.stderr || `systemctl --user disable --now ${unit} failed`) }
       }
@@ -763,6 +805,6 @@ export async function stopUserService(deps: UserServiceDeps, profile: string): P
     await deps.removeFile(legacy)
     notes.push(`Also removed the shared unit ${legacy}.`)
   }
-  if (manager === "systemd") await deps.runner.exec(["systemctl", "--user", "daemon-reload"])
+  if (manager === "systemd") await systemctl(deps, ["daemon-reload"])
   return { kind: "stopped", manager, notes }
 }

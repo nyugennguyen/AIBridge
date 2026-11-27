@@ -52,6 +52,11 @@ describe("decideStatus", () => {
     expect(status.hint).toMatch(/neither the user service nor the tmux session/)
   })
 
+  it("is not healthy when another bridge answers on this profile's address", () => {
+    const status = decideStatus(facts({ tmux: true, health: { ok: true, status: 200, body: '{"ok":true,"agent_id":"vps-staging"}' } }))
+    expect(status).toMatchObject({ kind: "bridge_unavailable", runner: "tmux", hint: expect.stringContaining('answers as agent "vps-staging"') })
+  })
+
   it("not running anywhere points at aibr start", () => {
     expect(decideStatus(facts({ health: DOWN }))).toEqual({ kind: "not_running", sessionName: "aibridge-dev", hint: "start it with: aibr start --profile dev" })
   })
@@ -241,6 +246,21 @@ describe("runStartService", () => {
     expect(text).toContain("tmux session aibridge-dev")
     expect(text).toContain("aibr stop --profile dev")
     expect(run.calls).toEqual(["tmux has-session -t aibridge-dev"])
+  })
+
+  it("fails at once when another bridge answers on this profile's address", async () => {
+    const other = { ok: true, status: 200, body: '{"ok":true,"agent_id":"vps-staging","capabilities":[]}' }
+    const d = startDeps({ probe: () => other })
+    const { code, text } = await start(d)
+    expect(code).toBe(1)
+    expect(text).toContain('answers as agent "vps-staging", not "dev-agent"')
+    expect(text).toContain("aibr setup --profile dev")
+    expect(d.probes).toHaveLength(1)
+  })
+
+  it("accepts its own agent id in the /health body", async () => {
+    const own = { ok: true, status: 200, body: '{"ok":true,"agent_id":"dev-agent","capabilities":[]}' }
+    expect((await start(startDeps({ probe: () => own }))).code).toBe(0)
   })
 
   it("loads the service, waits for /health, and says how to see logs and stop", async () => {

@@ -222,7 +222,48 @@ describe("startUserService (systemd)", () => {
     )
     const result = await startUserService(deps("linux", runner), SPEC)
     expect(result).toMatchObject({ kind: "failed", manager: "systemd" })
-    if (result.kind === "failed") expect(result.message).toContain("Failed to connect to bus")
+    if (result.kind === "failed") {
+      expect(result.message).toContain("no user bus at /run/user/501/bus")
+      expect(result.message).toContain("sudo loginctl enable-linger u")
+    }
+  })
+
+  it("explains the user-scope bus error a su/sudo login gives", async () => {
+    const stderr =
+      "Failed to connect to user scope bus via local transport: $DBUS_SESSION_BUS_ADDRESS and $XDG_RUNTIME_DIR not defined " +
+      "(consider using --machine=<user>@.host --user to connect to bus of other user)"
+    const runner = fakeRunner((argv) => (argv[2] === "daemon-reload" ? { exitCode: 1, stdout: "", stderr } : undefined))
+    const result = await startUserService(deps("linux", runner), SPEC)
+    expect(result).toMatchObject({ kind: "failed", message: expect.stringContaining("sudo loginctl enable-linger u") })
+  })
+
+  it("points systemctl at /run/user/<uid> when XDG_RUNTIME_DIR is unset but the bus exists", async () => {
+    const seen: (Readonly<Record<string, string>> | undefined)[] = []
+    const runner: ProcessRunner = {
+      async exec(argv, options) {
+        if (argv[0] === "systemctl") seen.push(options?.env)
+        return argv[0] === "loginctl" ? { exitCode: 0, stdout: "Linger=yes", stderr: "" } : OK
+      },
+    }
+    const d = deps("linux", runner, { "/run/user/501/bus": "" })
+    expect(await startUserService(d, SPEC)).toMatchObject({ kind: "started" })
+    expect(seen).toHaveLength(3)
+    for (const env of seen) {
+      expect(env).toEqual({ XDG_RUNTIME_DIR: "/run/user/501", DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/501/bus" })
+    }
+  })
+
+  it("leaves the environment alone when the session already has XDG_RUNTIME_DIR", async () => {
+    const seen: unknown[] = []
+    const runner: ProcessRunner = {
+      async exec(argv, options) {
+        if (argv[0] === "systemctl") seen.push(options)
+        return OK
+      },
+    }
+    const env = { PATH: "/usr/bin", USER: "u", XDG_RUNTIME_DIR: "/run/user/501" }
+    await startUserService(deps("linux", runner, { "/run/user/501/bus": "" }, env), SPEC)
+    expect(seen.every((o) => o === undefined)).toBe(true)
   })
 
   it("fails when the restart fails", async () => {
@@ -341,6 +382,15 @@ describe("userServiceState", () => {
   it("says systemd --user is unavailable without a user bus", async () => {
     const runner = fakeRunner(() => ({ exitCode: 1, stdout: "", stderr: "Failed to connect to bus: No medium found" }))
     expect(await userServiceState(deps("linux", runner), "dev")).toMatchObject({ supported: false, running: false, detail: expect.stringContaining("no user bus") })
+  })
+
+  it("also recognises the user-scope bus wording of newer systemd", async () => {
+    const runner = fakeRunner(() => ({
+      exitCode: 1,
+      stdout: "",
+      stderr: "Failed to connect to user scope bus via local transport: $DBUS_SESSION_BUS_ADDRESS and $XDG_RUNTIME_DIR not defined",
+    }))
+    expect(await userServiceState(deps("linux", runner), "dev")).toMatchObject({ supported: false, detail: expect.stringContaining("no user bus") })
   })
 
   it("finds a legacy unit running the profile", async () => {

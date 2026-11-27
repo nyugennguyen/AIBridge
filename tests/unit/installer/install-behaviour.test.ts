@@ -193,6 +193,31 @@ describe("install.sh — next steps and PATH", () => {
     expect(r.stdout.trim().split("\n").pop()).toBe("1")
   })
 
+  it("tells the caller to reload PATH when aibr only became reachable inside the installer", () => {
+    const bin = `${ROOT}node_modules/.cache/installer-bin-${process.pid}`
+    const body = `mkdir -p "${bin}"; printf '#!/bin/sh\n' > "${bin}/aibr"; chmod +x "${bin}/aibr"
+       SHELL=/bin/bash; export PATH="${bin}:$PATH"; print_path_reminder; rm -rf "${bin}"`
+    // A PATH with no global aibr, so the result does not depend on the machine.
+    const r = sourced(body, { PATH: "/usr/bin:/bin" })
+    expect(r.status).toBe(0)
+    expect(r.stdout).toContain("This terminal cannot run 'aibr' yet")
+    expect(r.stdout).toContain("source")
+    expect(r.stdout).toContain(`${bin}/aibr`)
+  })
+
+  it("says nothing about PATH when the caller's shell already finds aibr", () => {
+    const bin = `${ROOT}node_modules/.cache/installer-bin2-${process.pid}`
+    const setup = spawnSync("bash", ["-c", `mkdir -p "${bin}"; printf '#!/bin/sh\n' > "${bin}/aibr"; chmod +x "${bin}/aibr"`])
+    expect(setup.status).toBe(0)
+    const r = sourced(`print_path_reminder; rm -rf "${bin}"`, { PATH: `${bin}:${process.env.PATH ?? ""}` })
+    expect(r.status).toBe(0)
+    expect(r.stdout).not.toContain("cannot run 'aibr'")
+  })
+
+  it("prints the PATH reminder after offering aibr init", () => {
+    expect(script).toMatch(/offer_setup\n\s*print_path_reminder\n\}/)
+  })
+
   it("warns when treating a non-Debian Linux as Ubuntu", () => {
     expect(script).toContain("treating it as Ubuntu-compatible")
   })

@@ -32,6 +32,7 @@ import { verifyMeshRequest } from "../mesh/identity/request-signature.js"
 import { provisionalNodeIdSchema } from "../mesh/protocol/identifiers.js"
 import { FilePairingCodeStore } from "./code-store.js"
 import {
+  enrollmentCodesFileFor,
   isPairableAgentId,
   loadNodeKey,
   loadOrCreateNodeKey,
@@ -182,6 +183,11 @@ export interface PairingAcceptorOptions {
   readonly stateDir: string
   readonly bearerToken: string | null
   readonly now?: () => number
+  /**
+   * The bridge log. A refused code is answered to the caller without detail
+   * (that is the enumeration defence), so the reason is only ever written here.
+   */
+  readonly log?: (level: "info" | "warn" | "error", message: string) => void
 }
 
 export function createPairingAcceptor(options: PairingAcceptorOptions): PairingAcceptor {
@@ -245,15 +251,30 @@ export function createPairingAcceptor(options: PairingAcceptorOptions): PairingA
         },
         codes,
       )
+      if (!verified.ok && verified.error.code !== "identity.enrollment_code_rejected") {
+        // The store could not be read or written. Answering "unknown code" here
+        // sends the operator hunting for a copy/paste mistake that is not there.
+        options.log?.("error", `pairing: the code store could not be used (${verified.error.code}): ${verified.error.message}`)
+        return fail(
+          503,
+          "pairing.code_store_unavailable",
+          "This worker could not read its pairing code store. Check `aibr logs` on the worker.",
+        )
+      }
       if (!verified.ok || verified.value.converged) {
         const reason = verified.ok ? "code_already_used" : verified.reason
+        options.log?.(
+          "warn",
+          `pairing: refused a code from agent ${body.agent_id} (${reason}); store ${enrollmentCodesFileFor(options.stateDir)} ` +
+            `holds ${await liveCodeCount(codes, now())} unused unexpired code(s)`,
+        )
         if (reason === "code_expired") {
-          return fail(403, "pairing.code_expired", "This pairing code has expired. Run `aibr enroll issue` on the worker for a new one.")
+          return refuse(workerKey.keyId, "pairing.code_expired", "This pairing code has expired. Run `aibr enroll issue` on the worker for a new one.")
         }
         if (reason === "code_already_used") {
-          return fail(403, "pairing.code_used", "This pairing code has already been used. Each code pairs exactly one node; issue a new one.")
+          return refuse(workerKey.keyId, "pairing.code_used", "This pairing code has already been used. Each code pairs exactly one node; issue a new one.")
         }
-        return fail(403, "pairing.code_unknown", "Unknown pairing code. Check you copied the whole code, or issue a new one.")
+        return refuse(workerKey.keyId, "pairing.code_unknown", "Unknown pairing code. Check you copied the whole code, or issue a new one.")
       }
 
       const capabilities = await codes.grantFor(verified.value.enrollmentId)
@@ -293,6 +314,23 @@ export function createPairingAcceptor(options: PairingAcceptorOptions): PairingA
       const signature = workerKey.sign(responseSigningBytes(unsigned, body.agent_id)).toString("base64url")
       return { status: 200, body: { ...unsigned, signature } }
     },
+  }
+}
+
+/**
+ * A refused code. The worker's key id rides along so the joining side can tell
+ * "wrong code" from "wrong bridge": the key id is already public (it is part of
+ * every code this worker prints), and it says nothing about the code.
+ */
+function refuse(keyId: string, code: string, error: string): PairingAcceptResult {
+  return { status: 403, body: { error, code, key_id: keyId } }
+}
+
+async function liveCodeCount(codes: FilePairingCodeStore, at: number): Promise<number | string> {
+  try {
+    return (await codes.list()).filter((c) => c.redeemedNodeId === undefined && c.expiresAt > at).length
+  } catch {
+    return "an unreadable number of"
   }
 }
 
@@ -368,6 +406,15 @@ export async function joinWithPairingCode(input: {
     const message = typeof record.error === "string" ? record.error : `HTTP ${response.status}`
     if (response.status === 404) {
       throw new PairingError(`The worker at ${code.url} does not serve ${ENROLL_PATH} (HTTP 404): update aibr there and restart its bridge.`, "not_supported")
+    }
+    const answeredKey = (payload as { key_id?: unknown } | null)?.key_id
+    if (typeof answeredKey === "string" && answeredKey !== code.keyId) {
+      throw new PairingError(
+        `The bridge answering at ${code.url} is not the one that printed this code (its key is ${answeredKey}, the code's is ${code.keyId}). ` +
+          `Another AIBridge bridge (another profile, or another user on that machine) holds that address, so the worker that issued the code is not listening. ` +
+          `On the worker, run "aibr doctor --profile <profile>" and free the port or give the profile another one.`,
+        "wrong_bridge",
+      )
     }
     throw new PairingError(`The worker refused the pairing: ${message}`, typeof record.code === "string" ? record.code : "refused")
   }

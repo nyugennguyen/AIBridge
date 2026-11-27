@@ -105,16 +105,49 @@ export interface ServiceCommandDeps {
 /** How long `aibr start` waits for `/health` after loading the unit. */
 export const START_HEALTH_TIMEOUT_MS = 20_000
 
+/** The `agent_id` a `/health` body names, or `null` when it names none. */
+export function healthAgentId(body: string): string | null {
+  try {
+    const parsed = JSON.parse(body) as { agent_id?: unknown }
+    return typeof parsed.agent_id === "string" ? parsed.agent_id : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * The agent answering on this profile's address when it is not this profile's
+ * own bridge: another profile, or another user's bridge, bound to the same
+ * host and port. `null` when it is this profile's bridge or cannot be told.
+ */
+export function foreignAgent(body: string, agentId: string): string | null {
+  const answered = healthAgentId(body)
+  return answered !== null && answered !== agentId ? answered : null
+}
+
+function foreignBridgeHint(info: ProfileRunInfo, foreign: string): string {
+  return (
+    `${healthUrl(info)} answers as agent "${foreign}", not "${info.agentId}": another AIBridge bridge ` +
+    `(another profile, or another user on this machine) holds that address, so this profile's bridge cannot listen. ` +
+    `Stop that bridge, or give this profile another bridge.port (aibr setup --profile ${info.profile})`
+  )
+}
+
 export async function waitForHealth(
   deps: Pick<ServiceCommandDeps, "probe" | "sleep" | "now">,
   url: string,
   timeoutMs: number,
-): Promise<{ readonly ok: boolean; readonly body: string; readonly status: number }> {
+  agentId?: string,
+): Promise<{ readonly ok: boolean; readonly body: string; readonly status: number; readonly foreign?: string }> {
   const deadline = deps.now() + timeoutMs
   let last = { ok: false, body: "", status: 0 }
   for (;;) {
     last = await deps.probe.probe(url, { timeoutMs: 2000 })
-    if (last.ok) return last
+    if (last.ok) {
+      const foreign = agentId === undefined ? null : foreignAgent(last.body, agentId)
+      // Waiting longer cannot help: the other bridge keeps the port.
+      return foreign === null ? last : { ...last, ok: false, foreign }
+    }
     if (deps.now() >= deadline) return last
     await deps.sleep(500)
   }
@@ -170,7 +203,11 @@ export async function runStartService(profile: string, deps: ServiceCommandDeps,
   }
   for (const note of result.notes) write(`${note}\n`)
   const url = healthUrl(info)
-  const health = await waitForHealth(deps, url, START_HEALTH_TIMEOUT_MS)
+  const health = await waitForHealth(deps, url, START_HEALTH_TIMEOUT_MS, info.agentId)
+  if (health.foreign !== undefined) {
+    write(`Error: ${foreignBridgeHint(info, health.foreign)}.\n`)
+    return 1
+  }
   if (!health.ok) {
     write(
       `The ${result.manager} service for "${profile}" is loaded (${result.unitPath}), but ${url} did not answer ` +
@@ -231,6 +268,10 @@ export function decideStatus(facts: StatusFacts): ProfileStatus {
     service.legacyUnitPath !== undefined
       ? `it runs from the shared unit ${service.legacyUnitPath}; "aibr start --profile ${profile}" replaces it with a per-profile one`
       : undefined
+  const foreign = health.ok ? foreignAgent(health.body, info.agentId) : null
+  if (foreign !== null) {
+    return { kind: "bridge_unavailable", sessionName, runner: runner ?? "unmanaged", probeStatus: health.status, hint: foreignBridgeHint(info, foreign) }
+  }
   if (health.ok) {
     const both = service.running && tmux ? `both the ${service.manager} service and tmux session ${tmuxSessionName(profile)} exist; stop one (aibr stop --profile ${profile})` : undefined
     return {

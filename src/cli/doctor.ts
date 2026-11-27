@@ -146,6 +146,7 @@ function statusLine(status: ProfileStatus, facts: StatusFacts): DoctorLine {
         status: "fail",
         message: `${status.runner === "tmux" ? "tmux session" : `${status.runner} service`} is up but ${url} does not answer${status.probeStatus !== 0 ? ` (HTTP ${status.probeStatus})` : ""}`,
         fix: `aibr logs --profile ${profile}`,
+        ...(status.hint !== undefined ? { detail: status.hint } : {}),
       }
     case "no_bridge":
       return { section: "bridge", status: "skip", message: "Bridge: none (orchestrator)" }

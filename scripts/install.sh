@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-CLI_VERSION="3.2.0"
+CLI_VERSION="3.2.1"
 
 YES=0
 WITH_UNITS=0
@@ -39,7 +39,7 @@ Options:
 Environment:
   AIBRIDGE_VERSION        npm version/tag to install (default: latest)
   AIBRIDGE_PACKAGE        full package spec to install instead (e.g. a local
-                          ./nyugennguyen-aibridge-3.2.0.tgz for pre-release testing)
+                          ./nyugennguyen-aibridge-3.2.1.tgz for pre-release testing)
   AIBRIDGE_ROUTER_BIN     path to an aibr-router binary (with --ingress router)
   AIBRIDGE_INGRESS_OUTBOX absolute path of the admission store (with --ingress router)
 USAGE

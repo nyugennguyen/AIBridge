@@ -163,7 +163,7 @@ This verifies:
 3. Bun test suite execution
 4. Typecheck (`tsc --noEmit`)
 5. Shellcheck and syntax validation of install scripts
-6. Contract parity (`contracts:check`) and CLI smoke checks
+6. Contract parity (`contracts:check`), docs checks (`docs:check`: generated CLI reference, links, skill mirrors) and CLI smoke checks
 7. Package tarball dry-run packaging (`bun pm pack --dry-run`)
 
 ### 2. Version Bump (on `dev`)

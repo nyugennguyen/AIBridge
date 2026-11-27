@@ -35,7 +35,7 @@ Commands:
   worker   Drain the router's admission queue (no listener)
   status   Check the service or tmux session and bridge health
   verify   Validate role-specific dependencies, bearer token, and config
-  update   Check and update to the latest version
+  update   Install the latest version from npm and restart running bridges
   bundle   Generate diagnostic support bundle
   plugin   Install/remove the AIBridge plugin for Claude Code
   mcp      MCP server used by the Claude Code plugin (serve, summary)

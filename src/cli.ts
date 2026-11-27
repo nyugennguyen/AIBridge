@@ -155,7 +155,7 @@ export interface CliDeps {
     readonly summary: string
   }>
   /** Check and update AIBridge to the latest version. */
-  readonly runUpdate?: (options?: { readonly checkOnly?: boolean; readonly yes?: boolean }) => Promise<{
+  readonly runUpdate?: (options?: { readonly checkOnly?: boolean; readonly yes?: boolean; readonly noRestart?: boolean }) => Promise<{
     readonly ok: boolean
     readonly message: string
   }>
@@ -259,6 +259,8 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
       knownFlags.push("--foreground")
     } else if (arg === "--with-opencode") {
       knownFlags.push("--with-opencode")
+    } else if (arg === "--no-restart") {
+      knownFlags.push("--no-restart")
     } else if (command === null) {
       command = arg
     } else {
@@ -298,7 +300,7 @@ function helpText(): string {
     "  worker   Drain the router's admission queue (no listener)",
     "  status   Check the service or tmux session and bridge health",
     "  verify   Validate role-specific dependencies, bearer token, and config",
-    "  update   Check and update to the latest version",
+    "  update   Install the latest version from npm and restart running bridges",
     "  bundle   Generate diagnostic support bundle",
     "  plugin   Install/remove the AIBridge plugin for Claude Code",
     "  mcp      MCP server used by the Claude Code plugin (serve, summary)",
@@ -433,6 +435,24 @@ const COMMAND_HELP: Readonly<Record<string, readonly string[]>> = {
     "Usage:",
     `  ${PROG} mcp serve   [--profile <name>]   MCP over stdin/stdout (started by Claude Code)`,
     `  ${PROG} mcp summary [--profile <name>]   one-shot peer/job summary (SessionStart hook)`,
+    "",
+  ],
+  update: [
+    `${PROG} update — install the latest @nyugennguyen/aibridge from npm`,
+    "",
+    "Usage:",
+    `  ${PROG} update [--check] [--yes] [--no-restart]`,
+    "",
+    "Checks the npm registry, installs the newer version with the package manager",
+    "that installed this aibr (bun or npm), confirms the new aibr reports that",
+    "version, then restarts every profile whose user service (launchd/systemd) is",
+    "running, so the bridges run the new code. A bridge running in tmux",
+    "(aibr start --foreground) is named with the command that restarts it.",
+    "",
+    "Options:",
+    "  --check, -c            Only report whether an update is available",
+    "  --yes, -y              Do not ask before installing (needed without a terminal)",
+    "  --no-restart           Install, but leave running bridges on the old version",
     "",
   ],
   discover: [
@@ -847,6 +867,10 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<Cl
     deps.writer("Error: --foreground is only supported by start\n")
     return 1
   }
+  if (command !== "update" && args.hasFlag("--no-restart")) {
+    deps.writer("Error: --no-restart is only supported by update\n")
+    return 1
+  }
   if (command !== "serve" && args.hasFlag("--with-opencode")) {
     deps.writer("Error: --with-opencode is only supported by serve\n")
     return 1
@@ -952,16 +976,17 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<Cl
   if (command === "update") {
     const checkOnly = args.hasFlag("--check")
     const yes = args.hasFlag("--yes")
+    const noRestart = args.hasFlag("--no-restart")
 
     try {
       if (deps.runUpdate) {
-        const result = await deps.runUpdate({ checkOnly, yes })
+        const result = await deps.runUpdate({ checkOnly, yes, noRestart })
         deps.writer(result.message + "\n")
         return result.ok ? 0 : 1
       }
       const { runUpdate } = await import("./cli/update.js")
       const result = await runUpdate(
-        { checkOnly, yes },
+        { checkOnly, yes, noRestart },
         { currentVersion: deps.version, isTTY: deps.isTTY },
       )
       deps.writer(result.message + "\n")

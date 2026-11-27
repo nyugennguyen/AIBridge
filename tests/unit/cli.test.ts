@@ -721,7 +721,7 @@ describe("cli update", () => {
   })
 
   it("dispatches update with default options", async () => {
-    let receivedOptions: { checkOnly?: boolean; yes?: boolean } | undefined
+    let receivedOptions: { checkOnly?: boolean; yes?: boolean; noRestart?: boolean } | undefined
     const { exitCode, output } = await captureRun(["update"], {
       updateRunner: async (options) => {
         receivedOptions = options
@@ -730,7 +730,7 @@ describe("cli update", () => {
     })
 
     expect(exitCode).toBe(0)
-    expect(receivedOptions).toEqual({ checkOnly: false, yes: false })
+    expect(receivedOptions).toEqual({ checkOnly: false, yes: false, noRestart: false })
     expect(output).toContain("AIBridge is up to date")
   })
 
@@ -916,5 +916,28 @@ describe("cli argument errors", () => {
   it("an unknown flag points at the command's help, an unknown command at the command list", async () => {
     expect((await captureRun(["status", "--bogus"])).output).toContain("unknown flag --bogus (see: aibr status --help)")
     expect((await captureRun(["statsu"])).output).toContain('unknown command "statsu" (see: aibr --help for the list of commands)')
+  })
+})
+
+describe("cli update --no-restart", () => {
+  it("passes --no-restart to update and refuses it elsewhere", async () => {
+    let received: unknown
+    const { deps } = fakeDeps()
+    const code = await runCli(["update", "--yes", "--no-restart"], {
+      ...deps,
+      runUpdate: async (options) => {
+        received = options
+        return { ok: true, message: "ok" }
+      },
+    })
+    expect(code).toBe(0)
+    expect(received).toEqual({ checkOnly: false, yes: true, noRestart: true })
+    expect((await captureRun(["status", "--profile", "p", "--no-restart"])).output).toContain("--no-restart is only supported by update")
+  })
+
+  it("explains update in its own help", async () => {
+    const { output } = await captureRun(["update", "--help"])
+    expect(output).toContain("aibr update [--check] [--yes] [--no-restart]")
+    expect(output).toContain("restarts every profile whose user service")
   })
 })

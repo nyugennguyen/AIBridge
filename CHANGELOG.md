@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+## [3.2.2] - 2026-11-27
+
+`aibr update` now installs, verifies and restarts running bridges; argument errors show the command to type; a stale-lock takeover race is fixed. No config, wire format or contract changes.
+
 ### Changed
 - **`aibr update` finishes the job.** It used to run `bun install -g` and stop. It now:
   - installs with the package manager that installed this `aibr`: bun by absolute path, so a shell without `~/.bun/bin` on PATH (e.g. after `su`) still works, or npm for an `npm install -g` node;

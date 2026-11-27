@@ -1,6 +1,6 @@
 {
   "name": "@nyugennguyen/aibridge",
-  "version": "3.2.1",
+  "version": "3.2.2",
   "description": "Private Tailscale bridge for OpenCode agents",
   "license": "MIT",
   "repository": {

@@ -166,33 +166,33 @@ This verifies:
 6. Contract parity (`contracts:check`) and CLI smoke checks
 7. Package tarball dry-run packaging (`bun pm pack --dry-run`)
 
-### 2. Version Bump
+### 2. Version Bump (on `dev`)
 
-Update the version number across the repository:
+Update the version everywhere it is written out:
 - `package.json`: `"version": "x.y.z"`
-- `src/version.ts`: `CLI_VERSION` — the single source of truth every version report in the CLI reads (splash banner, `--version`, `aibr update`, diagnostics bundle)
-- `CHANGELOG.md`: document new features, fixes, and changes under `## [x.y.z]`
+- `src/version.ts`: `CLI_VERSION`, the single source of truth every version report in the CLI reads (splash banner, `--version`, `aibr update`, diagnostics bundle)
+- `scripts/install.sh`: `CLI_VERSION="x.y.z"` and the `nyugennguyen-aibridge-x.y.z.tgz` example in `--help`
+- `plugins/aibridge/.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json`: `"version"`
+- `CHANGELOG.md`: move `## [Unreleased]` entries under `## [x.y.z] - YYYY-MM-DD`
 
-The publishing workflow verifies that the release tag matches `format('v{0}', package.version)`.
-
-### 3. Merge or Push to `main`
+`git grep -n "<old version>"` finds them. The other hits are historical prose ("removed in 3.2.0") and must not be bumped.
 
 ```bash
-git add package.json src/version.ts CHANGELOG.md
 git commit -m "chore(release): prepare vx.y.z"
-git push origin main
+git push origin dev
 ```
 
-Pushes to `main` run `.github/workflows/ci.yml` (validation only: build, test, typecheck, contract checks). CI does not publish packages.
+### 3. Release PR `dev` → `main`
 
-### 4. Tagging and Publishing via GitHub Release
+Work lands on `dev` first. Open a PR from `dev` into `main` and merge it with a merge commit. CI (`.github/workflows/ci.yml`) runs on `main` and on PRs into it. It only validates (build, test, typecheck, contracts, router). **Merging into `main` publishes nothing.**
 
-To publish to npm, create a git tag matching the bumped version and publish a GitHub Release:
+### 4. Publish: GitHub Release on the merge commit
+
+Publishing happens only when a GitHub Release is published. `gh release create` creates the tag itself, so no separate `git tag` is needed:
 
 ```bash
-git tag vx.y.z
-git push origin vx.y.z
-gh release create vx.y.z --title "AIBridge vx.y.z" --notes "Release notes..."
+git fetch origin
+gh release create vx.y.z --target <main merge commit sha> --title "AIBridge vx.y.z" --notes "Release notes..."
 ```
 
 When a GitHub Release is published:
@@ -203,3 +203,5 @@ When a GitHub Release is published:
    - Fails if a version is already published from a different commit.
 4. Runs `bun run release:check` gate before publishing.
 5. Publishes queued packages to npm with provenance/OIDC or `NPM_TOKEN`.
+
+The registry can take a few minutes to serve a new version after the job logs `Published …`. Until then, `npm view @nyugennguyen/aibridge version` still shows the old version. Check with `npm view @nyugennguyen/aibridge@x.y.z version --prefer-online` before installing it on nodes.

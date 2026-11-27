@@ -13,11 +13,14 @@
 import type { ProcessRunner } from "../host/types.js"
 import type { StopServiceResult } from "../host/daemonizer.js"
 import { operatorRequest, parseOperatorArgs, sanitizeForTerminal, type OperatorCliDeps } from "./approve.js"
+import { listProfileNames, profileMissing } from "./arg-errors.js"
 
 export interface StopCliDeps extends OperatorCliDeps {
   readonly processRunner: ProcessRunner
   /** Unloads and removes the profile's user service. Absent: only tmux is stopped. */
   readonly stopService?: (profile: string) => Promise<StopServiceResult>
+  /** The profiles on this machine, named when --profile is missing. Default: read the config root. */
+  readonly listProfiles?: () => readonly string[]
 }
 
 const STOP_FLAGS = new Set(["--profile", "--yes", "--all-jobs"])
@@ -41,7 +44,7 @@ export const STOP_HELP = [
 
 export async function runStopCommand(argv: readonly string[], deps: StopCliDeps): Promise<number> {
   const explicitProfile = argv.includes("--profile") || argv.includes("-p")
-  const parsed = parseOperatorArgs(argv, STOP_FLAGS)
+  const parsed = parseOperatorArgs(argv, STOP_FLAGS, "stop")
   if (typeof parsed === "string") {
     deps.writer(`Error: ${parsed}\n`)
     return 64
@@ -57,7 +60,7 @@ export async function runStopCommand(argv: readonly string[], deps: StopCliDeps)
 
   if (!parsed.allJobs) {
     if (!explicitProfile) {
-      deps.writer("Error: --profile is required (or use --all-jobs to stop running jobs)\n")
+      deps.writer(`Error: ${profileMissing("stop", false, (deps.listProfiles ?? listProfileNames)(), "or aibr stop --all-jobs to stop the running jobs")}\n`)
       return 64
     }
     let failed = false

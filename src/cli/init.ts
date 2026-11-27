@@ -26,6 +26,7 @@ import type { NodeRole, RuntimeKind } from "../host/node-role.js"
 import { parseNodeRole, parseRuntimeKind } from "../host/node-role.js"
 import type { SetupOutcome } from "../host/setup.js"
 import type { QuickstartAnswers } from "./setup-wizard.js"
+import { needsValue, unexpectedArgument, unknownFlag } from "./arg-errors.js"
 
 export const INIT_HELP = [
   "aibr init — set up this machine in at most four questions",
@@ -85,44 +86,44 @@ export function parseInitArgs(argv: readonly string[]): InitArgs | string {
       case "--profile":
       case "-p": {
         const v = value()
-        if (v === undefined || v === "") return `${name} needs a value`
+        if (v === undefined || v === "") return needsValue(name, "init")
         out.profile = v
         break
       }
       case "--role": {
         const role = parseNodeRole(value())
-        if (role === null) return "--role must be worker, orchestrator or both"
+        if (role === null) return "--role must be worker, orchestrator or both: aibr init --role <worker|orchestrator|both>"
         out.role = role
         break
       }
       case "--runtime": {
         const runtime = parseRuntimeKind(value())
-        if (runtime === null) return "--runtime must be opencode or claude"
+        if (runtime === null) return "--runtime must be opencode or claude: aibr init --runtime <opencode|claude>"
         out.runtime = runtime
         break
       }
       case "--project": {
         const v = value()
-        if (v === undefined || v === "") return "--project needs a directory"
+        if (v === undefined || v === "") return "--project needs a directory: aibr init --project <path>"
         out.project = v
         break
       }
       case "--port": {
         const v = Number(value())
-        if (!Number.isInteger(v) || v < 1 || v > 65535) return "--port needs a port number"
+        if (!Number.isInteger(v) || v < 1 || v > 65535) return "--port needs a port number from 1 to 65535: aibr init --port <port>"
         out.port = v
         break
       }
       case "--join": {
         const v = value()
-        if (v === undefined || v.trim() === "") return "--join needs a pairing code"
+        if (v === undefined || v.trim() === "") return "--join needs a pairing code: aibr init --join <pairing code>"
         out.join = v.trim()
         break
       }
       case "--capabilities": {
         const v = value()
         const list = (v ?? "").split(",").map((c) => c.trim()).filter((c) => c !== "")
-        if (list.length === 0) return "--capabilities needs a comma-separated list"
+        if (list.length === 0) return "--capabilities needs a comma-separated list: aibr init --capabilities <capability,capability>"
         out.capabilities = list
         break
       }
@@ -137,7 +138,7 @@ export function parseInitArgs(argv: readonly string[]): InitArgs | string {
         out.help = true
         break
       default:
-        return `unknown argument ${arg}`
+        return arg.startsWith("-") ? unknownFlag(arg, "init") : unexpectedArgument(arg, "init")
     }
   }
   if (out.newNetwork === true && out.join !== undefined) return "--new and --join are exclusive"

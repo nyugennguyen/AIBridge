@@ -29,6 +29,7 @@ import {
   scrubCredentialShapedAgentId,
 } from "./cli/discovery-safety.js"
 import { CLI_VERSION } from "./version.js"
+import { listProfileNames, needsValue, profileMissing, unknownFlag } from "./cli/arg-errors.js"
 import { findInPath } from "./host/binaries.js"
 
 export { CLI_VERSION }
@@ -73,6 +74,8 @@ export interface CliDeps {
   readonly runPing?: (args: readonly string[]) => Promise<number>
   readonly runSend?: (args: readonly string[]) => Promise<number>
   readonly runLogs?: (args: readonly string[]) => Promise<number>
+  /** The profiles on this machine, named in "needs a profile" errors. Default: read the config root. */
+  readonly listProfiles?: () => readonly string[]
   /** `aibr start` without --foreground: install and load the user service. Returns the exit code. */
   readonly startService?: (profile: string) => Promise<number>
   /** Write a string to stdout (or a fake writer in tests). */
@@ -152,7 +155,7 @@ export interface CliDeps {
     readonly summary: string
   }>
   /** Check and update AIBridge to the latest version. */
-  readonly runUpdate?: (options?: { readonly checkOnly?: boolean; readonly yes?: boolean }) => Promise<{
+  readonly runUpdate?: (options?: { readonly checkOnly?: boolean; readonly yes?: boolean; readonly noRestart?: boolean }) => Promise<{
     readonly ok: boolean
     readonly message: string
   }>
@@ -256,6 +259,8 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
       knownFlags.push("--foreground")
     } else if (arg === "--with-opencode") {
       knownFlags.push("--with-opencode")
+    } else if (arg === "--no-restart") {
+      knownFlags.push("--no-restart")
     } else if (command === null) {
       command = arg
     } else {
@@ -295,7 +300,7 @@ function helpText(): string {
     "  worker   Drain the router's admission queue (no listener)",
     "  status   Check the service or tmux session and bridge health",
     "  verify   Validate role-specific dependencies, bearer token, and config",
-    "  update   Check and update to the latest version",
+    "  update   Install the latest version from npm and restart running bridges",
     "  bundle   Generate diagnostic support bundle",
     "  plugin   Install/remove the AIBridge plugin for Claude Code",
     "  mcp      MCP server used by the Claude Code plugin (serve, summary)",
@@ -432,6 +437,24 @@ const COMMAND_HELP: Readonly<Record<string, readonly string[]>> = {
     `  ${PROG} mcp summary [--profile <name>]   one-shot peer/job summary (SessionStart hook)`,
     "",
   ],
+  update: [
+    `${PROG} update — install the latest @nyugennguyen/aibridge from npm`,
+    "",
+    "Usage:",
+    `  ${PROG} update [--check] [--yes] [--no-restart]`,
+    "",
+    "Checks the npm registry, installs the newer version with the package manager",
+    "that installed this aibr (bun or npm), confirms the new aibr reports that",
+    "version, then restarts every profile whose user service (launchd/systemd) is",
+    "running, so the bridges run the new code. A bridge running in tmux",
+    "(aibr start --foreground) is named with the command that restarts it.",
+    "",
+    "Options:",
+    "  --check, -c            Only report whether an update is available",
+    "  --yes, -y              Do not ask before installing (needed without a terminal)",
+    "  --no-restart           Install, but leave running bridges on the old version",
+    "",
+  ],
   discover: [
     `${PROG} discover — list tailnet peers and probe their /health (read-only)`,
     "",
@@ -516,9 +539,9 @@ export function printCliBanner(writer?: (s: string) => void, hasColor = true): v
  * Returns `null` on success, or a user-facing error string on failure.
  * Error strings NEVER echo the raw input (prevents leaking traversal chars).
  */
-function validateProfileArg(value: string | null): string | null {
+function validateProfileArg(value: string | null, command: string, deps: Pick<CliDeps, "listProfiles">): string | null {
   if (value === null || value.length === 0) {
-    return "--profile is required"
+    return profileMissing(command, value !== null, (deps.listProfiles ?? listProfileNames)())
   }
 
   try {
@@ -816,7 +839,7 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<Cl
 
   // ── Unknown flags ──────────────────────────────────────────────────
   if (args.unknownFlags.length > 0) {
-    deps.writer(`Error: unknown flag ${args.unknownFlags[0]}\n`)
+    deps.writer(`Error: ${unknownFlag(args.unknownFlags[0]!, args.command !== null && (ALL_COMMANDS as readonly string[]).includes(args.command) ? args.command : undefined)}\n`)
     return 1
   }
 
@@ -828,7 +851,7 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<Cl
 
   // ── Unknown command ────────────────────────────────────────────────
   if (!(ALL_COMMANDS as readonly string[]).includes(args.command)) {
-    deps.writer(`Error: unknown command "${args.command}"\n`)
+    deps.writer(`Error: unknown command "${args.command}" (see: ${PROG} --help for the list of commands)\n`)
     return 1
   }
 
@@ -844,6 +867,10 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<Cl
     deps.writer("Error: --foreground is only supported by start\n")
     return 1
   }
+  if (command !== "update" && args.hasFlag("--no-restart")) {
+    deps.writer("Error: --no-restart is only supported by update\n")
+    return 1
+  }
   if (command !== "serve" && args.hasFlag("--with-opencode")) {
     deps.writer("Error: --with-opencode is only supported by serve\n")
     return 1
@@ -856,14 +883,14 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<Cl
       return 1
     }
     if (args.profile !== null) {
-      const profileErr = validateProfileArg(args.profile)
+      const profileErr = validateProfileArg(args.profile, command, deps)
       if (profileErr !== null) {
         deps.writer(`Error: ${profileErr}\n`)
         return 1
       }
     }
     if (args.configPath === "") {
-      deps.writer("Error: --config requires a path\n")
+      deps.writer(`Error: ${needsValue("--config", "setup")}\n`)
       return 1
     }
     printCliBanner(deps.writer)
@@ -921,7 +948,7 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<Cl
   if (command === "verify") {
     let profile = "default"
     if (args.profile !== null) {
-      const err = validateProfileArg(args.profile)
+      const err = validateProfileArg(args.profile, command, deps)
       if (err !== null) {
         deps.writer(`Error: ${err}\n`)
         return 1
@@ -949,16 +976,17 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<Cl
   if (command === "update") {
     const checkOnly = args.hasFlag("--check")
     const yes = args.hasFlag("--yes")
+    const noRestart = args.hasFlag("--no-restart")
 
     try {
       if (deps.runUpdate) {
-        const result = await deps.runUpdate({ checkOnly, yes })
+        const result = await deps.runUpdate({ checkOnly, yes, noRestart })
         deps.writer(result.message + "\n")
         return result.ok ? 0 : 1
       }
       const { runUpdate } = await import("./cli/update.js")
       const result = await runUpdate(
-        { checkOnly, yes },
+        { checkOnly, yes, noRestart },
         { currentVersion: deps.version, isTTY: deps.isTTY },
       )
       deps.writer(result.message + "\n")
@@ -981,7 +1009,7 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<Cl
     // silent downgrade to "no profile".
     let profile: string | undefined
     if (args.profile !== null) {
-      const profileErr = validateProfileArg(args.profile)
+      const profileErr = validateProfileArg(args.profile, command, deps)
       if (profileErr !== null) {
         if (json) {
           deps.writer(JSON.stringify(discoveryErrorDocument(profileErr)) + "\n")
@@ -1023,7 +1051,7 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<Cl
   }
 
   // ── Commands that require --profile ────────────────────────────────
-  const profileErr = validateProfileArg(args.profile)
+  const profileErr = validateProfileArg(args.profile, command, deps)
   if (profileErr !== null) {
     deps.writer(`Error: ${profileErr}\n`)
     return 1

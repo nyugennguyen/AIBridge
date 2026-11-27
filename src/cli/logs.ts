@@ -4,6 +4,7 @@
  */
 import { resolveProfilePaths, validateProfileName } from "../host/paths.js"
 import { bridgeLogPath, followLog, fsLogFileReader, tailLines, type LogFileReader } from "../host/logs.js"
+import { needsValue, unexpectedArgument, unknownFlag } from "./arg-errors.js"
 
 export const LOGS_HELP = [
   "aibr logs — print the bridge log of a profile",
@@ -45,19 +46,19 @@ export function parseLogsArgs(argv: readonly string[]): ParsedLogsArgs | string 
     const arg = argv[i]!
     if (arg === "--profile" || arg === "-p") {
       const value = argv[++i]
-      if (value === undefined || value === "") return `${arg} needs a value`
+      if (value === undefined || value === "") return needsValue(arg, "logs")
       profile = value
     } else if (arg === "-f" || arg === "--follow") {
       follow = true
     } else if (arg === "-n" || arg === "--lines") {
       const value = argv[++i]
       const parsed = value === undefined ? Number.NaN : Number(value)
-      if (!Number.isInteger(parsed) || parsed < 0) return `${arg} needs a whole number`
+      if (!Number.isInteger(parsed) || parsed < 0) return `${arg} needs a whole number: aibr logs ${arg} <count>`
       lines = parsed
     } else if (arg === "--help" || arg === "-h") {
       help = true
     } else {
-      return `unexpected argument ${arg}`
+      return arg.startsWith("-") ? unknownFlag(arg, "logs") : unexpectedArgument(arg, "logs")
     }
   }
   return { ...(profile !== undefined ? { profile } : {}), follow, lines, help }

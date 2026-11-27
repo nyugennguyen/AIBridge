@@ -25,6 +25,7 @@ import {
   revokePeer,
   type FetchLike,
 } from "../pairing/service.js"
+import { needsValue, unknownFlag } from "./arg-errors.js"
 
 export interface EnrollCliDeps {
   readonly env: Readonly<Record<string, string | undefined>>
@@ -82,10 +83,10 @@ export function parseEnrollArgs(argv: readonly string[]): ParsedEnrollArgs {
     const name = arg.startsWith("-") && eq > 0 ? arg.slice(0, eq) : arg
     if (VALUE_FLAGS.has(name)) {
       const value = eq > 0 && arg.startsWith("-") ? arg.slice(eq + 1) : argv[++i]
-      if (value === undefined || value === "") return { sub: undefined, positional, flags, error: `${name} needs a value` }
+      if (value === undefined || value === "") return { sub: undefined, positional, flags, error: needsValue(name, "enroll") }
       flags.set(name === "-p" ? "--profile" : name, value)
     } else if (arg.startsWith("-")) {
-      return { sub: undefined, positional, flags, error: `unknown flag ${arg}` }
+      return { sub: undefined, positional, flags, error: unknownFlag(arg, "enroll") }
     } else {
       positional.push(arg)
     }
@@ -227,7 +228,7 @@ async function issue(args: ParsedEnrollArgs, paths: ProfilePaths, configPath: st
 
 async function join(args: ParsedEnrollArgs, paths: ProfilePaths, configPath: string, deps: EnrollCliDeps): Promise<number> {
   const code = args.positional[0]
-  if (code === undefined) throw new PairingError("Usage: aibr enroll join <code> [--profile <p>]", "usage")
+  if (code === undefined) throw new PairingError("Usage: aibr enroll join <pairing code> [--profile <name>] (the code is printed by aibr init or aibr enroll issue on the worker)", "usage")
   const { config, joined, notes } = await joinProfileWithCode(paths, configPath, code, deps)
   const applied = { notes }
   deps.write(
@@ -276,7 +277,7 @@ async function list(paths: ProfilePaths, configPath: string, deps: EnrollCliDeps
 
 async function revoke(args: ParsedEnrollArgs, paths: ProfilePaths, configPath: string, deps: EnrollCliDeps): Promise<number> {
   const agentId = args.positional[0]
-  if (agentId === undefined) throw new PairingError("Usage: aibr enroll revoke <agent_id> [--profile <p>]", "usage")
+  if (agentId === undefined) throw new PairingError("Usage: aibr enroll revoke <agent_id> [--profile <name>] (aibr enroll list shows the paired agent ids)", "usage")
   const outcome = await revokePeer({ paths, configPath, agentId, by: `${safeUser()}@aibr-cli`, now: deps.now })
   if (!outcome.pinRemoved && !outcome.configChanged) {
     deps.write(`Nothing to revoke: "${agentId}" is neither paired nor in this profile's config.\n`)

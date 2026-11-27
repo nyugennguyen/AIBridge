@@ -83,7 +83,7 @@ export function tmuxSessionName(profile: string): string {
   return `aibridge-${profile}`
 }
 
-async function tmuxSessionExists(runner: ProcessRunner, session: string): Promise<boolean> {
+export async function tmuxSessionExists(runner: ProcessRunner, session: string): Promise<boolean> {
   try {
     return (await runner.exec(["tmux", "has-session", "-t", session])).exitCode === 0
   } catch {

@@ -155,13 +155,15 @@ describe("parseInitArgs", () => {
   })
 
   it("rejects bad values and --new with --join", () => {
-    expect(parseInitArgs(["--role", "boss"])).toBe("--role must be worker, orchestrator or both")
-    expect(parseInitArgs(["--runtime", "gpt"])).toBe("--runtime must be opencode or claude")
-    expect(parseInitArgs(["--port", "0"])).toBe("--port needs a port number")
-    expect(parseInitArgs(["--join"])).toBe("--join needs a pairing code")
-    expect(parseInitArgs(["--capabilities", ","])).toBe("--capabilities needs a comma-separated list")
+    expect(parseInitArgs(["--role", "boss"])).toBe("--role must be worker, orchestrator or both: aibr init --role <worker|orchestrator|both>")
+    expect(parseInitArgs(["--runtime", "gpt"])).toBe("--runtime must be opencode or claude: aibr init --runtime <opencode|claude>")
+    expect(parseInitArgs(["--port", "0"])).toBe("--port needs a port number from 1 to 65535: aibr init --port <port>")
+    expect(parseInitArgs(["--join"])).toBe("--join needs a pairing code: aibr init --join <pairing code>")
+    expect(parseInitArgs(["--capabilities", ","])).toBe("--capabilities needs a comma-separated list: aibr init --capabilities <capability,capability>")
     expect(parseInitArgs(["--new", "--join", "x"])).toBe("--new and --join are exclusive")
-    expect(parseInitArgs(["stray"])).toBe("unknown argument stray")
+    expect(parseInitArgs(["stray"])).toBe("unexpected argument stray (see: aibr init --help)")
+    expect(parseInitArgs(["--bogus"])).toBe("unknown flag --bogus (see: aibr init --help)")
+    expect(parseInitArgs(["--profile"])).toBe("--profile needs a value: aibr init --profile <name>")
   })
 })
 

@@ -205,16 +205,92 @@ describe("acquireStateLock", () => {
     second?.release()
   })
 
-  it("real processes racing for a stale lock: at most one holds it", async () => {
+  it("a late taker that judged the lock stale never frees a newly taken lock for a third process", async () => {
+    // The 3.2.1 flake (`["won","held","held","won","held"]`): B judges the
+    // stale lock stale, A takes it over, and B then acts on what is now A's
+    // live lock. While B checks A's start time (a `ps` spawn on macOS, slow
+    // under load), C arrives. C must find A's lock, not an empty slot.
+    const stateDir = await mkdtemp(join(tmpdir(), "aibridge-lock-"))
+    await writeLock(stateDir, { pid: 4242, start: "dead", token: "t" })
+    const live = world({ 1001: "a", 1002: "b", 1003: "c" })
+    let first: StateLock | undefined
+    let third: StateLock | undefined
+    let thirdOutcome: unknown
+    let bOutcome: unknown
+    try {
+      acquireStateLock(stateDir, {
+        pid: 1002,
+        isAlive: live.isAlive,
+        startTimeOf: (pid) => {
+          if (pid === 1001 && first !== undefined && thirdOutcome === undefined) {
+            try {
+              third = acquireStateLock(stateDir, { pid: 1003, ...live })
+              thirdOutcome = "won"
+            } catch (error) {
+              thirdOutcome = error
+            }
+          }
+          return live.startTimeOf(pid)
+        },
+        beforeTakeover: () => {
+          if (first === undefined) first = acquireStateLock(stateDir, { pid: 1001, ...live })
+        },
+      })
+      bOutcome = "won"
+    } catch (error) {
+      bOutcome = error
+    }
+    expect(first).toBeDefined()
+    expect(bOutcome).toBeInstanceOf(StateLockHeldError)
+    expect(third).toBeUndefined()
+    expect(thirdOutcome).toBeInstanceOf(StateLockHeldError)
+    expect(JSON.parse(await readFile(lockPath(stateDir), "utf8"))).toMatchObject({ pid: 1001 })
+    expect((await readdir(stateDir)).filter((name) => name !== STATE_LOCK_FILE)).toEqual([])
+    first?.release()
+  })
+
+  it("a takeover left half done by a dead process does not block the next one", async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), "aibridge-lock-"))
+    await writeLock(stateDir, { pid: 4242, start: "dead", token: "t" })
+    const live = world({ 1001: "a", 1002: "b" })
+    // 1001 claims the stale lock, then dies before replacing it.
+    let crashed = false
+    try {
+      acquireStateLock(stateDir, {
+        pid: 1001,
+        ...live,
+        afterClaim: () => {
+          throw new Error("crash")
+        },
+      })
+    } catch (error) {
+      crashed = (error as Error).message === "crash"
+    }
+    expect(crashed).toBe(true)
+    // While 1001 lives, its claim makes the lock held.
+    expect(() => acquireStateLock(stateDir, { pid: 1002, ...live })).toThrow(StateLockHeldError)
+    // Once 1001 is dead, 1002 takes over.
+    const after = world({ 1002: "b" })
+    const lock = acquireStateLock(stateDir, { pid: 1002, ...after })
+    expect(JSON.parse(await readFile(lockPath(stateDir), "utf8"))).toMatchObject({ pid: 1002 })
+    expect((await readdir(stateDir)).filter((name) => name !== STATE_LOCK_FILE)).toEqual([])
+    lock.release()
+  })
+
+  it("real processes racing for a stale lock: at most one holds it at a time", async () => {
     const stateDir = await mkdtemp(join(tmpdir(), "aibridge-lock-race-"))
     await writeLock(stateDir, { pid: 4242, start: "dead", token: "t" })
     const script = join(stateDir, "..", `race-${Date.now()}.ts`)
     const module = join(import.meta.dirname, "../../src/host/state-lock.ts")
+    // A winner reports when it held the lock. Under load the racers can start
+    // seconds apart, so a late one may legitimately take the lock after the
+    // first winner released it: two wins are fine, overlapping holds are not.
     await writeFile(
       script,
       `import { acquireStateLock } from ${JSON.stringify(module)}
 try { const lock = acquireStateLock(${JSON.stringify(stateDir)}, { isAlive: (pid) => pid !== 4242 && pid > 0 && (() => { try { process.kill(pid, 0); return true } catch { return false } })() })
-  console.log("won"); await new Promise((r) => setTimeout(r, 800)); lock.release() }
+  const from = performance.timeOrigin + performance.now(); await new Promise((r) => setTimeout(r, 800))
+  const to = performance.timeOrigin + performance.now(); lock.release(); console.log("won " + from + " " + to) }
 catch (error) { console.log(error?.code === "state_dir_locked" ? "held" : "error " + error) }\n`,
     )
     const runOne = () =>
@@ -224,11 +300,14 @@ catch (error) { console.log(error?.code === "state_dir_locked" ? "held" : "error
         )
       })
     const outcomes = await Promise.all(Array.from({ length: 5 }, runOne))
-    const winners = outcomes.filter((outcome) => outcome === "won").length
-    const unexpected = outcomes.filter((outcome) => outcome !== "won" && outcome !== "held")
+    const holds = outcomes
+      .filter((outcome) => outcome.startsWith("won "))
+      .map((outcome) => outcome.split(" ").slice(1).map(Number) as [number, number])
+      .sort((a, b) => a[0] - b[0])
+    const overlapping = holds.some((hold, index) => index > 0 && hold[0] < holds[index - 1]![1])
+    const unexpected = outcomes.filter((outcome) => !outcome.startsWith("won ") && outcome !== "held")
     // Named in the failure, so a rare failure is diagnosable from CI output.
-    if (winners > 1 || unexpected.length > 0) throw new Error(`race outcomes: ${JSON.stringify(outcomes)}`)
-    expect(winners).toBeLessThanOrEqual(1)
+    if (overlapping || holds.length === 0 || unexpected.length > 0) throw new Error(`race outcomes: ${JSON.stringify(outcomes)}`)
   }, 30_000)
 })
 

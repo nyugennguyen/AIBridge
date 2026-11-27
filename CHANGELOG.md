@@ -2,8 +2,8 @@
 
 ## [Unreleased]
 
-### Changed
-- **Argument errors say what to type.** A missing flag value or profile now prints the command with a placeholder for the value, e.g. `--profile needs a value: aibr status --profile <name>` instead of `--profile is required` (which `aibr status -p` printed too, as if the flag were missing). When the profile is missing, the error also lists the profiles on this machine, suggests `aibr <command> --profile <name>` when there is exactly one, and points at `aibr init` when there is none. Unknown flags and stray arguments point at `aibr <command> --help`, and an unknown command points at `aibr --help`. This covers `start`, `serve`, `worker`, `status`, `bundle`, `setup`, `verify`, `stop`, `doctor`, `logs`, `ping`, `send`, `init`, `enroll`, `approve`, `reject`, `jobs`, `job`, `cancel` and `attach`.
+### Fixed
+- **Two `aibr serve`/`aibr worker` processes could both take a stale profile lock.** Taking over a stale `aibridge.lock` renamed it aside first; a process that judged the lock stale just before another took it over then moved the new, live lock aside, and while it put it back the lock path was empty, so a third process took the lock too. A takeover now claims that exact stale content with an exclusive claim file and replaces it in one `rename`, so the lock path is never empty. A claim left by a process that died mid-takeover does not block the next one.
 
 ## [3.2.1] - 2026-11-27
 
